@@ -78,6 +78,19 @@ const api = {
     } catch { return null; }
   }
 };
+/* Raw call that preserves status + error detail (used by admin screens; supports PATCH) */
+async function apiCall(method, path, body) {
+  try {
+    const opt = { method, headers: api.h() };
+    if (body !== undefined) opt.body = JSON.stringify(body);
+    const r = await fetch(api.base + path, opt);
+    if (r.status === 401) { onAuthExpired(); return { ok: false, detail: "Session expired" }; }
+    const j = await r.json().catch(() => null);
+    return Object.assign({ ok: r.ok, status: r.status }, j || {});
+  } catch { return { ok: false, detail: "Cannot reach the server" }; }
+}
+/* Read a form field value by element id */
+function gv(id) { const e = document.getElementById(id); return e ? String(e.value).trim() : ""; }
 
 /* ---------- live dashboard data fetch ---------- */
 async function fetchDashboard() {
@@ -4520,6 +4533,191 @@ VIEWS.admin = () => pagehead("Masters & Admin", "Configuration masters — maint
   `<div class="applist">${MASTERS.map(m => `<button class="card appcard" onclick="toast('${m.title} — read-only in demo')">
     <div class="aico" style="background:var(--navy-l)">${m.icon}</div><b>${m.title}</b><small>${m.desc}</small></button>`).join("")}</div>`;
 
+/* ---- Admin: User Management ---- */
+const UM_LEVELS = [
+  { v: 1,  l: 'Admin — Board View (L1)' },
+  { v: 2,  l: 'Edition Incharge (L2)' },
+  { v: 3,  l: 'Circulation Incharge (L3)' },
+  { v: 4,  l: 'Zonal Head (L4)' },
+  { v: 5,  l: 'VP Circulation (L5)' },
+  { v: 7,  l: 'Field Executive (L7)' },
+  { v: 9,  l: 'Newspaper Agent (L9)' },
+  { v: 10, l: 'Hawker (L10)' },
+];
+const UM_TYPES = ['circulation', 'agent', 'taxi_driver', 'dcr', 'other'];
+const umLevelLabel = (v) => (UM_LEVELS.find(x => x.v === Number(v)) || {}).l || (v ? 'Level ' + v : '—');
+const umLevelOpts = (sel) => UM_LEVELS.map(x => `<option value="${x.v}" ${Number(sel) === x.v ? 'selected' : ''}>${x.l}</option>`).join('');
+const umTypeOpts  = (sel) => UM_TYPES.map(t => `<option value="${t}" ${sel === t ? 'selected' : ''}>${t}</option>`).join('');
+
+async function fetchAdminUsers(force) {
+  if (S.live._admLoading) return;
+  if (S.live.adminUsers && !force) return;
+  S.live._admLoading = true;
+  const d = await api.get('/api/admin/users');
+  if (d && d.users) S.live.adminUsers = d.users;
+  S.live._admLoading = false;
+  if (S.screen === 'user_mgmt') render();
+}
+window.umSearch = (v) => {
+  S.live.umSearch = v; render();
+  const inp = document.getElementById('umSearch'); if (inp) { inp.focus(); inp.setSelectionRange(v.length, v.length); }
+};
+window.umNew = () => {
+  modal(`<h3>Create user</h3><div id="umErr"></div>
+    <div class="fld"><label>Full name *</label><input id="umName" type="text"></div>
+    <div class="fld"><label>Mobile number</label><input id="umMobile" type="tel" maxlength="10" inputmode="numeric" placeholder="10-digit mobile"></div>
+    <div class="fld"><label>User ID (optional — for non-mobile logins like admins)</label><input id="umUsername" type="text" placeholder="e.g. admin"></div>
+    <div class="fld"><label>Designation / Level</label><select id="umLevel">${umLevelOpts(2)}</select></div>
+    <div class="fld"><label>User type</label><select id="umType">${umTypeOpts('circulation')}</select></div>
+    <div class="fld"><label>Email (optional)</label><input id="umEmail" type="email"></div>
+    <div class="fld"><label>Person code (optional — links to hierarchy master)</label><input id="umPerson" type="text"></div>
+    <div class="fld"><label>Initial password (blank = auto temp)</label><input id="umPwd" type="text" placeholder="Leave blank to auto-generate"></div>
+    <div style="display:flex;gap:9px;margin-top:16px"><button class="btn pri block" onclick="umCreate()">Create user</button><button class="btn" onclick="closeModals()">Cancel</button></div>`);
+};
+window.umCreate = async () => {
+  const b = { name: gv('umName'), mobile: gv('umMobile'), username: gv('umUsername'),
+    hierarchy_level: gv('umLevel'), user_type: gv('umType'), email: gv('umEmail'),
+    person_code: gv('umPerson') || null, password: gv('umPwd') || undefined };
+  const err = document.getElementById('umErr');
+  if (!b.name || (!b.mobile && !b.username)) { err.innerHTML = `<div class="err">Name and a mobile number or User ID are required.</div>`; return; }
+  const r = await apiCall('POST', '/api/admin/users', b);
+  if (!r.ok) { err.innerHTML = `<div class="err">${esc(r.detail || 'Create failed')}</div>`; return; }
+  closeModals();
+  if (r.tempPassword) umShowTempPassword(b.name, r.tempPassword);
+  else toast('✅ User created');
+  fetchAdminUsers(true);
+};
+window.umEdit = (id) => {
+  const u = (S.live.adminUsers || []).find(x => x.id === id); if (!u) return;
+  modal(`<h3>Edit user</h3><div id="umErr"></div>
+    <div class="fld"><label>Full name</label><input id="umName" value="${esc(u.name || '')}"></div>
+    <div class="fld"><label>Mobile number</label><input id="umMobile" maxlength="10" inputmode="numeric" value="${esc(u.mobile || '')}"></div>
+    <div class="fld"><label>User ID</label><input id="umUsername" value="${esc(u.username || '')}"></div>
+    <div class="fld"><label>Designation / Level</label><select id="umLevel">${umLevelOpts(u.hierarchy_level)}</select></div>
+    <div class="fld"><label>User type</label><select id="umType">${umTypeOpts(u.user_type)}</select></div>
+    <div class="fld"><label>Email</label><input id="umEmail" value="${esc(u.email || '')}"></div>
+    <label style="display:flex;align-items:center;gap:8px;margin:10px 0;cursor:pointer"><input type="checkbox" id="umActive" ${u.is_active ? 'checked' : ''}> Active</label>
+    <div style="display:flex;gap:9px;margin-top:12px"><button class="btn pri block" onclick="umUpdate(${u.id})">Save changes</button><button class="btn" onclick="closeModals()">Cancel</button></div>`);
+};
+window.umUpdate = async (id) => {
+  const b = { name: gv('umName'), mobile: gv('umMobile'), username: gv('umUsername'),
+    hierarchy_level: gv('umLevel'), user_type: gv('umType'), email: gv('umEmail'),
+    is_active: document.getElementById('umActive').checked };
+  const r = await apiCall('PATCH', '/api/admin/users/' + id, b);
+  if (!r.ok) { document.getElementById('umErr').innerHTML = `<div class="err">${esc(r.detail || 'Update failed')}</div>`; return; }
+  closeModals(); toast('✅ User updated'); fetchAdminUsers(true);
+};
+window.umToggleActive = async (id, active) => {
+  const r = await apiCall('PATCH', '/api/admin/users/' + id, { is_active: !active });
+  if (r.ok) { toast(active ? 'User deactivated' : 'User activated'); fetchAdminUsers(true); } else toast('❌ ' + (r.detail || 'Failed'));
+};
+window.umUnlock = async (id) => {
+  const r = await apiCall('PATCH', '/api/admin/users/' + id, { locked_until: null });
+  if (r.ok) { toast('🔓 Account unlocked'); fetchAdminUsers(true); } else toast('❌ ' + (r.detail || 'Failed'));
+};
+window.umResetPwd = async (id, name) => {
+  if (!confirm('Reset password for ' + name + '? A temporary password will be generated.')) return;
+  const r = await apiCall('POST', '/api/admin/users/' + id + '/reset-password', {});
+  if (r.ok) { umShowTempPassword(name, r.tempPassword); fetchAdminUsers(true); } else toast('❌ ' + (r.detail || 'Failed'));
+};
+window.umShowTempPassword = (name, pwd) => {
+  modal(`<h3>Temporary password</h3>
+    <p class="mint">Share this with <b>${esc(name)}</b>. They will be asked to change it on next login.</p>
+    <div style="font-size:22px;font-weight:800;letter-spacing:1px;text-align:center;padding:14px;background:var(--surface-2);border-radius:10px;margin:12px 0;user-select:all">${esc(pwd || '—')}</div>
+    <div style="display:flex;gap:9px"><button class="btn pri block" onclick="closeModals()">Done</button></div>`);
+};
+VIEWS.user_mgmt = () => {
+  fetchAdminUsers();
+  const users = S.live.adminUsers || [];
+  const search = (S.live.umSearch || '').toLowerCase();
+  const filtered = users.filter(u =>
+    (u.name || '').toLowerCase().includes(search) ||
+    (u.mobile || '').includes(search) ||
+    (u.username || '').toLowerCase().includes(search) ||
+    umLevelLabel(u.hierarchy_level).toLowerCase().includes(search) ||
+    (u.user_type || '').includes(search));
+
+  const rows = filtered.map(u => {
+    const locked = u.locked_until && new Date(u.locked_until) > new Date();
+    const status = !u.is_active ? `<span class="chip" style="background:var(--red-l);color:var(--red)">Inactive</span>`
+      : locked ? `<span class="chip" style="background:#fde68a;color:#92400e">Locked</span>`
+      : `<span class="chip" style="background:var(--grn-l);color:var(--grn)">Active</span>`;
+    const nmeSafe = (u.name || '').replace(/'/g, "\\'");
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:8px 10px"><b>${esc(u.name || '')}</b>${u.person_code ? `<div style="font-size:10px;color:var(--ink-2)">${esc(u.person_code)}</div>` : ''}</td>
+      <td style="padding:8px 10px">${esc(u.username || u.mobile || '—')}</td>
+      <td style="padding:8px 10px;font-size:12px">${esc(umLevelLabel(u.hierarchy_level))}</td>
+      <td style="padding:8px 10px;font-size:12px">${esc(u.user_type || '')}</td>
+      <td style="padding:8px 10px;text-align:center">${status}${!u.has_password ? `<div style="font-size:10px;color:var(--red)">no password</div>` : ''}</td>
+      <td style="padding:8px 10px;font-size:11px;color:var(--ink-2)">${u.last_login_at ? esc(String(u.last_login_at).slice(0, 16).replace('T', ' ')) : 'never'}</td>
+      <td style="padding:8px 10px;white-space:nowrap;text-align:right">
+        <button class="btn sm" onclick="umEdit(${u.id})">Edit</button>
+        <button class="btn sm" onclick="umResetPwd(${u.id}, '${esc(nmeSafe)}')">Reset PW</button>
+        ${locked ? `<button class="btn sm" onclick="umUnlock(${u.id})">Unlock</button>` : ''}
+        <button class="btn sm" onclick="umToggleActive(${u.id}, ${u.is_active ? 1 : 0})">${u.is_active ? 'Deactivate' : 'Activate'}</button>
+      </td></tr>`;
+  }).join('');
+
+  const body = !S.live.adminUsers
+    ? `<div style="padding:24px;text-align:center;color:var(--ink-2)">Loading users…</div>`
+    : `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:var(--surface-2);text-align:left">
+          <th style="padding:8px 10px">Name</th><th style="padding:8px 10px">Login (ID/Mobile)</th>
+          <th style="padding:8px 10px">Designation</th><th style="padding:8px 10px">Type</th>
+          <th style="padding:8px 10px;text-align:center">Status</th><th style="padding:8px 10px">Last login</th>
+          <th style="padding:8px 10px;text-align:right">Actions</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--ink-2)">No users match</td></tr>`}</tbody>
+      </table></div>`;
+
+  return pagehead('User Management', `${users.length} users · create, activate, assign designation, reset passwords`) +
+    `<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <input id="umSearch" placeholder="Search name / mobile / User ID / role…" value="${esc(S.live.umSearch || '')}" oninput="umSearch(this.value)" style="flex:1;min-width:200px;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+      <button class="btn navy" onclick="umNew()">+ New User</button>
+      <button class="btn" onclick="fetchAdminUsers(true)">↻ Refresh</button>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">${body}</div>`;
+};
+
+/* ---- Admin: Audit Trail ---- */
+async function fetchAudit(force) {
+  if (S.live._auditLoading) return;
+  if (S.live.audit && !force) return;
+  S.live._auditLoading = true;
+  const d = await api.get('/api/admin/audit?limit=300');
+  if (d && d.audit) S.live.audit = d.audit;
+  S.live._auditLoading = false;
+  if (S.screen === 'audit_log') render();
+}
+const AUDIT_LABEL = {
+  login_success: 'Login', login_fail: 'Failed login', locked: 'Account locked', logout: 'Logout',
+  password_change: 'Password changed', admin_reset: 'Admin password reset',
+  user_create: 'User created', user_update: 'User updated',
+  perms_update: 'Rights updated', perms_reset: 'Rights reset',
+};
+VIEWS.audit_log = () => {
+  fetchAudit();
+  const rows = S.live.audit || [];
+  const body = !S.live.audit
+    ? `<div style="padding:24px;text-align:center;color:var(--ink-2)">Loading audit trail…</div>`
+    : `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:var(--surface-2);text-align:left">
+          <th style="padding:7px 10px">Time</th><th style="padding:7px 10px">Action</th>
+          <th style="padding:7px 10px">By</th><th style="padding:7px 10px">Target</th>
+          <th style="padding:7px 10px">Detail</th><th style="padding:7px 10px">IP</th></tr></thead>
+        <tbody>${rows.map(r => `<tr style="border-top:1px solid var(--border)">
+          <td style="padding:6px 10px;white-space:nowrap">${esc(String(r.ts || '').slice(0, 19).replace('T', ' '))}</td>
+          <td style="padding:6px 10px">${esc(AUDIT_LABEL[r.action] || r.action)}</td>
+          <td style="padding:6px 10px">${esc(r.actor_name || r.actor_person_code || '—')}</td>
+          <td style="padding:6px 10px">${esc(r.target_person_code || '—')}</td>
+          <td style="padding:6px 10px;color:var(--ink-2)">${esc(r.detail || '')}</td>
+          <td style="padding:6px 10px;color:var(--ink-2)">${esc(r.ip || '')}</td>
+        </tr>`).join('') || `<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--ink-2)">No audit records yet</td></tr>`}</tbody>
+      </table></div>`;
+  return pagehead('Audit Trail', 'Logins, password changes and administrator actions') +
+    `<div style="display:flex;gap:8px;margin-bottom:12px"><button class="btn" onclick="fetchAudit(true)">↻ Refresh</button></div>
+     <div class="card" style="padding:0;overflow:hidden">${body}</div>`;
+};
+
 /* ---- Manage Rights ---- */
 const MR_ALL_MODULES = [
   { key: 'agent',  label: 'Agent App',   icon: '🏢' },
@@ -4528,6 +4726,35 @@ const MR_ALL_MODULES = [
   { key: 'survey', label: 'Survey Form', icon: '📝' },
   { key: 'taxi',   label: 'Taxi Fleet',  icon: '🚛' },
 ];
+
+/* Per-form rights matrix — dashboards/forms × actions */
+const RIGHT_FORMS = [
+  { key: 'command',     label: 'Command Centre' },
+  { key: 'supply_dash', label: 'Supply Dashboard' },
+  { key: 'collections', label: 'Collection Dashboard' },
+  { key: 'outstanding', label: 'Outstanding Dashboard' },
+  { key: 'transport',   label: 'Taxi Dashboard' },
+  { key: 'agent',       label: 'Agent App' },
+  { key: 'hawker',      label: 'Hawker App' },
+  { key: 'survey_dash', label: 'Reports / Survey' },
+  { key: 'ai_insights', label: 'AI Insights' },
+  { key: 'user_mgmt',   label: 'User Management' },
+];
+const RIGHT_ACTIONS = ['view', 'add', 'edit', 'delete', 'export'];
+
+/* Returns true/false if an explicit override exists for form.action, else null */
+function permAllows(form, action) {
+  const p = S.user && S.user.perms;
+  if (p && p[form] && (action in p[form])) return !!p[form][action];
+  return null;
+}
+/* can(form, action) — explicit override wins; otherwise designation default
+   (L1 admin = all; everyone else = view only for write actions) */
+window.can = (form, action = 'view') => {
+  const o = permAllows(form, action);
+  if (o !== null) return o;
+  return (S.user && S.user.hierarchyLevel === 1) ? true : (action === 'view');
+};
 
 window.mrSelectUser = (pc) => {
   const u = (S.live.dbUsers || []).find(u => u.person_code === pc);
@@ -4541,7 +4768,15 @@ window.mrSelectUser = (pc) => {
     dashboard:  u.dashboard,
     navScreens: u.navScreens ? [...u.navScreens] : [...defaultScreens],
     modules:    [...(u.modules || [])],
+    perms:      u.perms ? JSON.parse(JSON.stringify(u.perms)) : {},
   };
+  render();
+};
+window.mrTogglePerm = (form, action) => {
+  if (!S.live.mr?.edit) return;
+  const pm = S.live.mr.edit.perms;
+  pm[form] = pm[form] || {};
+  pm[form][action] = !pm[form][action];
   render();
 };
 
@@ -4585,6 +4820,7 @@ window.mrSave = async () => {
     dashboard:   mr.edit.dashboard,
     nav_screens: mr.edit.navScreens,
     modules:     mr.edit.modules,
+    perms:       mr.edit.perms,
   });
   if (res && res.ok) {
     toast('✅ Permissions saved — user will see changes on next login');
@@ -4689,6 +4925,25 @@ VIEWS.manage_rights = () => {
             <span style="font-size:12px">${m.icon} ${esc(m.label)}</span>
           </label>`).join('')}
       </div>
+
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--ink-2);margin:4px 0 8px">Form / Dashboard Rights</div>
+      <div style="overflow-x:auto;margin-bottom:8px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr>
+            <th style="text-align:left;padding:6px 8px">Form</th>
+            ${RIGHT_ACTIONS.map(a => `<th style="padding:6px 8px;text-transform:capitalize">${a}</th>`).join('')}
+          </tr></thead>
+          <tbody>
+            ${RIGHT_FORMS.map(f => `<tr style="border-top:1px solid var(--border)">
+              <td style="padding:6px 8px">${esc(f.label)}</td>
+              ${RIGHT_ACTIONS.map(a => `<td style="padding:6px 8px;text-align:center">
+                <span onclick="mrTogglePerm('${f.key}','${a}')" style="cursor:pointer;display:inline-flex">${chk(!!(edit.perms[f.key] && edit.perms[f.key][a]))}</span>
+              </td>`).join('')}
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div style="font-size:11px;color:var(--ink-2);margin-bottom:16px">Leave a row untouched to use the designation default. Check to grant, or toggle on-then-off to explicitly deny a specific action.</div>
 
       <div style="display:flex;gap:8px">
         <button id="mrSaveBtn" class="btn-primary" onclick="mrSave()" style="flex:1;padding:10px">
@@ -6694,6 +6949,7 @@ function navGroups() {
     const mgmtIds  = ["command", "ai_insights", "supply_dash"];
     const items = DASH_MENU
       .filter(([id]) => (hl <= 4 && mgmtIds.includes(id)) || (u.navScreens ? u.navScreens.includes(id) : (hl <= 4 || fieldIds.includes(id))))
+      .filter(([id]) => permAllows(id, 'view') !== false)   // explicit rights-matrix deny hides the screen
       .map(([id, l, ic]) => ({ id, label: l, icon: ic, badge: id === "approvals" ? APPROVALS.length : 0 }));
     groups.push({ label: "Dashboard — Vitran OS", items });
   }
@@ -6702,9 +6958,13 @@ function navGroups() {
       { id: "readers_connect", label: "Readers Connect", icon: "📍", badge: 0 }
     ]});
   }
-  const apps = u.modules.map(k => ({ key: k, ...APP_MENU[k] }));
+  const apps = u.modules.filter(k => permAllows(k, 'view') !== false).map(k => ({ key: k, ...APP_MENU[k] }));
   if (apps.length) groups.push({ label: "Field Apps", apps });
-  if (hl === 1) groups.push({ label: "Administration", items: [{ id: "manage_rights", label: "Manage Rights", icon: "🔐" }] });
+  if (hl === 1) groups.push({ label: "Administration", items: [
+    { id: "user_mgmt",     label: "User Management", icon: "👥" },
+    { id: "manage_rights", label: "Manage Rights",   icon: "🔐" },
+    { id: "audit_log",     label: "Audit Trail",     icon: "📜" },
+  ]});
   return groups;
 }
 
@@ -6761,7 +7021,7 @@ function loginHTML() {
     <div class="login-pane"><div class="login-card">
       <h2>Sign in</h2><p>Use your registered mobile number and password. Only modules assigned to your role will be visible.</p>
       <div id="loginErr"></div>
-      <div class="fld"><label>Mobile number</label><input id="loginMob" type="tel" maxlength="10" placeholder="10-digit mobile" inputmode="numeric" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('loginPwd').focus()"></div>
+      <div class="fld"><label>Mobile number / User ID</label><input id="loginMob" type="text" maxlength="50" placeholder="10-digit mobile or User ID" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('loginPwd').focus()"></div>
       <div class="fld"><label>Password</label><input id="loginPwd" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"></div>
       <button class="btn navy block" id="loginBtn" onclick="doLogin()">Sign in →</button>
       <div style="text-align:center;margin-top:14px">
@@ -6777,12 +7037,12 @@ window.forgotPassword = () => {
 };
 window.doLogin = async () => {
   const errEl = $("#loginErr");
-  const mob = $("#loginMob").value.replace(/\D/g, ""), pwd = $("#loginPwd").value;
-  if (!mob || !pwd) { errEl.innerHTML = `<div class="err">Enter your mobile number and password.</div>`; return; }
+  const ident = $("#loginMob").value.trim(), pwd = $("#loginPwd").value;
+  if (!ident || !pwd) { errEl.innerHTML = `<div class="err">Enter your mobile number / User ID and password.</div>`; return; }
   const btn = $("#loginBtn"); if (btn) { btn.disabled = true; btn.textContent = "Signing in…"; }
-  let data = null, detail = "Invalid mobile number or password";
+  let data = null, detail = "Invalid mobile number / User ID or password";
   try {
-    const r = await fetch(api.base + "/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mobile: mob, password: pwd }) });
+    const r = await fetch(api.base + "/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mobile: ident, password: pwd }) });
     const j = await r.json().catch(() => null);
     if (r.ok && j && j.token) data = j; else detail = (j && j.detail) || detail;
   } catch { detail = "Cannot reach the server. Check your connection and try again."; }

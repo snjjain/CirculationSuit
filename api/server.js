@@ -485,24 +485,28 @@ app.get('/api/admin/permissions', async (req, res) => {
   }
 });
 
-// POST /api/admin/permissions  — save or reset a user's overrides
+// POST /api/admin/permissions  — save or reset a user's overrides (admin only)
 app.post('/api/admin/permissions', async (req, res) => {
   try {
-    const { person_code, dashboard, nav_screens, modules, reset } = req.body;
+    if (!req.auth || req.auth.hierarchyLevel !== 1) return res.status(403).json({ detail: 'Administrator access required' });
+    const { person_code, dashboard, nav_screens, modules, perms, reset } = req.body;
     if (!person_code) return res.status(400).json({ detail: 'person_code required' });
     if (reset) {
       await q('DELETE FROM user_permissions WHERE person_code = ?', [person_code]);
+      await auth.audit('perms_reset', { actor: req.auth.personCode, target: person_code, ip: auth.ipOf(req) });
       return res.json({ ok: true, reset: true });
     }
     const dash = (dashboard !== undefined && dashboard !== null) ? (dashboard ? 1 : 0) : null;
     const nav  = nav_screens ? JSON.stringify(nav_screens) : null;
     const mods = modules     ? JSON.stringify(modules)     : null;
+    const prm  = perms       ? JSON.stringify(perms)       : null;
     await q(`
-      INSERT INTO user_permissions (person_code, dashboard, nav_screens, modules)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO user_permissions (person_code, dashboard, nav_screens, modules, perms)
+      VALUES (?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE dashboard=VALUES(dashboard), nav_screens=VALUES(nav_screens),
-                              modules=VALUES(modules), updated_at=CURRENT_TIMESTAMP
-    `, [person_code, dash, nav, mods]);
+                              modules=VALUES(modules), perms=VALUES(perms), updated_at=CURRENT_TIMESTAMP
+    `, [person_code, dash, nav, mods, prm]);
+    await auth.audit('perms_update', { actor: req.auth.personCode, target: person_code, ip: auth.ipOf(req) });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ detail: String(e) });

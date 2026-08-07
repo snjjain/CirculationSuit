@@ -34,7 +34,8 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
       id                   INT AUTO_INCREMENT PRIMARY KEY,
       person_code          VARCHAR(20)  DEFAULT NULL,
       name                 VARCHAR(200) NOT NULL,
-      mobile               VARCHAR(15)  NOT NULL,
+      username             VARCHAR(50)  DEFAULT NULL,
+      mobile               VARCHAR(15)  DEFAULT NULL,
       password_hash        VARCHAR(100) DEFAULT NULL,
       email                VARCHAR(150) DEFAULT NULL,
       hierarchy_level      INT          DEFAULT NULL,
@@ -47,9 +48,14 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
       created_at           TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
       updated_at           TIMESTAMP    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       UNIQUE KEY uq_mobile (mobile),
+      UNIQUE KEY uq_username (username),
       UNIQUE KEY uq_person (person_code),
       INDEX idx_active (is_active)
     ) CHARACTER SET utf8mb4`);
+    // Migrations for existing installs (idempotent)
+    try { await q(`ALTER TABLE app_users ADD COLUMN username VARCHAR(50) DEFAULT NULL AFTER name`); } catch (_) {}
+    try { await q(`ALTER TABLE app_users ADD UNIQUE KEY uq_username (username)`); } catch (_) {}
+    try { await q(`ALTER TABLE app_users MODIFY mobile VARCHAR(15) DEFAULT NULL`); } catch (_) {}
 
     await q(`CREATE TABLE IF NOT EXISTS auth_audit (
       id                 BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -173,14 +179,21 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
   // POST /api/login  { mobile, password }
   app.post('/api/login', async (req, res) => {
     try {
-      const mobile   = String(req.body.mobile || '').replace(/\D/g, '');
+      // Identifier can be a mobile number OR a User ID (e.g. "admin")
+      const ident    = String(req.body.mobile || req.body.identifier || req.body.username || '').trim();
+      const identDig = ident.replace(/\D/g, '');
       const password = String(req.body.password || '');
       const ip = ipOf(req);
-      if (!mobile || !password) return res.status(400).json({ detail: 'Mobile number and password are required' });
+      if (!ident || !password) return res.status(400).json({ detail: 'User ID / mobile number and password are required' });
 
-      const { rows } = await q('SELECT * FROM app_users WHERE mobile = ? LIMIT 1', [mobile]);
+      const { rows } = await q(
+        `SELECT * FROM app_users
+         WHERE (username IS NOT NULL AND LOWER(username) = LOWER(?))
+            OR (mobile   IS NOT NULL AND mobile = ? AND ? <> '')
+         LIMIT 1`,
+        [ident, identDig, identDig]);
       const u = rows[0];
-      if (!u) { await audit('login_fail', { detail: `unknown mobile ${mobile}`, ip }); return res.status(401).json({ detail: 'Invalid mobile number or password' }); }
+      if (!u) { await audit('login_fail', { detail: `unknown id ${ident}`, ip }); return res.status(401).json({ detail: 'Invalid User ID / mobile number or password' }); }
       if (!u.is_active) { await audit('login_fail', { target: u.person_code, actorName: u.name, detail: 'inactive account', ip }); return res.status(403).json({ detail: 'Your account is inactive. Please contact the administrator.' }); }
       if (u.locked_until && new Date(u.locked_until) > new Date()) {
         const mins = Math.max(1, Math.ceil((new Date(u.locked_until) - new Date()) / 60000));
@@ -250,7 +263,7 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
   app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
     try {
       const { rows } = await q(`
-        SELECT au.id, au.person_code, au.name, au.mobile, au.email, au.hierarchy_level,
+        SELECT au.id, au.person_code, au.name, au.username, au.mobile, au.email, au.hierarchy_level,
                au.user_type, au.is_active, au.must_change_password, au.failed_attempts,
                au.locked_until, au.last_login_at, (au.password_hash IS NOT NULL) AS has_password
         FROM app_users au ORDER BY (au.hierarchy_level IS NULL), au.hierarchy_level, au.name`);
@@ -262,21 +275,22 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
   app.post('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
     try {
       const b = req.body || {};
-      const mobile = String(b.mobile || '').replace(/\D/g, '');
-      if (!b.name)  return res.status(400).json({ detail: 'Name is required' });
-      if (!mobile)  return res.status(400).json({ detail: 'Mobile number is required' });
+      const username = (b.username || '').trim() || null;
+      const mobile = String(b.mobile || '').replace(/\D/g, '') || null;
+      if (!b.name)               return res.status(400).json({ detail: 'Name is required' });
+      if (!mobile && !username)  return res.status(400).json({ detail: 'A mobile number or a User ID is required' });
       const hl = b.hierarchy_level ? parseInt(b.hierarchy_level, 10) : null;
       const tempPwd = b.password || genTempPassword();
       const hash = await hashPassword(tempPwd);
       try {
-        await q(`INSERT INTO app_users (person_code, name, mobile, hierarchy_level, user_type, email, password_hash, is_active, must_change_password)
-                 VALUES (?,?,?,?,?,?,?,?,1)`,
-          [b.person_code || null, b.name, mobile, hl, b.user_type || 'circulation', b.email || null, hash, b.is_active === false ? 0 : 1]);
+        await q(`INSERT INTO app_users (person_code, name, username, mobile, hierarchy_level, user_type, email, password_hash, is_active, must_change_password)
+                 VALUES (?,?,?,?,?,?,?,?,?,1)`,
+          [b.person_code || null, b.name, username, mobile, hl, b.user_type || 'circulation', b.email || null, hash, b.is_active === false ? 0 : 1]);
       } catch (e) {
-        if (e.code === 'ER_DUP_ENTRY') return res.status(409).json({ detail: 'A user with this mobile number or person code already exists' });
+        if (e.code === 'ER_DUP_ENTRY') return res.status(409).json({ detail: 'A user with this mobile number, User ID or person code already exists' });
         throw e;
       }
-      await audit('user_create', { actor: req.auth.personCode, target: b.person_code || mobile, detail: b.name, ip: ipOf(req) });
+      await audit('user_create', { actor: req.auth.personCode, target: b.person_code || username || mobile, detail: b.name, ip: ipOf(req) });
       res.json({ ok: true, tempPassword: b.password ? undefined : tempPwd });
     } catch (e) { res.status(500).json({ detail: e.message }); }
   });
@@ -290,8 +304,9 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
       if ('user_type'       in b) { fields.push('user_type = ?');       params.push(b.user_type); }
       if ('email'           in b) { fields.push('email = ?');           params.push(b.email || null); }
       if ('name'            in b) { fields.push('name = ?');            params.push(b.name); }
+      if ('username'        in b) { fields.push('username = ?');        params.push((b.username || '').trim() || null); }
       if ('person_code'     in b) { fields.push('person_code = ?');     params.push(b.person_code || null); }
-      if ('mobile'          in b) { fields.push('mobile = ?');          params.push(String(b.mobile).replace(/\D/g, '')); }
+      if ('mobile'          in b) { fields.push('mobile = ?');          params.push(String(b.mobile).replace(/\D/g, '') || null); }
       if ('locked_until'    in b) { fields.push('locked_until = ?, failed_attempts = 0'); params.push(b.locked_until); } // pass null to unlock
       if (!fields.length) return res.status(400).json({ detail: 'No updatable fields provided' });
       params.push(req.params.id);
