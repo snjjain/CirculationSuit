@@ -30,6 +30,12 @@ const APP_MENU = {
 let S = { user: null, screen: "home", openGroups: {}, sideOpen: false, drill: {}, live: {}, range: null };
 const $ = s => document.querySelector(s);
 
+/* ---------- default dashboard date range: 1st of current month → today ---------- */
+function _pad2(n) { return String(n).padStart(2, "0"); }
+function todayISO()      { const d = new Date(); return d.getFullYear() + "-" + _pad2(d.getMonth() + 1) + "-" + _pad2(d.getDate()); }
+function monthStartISO()  { const d = new Date(); return d.getFullYear() + "-" + _pad2(d.getMonth() + 1) + "-01"; }
+function defaultRange()  { return { from: monthStartISO(), to: todayISO() }; }
+
 /* ---------- date-range filter (null = latest day) ---------- */
 function rangeQS(path) {
   if (!S.range) return path;
@@ -357,7 +363,7 @@ function _cmdLoad() {
   }
   if (!c.co && !c._coLoading) {
     c._coLoading = true;
-    fetch(_cmdBase() + '/api/collection/kpis', { headers: api.h() })
+    fetch(_cmdBase() + '/api/collection/kpis?from=' + monthStartISO() + '&to=' + todayISO(), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.co = d; c._coLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._coLoading = false; c.co = { _err: true }; if (S.screen === 'command') render(); });
@@ -2656,7 +2662,7 @@ VIEWS.salesleads = () => {
 function colState() {
   return window._colState || (window._colState = {
     tab: 'overview', gran: 'monthly', agSearch: '', bSearch: '', loading: false, error: null,
-    filters: { from:'', to:'', state:'', branch:'', district:'', ag_code:'', payment_cat:'' },
+    filters: { from: monthStartISO(), to: todayISO(), state:'', branch:'', district:'', ag_code:'', payment_cat:'' },
     opts: { states:[], branches:[], districts:[], payment_cats:[], agencies:[] },
     kpis: null, trend: [], modes: [], agencies: [], behavior: [], appUsage: [],
   });
@@ -2809,7 +2815,7 @@ function colFilterPanel() {
     ${sel('state',    o.states||[],        '🗺 All States')}
     ${sel('branch',   o.branches||[],      '🏢 All Branches')}
     ${sel('payment_cat',o.payment_cats||[],'💳 All Modes')}
-    <button class="btn sm" onclick="Object.assign(colState().filters,{from:'',to:'',state:'',branch:'',district:'',ag_code:'',payment_cat:''});colFetch()">✕ Clear filters</button>
+    <button class="btn sm" onclick="Object.assign(colState().filters,{from:monthStartISO(),to:todayISO(),state:'',branch:'',district:'',ag_code:'',payment_cat:''});colFetch()">✕ Reset to this month</button>
   </div>`;
 }
 
