@@ -17,6 +17,7 @@
  */
 
 const { spawn } = require('child_process');
+const https = require('https');
 const mysql = require('mysql2/promise');
 const path = require('path');
 const fs = require('fs');
@@ -121,7 +122,7 @@ function toIntervalSecs(v) {
 }
 
 // ── Build the Oracle SQL script for sqlplus ───────────────────────────────────
-// Selects 28 delimiter-joined fields per row (order matters — parsed by index).
+// Selects 29 delimiter-joined fields per row (order matters — parsed by index).
 function buildSqlScript(syncDate, spoolFile) {
   const D = `CHR(28)`;
   const fields = [
@@ -153,6 +154,7 @@ function buildSqlScript(syncDate, spoolFile) {
     'SUBSTR(q.lat_long_addr,1,500)',     // 25
     'q.vehicle_sharing_flag',            // 26
     'q.droping_latlong',                 // 27
+    'q.distance_prev_dp',               // 28  Google Maps road km from previous drop
   ].join(` || ${D} || `);
 
   return `SET PAGESIZE 0
@@ -191,7 +193,7 @@ FROM (
       x.unq_id, x.vehicle_no, x.LAT_LONG_ADDR, x.RETURN_KM, x.taxi_stat, x.SUBRT_CODE, x.SUB_ROUTE_NAME,
       app_driver_calc_route_distance (x.comp_code, x.unit_code, x.taxi_id, x.supdate, x.driver_code, x.route_code, x.SUBRT_CODE) TOT_DIST,
       app_driver_prev_dp_latlong (x.comp_code, x.unit_code, x.taxi_id, x.supdate, x.driver_code, x.route_code, x.SUBRT_CODE, x.unq_id, 'BOTH', ';') droping_latlong,
-      x.MAPS_ROUTE_ZONE, x.VEHICLE_SHARING_FLAG
+      x.MAPS_ROUTE_ZONE, x.VEHICLE_SHARING_FLAG, x.DISTANCE_PREV_DP
   from
   (select a.comp_code, a.unit_code, get_unit_name(a.comp_code, a.unit_code) unit_name, a.supdate,
       a.driver_code, a.driver_name, a.route_code, a.rtnm, a.drop_point_code, a.drop_point drop_point_name,
@@ -260,6 +262,24 @@ function runSqlplus(sqlFile) {
 
 // ── Map one parsed line → MySQL INSERT params (31 columns) ───────────────────
 function lineToParams(f) {
+  let schedTime  = toTime(f[12]);
+  const actualTime = toTime(f[13]);
+
+  // Recompute time_diff from Oracle times. Handles both:
+  //   early-next-day: actual < sched by > 12h (diff + 86400)
+  //   early-previous-night: actual > sched by > 12h, e.g. sched=01:00 actual=23:56 → −64 min (diff - 86400)
+  let timeDiff;
+  if (schedTime && actualTime) {
+    const [sh, sm] = schedTime.split(':').map(Number);
+    const [ah, am] = actualTime.split(':').map(Number);
+    let diff = (ah * 3600 + am * 60) - (sh * 3600 + sm * 60);
+    if (diff < -43200) diff += 86400; // actual is next day (early morning run)
+    if (diff > 43200)  diff -= 86400; // actual was previous night (early departure)
+    timeDiff = diff;
+  } else {
+    timeDiff = toIntervalSecs(f[14]);
+  }
+
   return [
     str(f[0]),                         //  1. unit_name
     toDate(f[1]),                      //  2. sup_date
@@ -273,9 +293,9 @@ function lineToParams(f) {
     str(f[9]),                         // 10. drop_point_name
     toInt(f[10]),                      // 11. no_of_packets
     toDate(f[11]),                     // 12. packet_drop_date
-    toTime(f[12]),                     // 13. scheduled_arrival
-    toTime(f[13]),                     // 14. actual_arrival
-    toIntervalSecs(f[14]),             // 15. time_diff (INT seconds)
+    schedTime,                         // 13. scheduled_arrival (AM/PM corrected)
+    actualTime,                        // 14. actual_arrival
+    timeDiff,                          // 15. time_diff (recomputed from corrected sched)
     str(f[15]),                        // 16. taxi_id
     num(f[16]),                        // 17. reg_lat
     num(f[17]),                        // 18. reg_long
@@ -288,7 +308,7 @@ function lineToParams(f) {
     num(f[24]),                        // 25. total_distance
     null,                              // 26. duration (not provided by ERP query)
     str(f[25]),                        // 27. lat_long_addr
-    null,                              // 28. api_distance (not provided)
+    (v => v != null ? Math.round(v / 10) / 100 : null)(num(f[28])), // 28. api_distance (DISTANCE_PREV_DP in metres → km, 2dp)
     str(f[26]) === 'Y' ? 1 : 0,       // 29. vehicle_sharing (TINYINT)
     null,                              // 30. last_drop_point (not provided)
     str(f[27]),                        // 31. dropping_lat_long
@@ -340,7 +360,7 @@ async function main() {
     let badLines = 0;
     for (const line of lines) {
       const f = line.split(SEP);
-      if (f.length !== 28) { badLines++; continue; }
+      if (f.length !== 29) { badLines++; continue; }
       parsed.push(f);
     }
     if (badLines > 0) log(`WARNING: skipped ${badLines} malformed lines`);
@@ -393,6 +413,183 @@ async function main() {
 
     await conn.commit();
     log(`Inserted ${inserted} rows${errors > 0 ? `, skipped ${errors} with errors` : ''}`);
+
+    // ── Compute api_distance using OSRM road routing (falls back to Haversine) ─
+    // OSRM uses OpenStreetMap data — no API key required.
+    // Uses Oracle's dropping_lat_long for correct route sequence.
+    function _osrmKm(pLon, pLat, cLon, cLat) {
+      return new Promise(resolve => {
+        const url = `https://router.project-osrm.org/route/v1/driving/${pLon},${pLat};${cLon},${cLat}?overview=false`;
+        const req = https.get(url, { timeout: 8000 }, res => {
+          let buf = '';
+          res.on('data', d => { buf += d; });
+          res.on('end', () => {
+            try {
+              const j = JSON.parse(buf);
+              resolve(j.code === 'Ok' && j.routes && j.routes[0]
+                ? Math.round(j.routes[0].distance / 10) / 100
+                : null);
+            } catch (_) { resolve(null); }
+          });
+        });
+        req.on('error', () => resolve(null));
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+      });
+    }
+    function _hvKm(la1, lo1, la2, lo2) {
+      if (!la1 || !lo1 || !la2 || !lo2) return 0;
+      const R = 6371, r = x => x * Math.PI / 180;
+      const dLa = r(la2 - la1), dLo = r(lo2 - lo1);
+      const a = Math.sin(dLa / 2) ** 2 + Math.cos(r(la1)) * Math.cos(r(la2)) * Math.sin(dLo / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+    function _validGps(lat, lon) {
+      return lat >= 8 && lat <= 37 && lon >= 68 && lon <= 97;
+    }
+    function _parsePrevLatLon(droppingLatLong) {
+      if (!droppingLatLong) return null;
+      const first = droppingLatLong.split(';')[0];
+      if (!first) return null;
+      const [lon, lat] = first.split(',').map(parseFloat);
+      if (!_validGps(lat, lon)) return null;
+      return { lat, lon };
+    }
+
+    const [dpRows] = await conn.execute(`
+      SELECT id,
+        COALESCE(actual_lat, 0)  AS alat, COALESCE(actual_long, 0) AS alon,
+        COALESCE(reg_lat, 0)     AS rlat, COALESCE(reg_long, 0)    AS rlon,
+        dropping_lat_long,
+        CONCAT(unit_name,'|',route_code,'|',COALESCE(sub_route_code,'')) AS rkey
+      FROM taxi_drop_point_log
+      WHERE sup_date = ?
+      ORDER BY unit_name, route_code, COALESCE(sub_route_code,''),
+               CASE WHEN actual_arrival IS NULL THEN 1 ELSE 0 END,
+               CASE WHEN HOUR(actual_arrival) < 12
+                    THEN TIME_TO_SEC(actual_arrival) + 86400
+                    ELSE TIME_TO_SEC(actual_arrival) END,
+               CASE WHEN scheduled_arrival IS NULL THEN 1 ELSE 0 END,
+               CASE WHEN HOUR(scheduled_arrival) < 12
+                    THEN TIME_TO_SEC(scheduled_arrival) + 86400
+                    ELSE TIME_TO_SEC(scheduled_arrival) END
+    `, [syncDate]);
+
+    // Phase 1: parallel OSRM calls (concurrency 10, 50 ms inter-batch gap)
+    const OSRM_CONCURRENCY = 10;
+    const roadMap = new Map();
+    log(`Calling OSRM road routing for ${dpRows.length} drop points...`);
+    for (let i = 0; i < dpRows.length; i += OSRM_CONCURRENCY) {
+      await Promise.all(dpRows.slice(i, i + OSRM_CONCURRENCY).map(async row => {
+        const alat = parseFloat(row.alat) || 0, alon = parseFloat(row.alon) || 0;
+        const rlat = parseFloat(row.rlat) || 0, rlon = parseFloat(row.rlon) || 0;
+        const lat = _validGps(alat, alon) ? alat : (_validGps(rlat, rlon) ? rlat : 0);
+        const lon = _validGps(alat, alon) ? alon : (_validGps(rlat, rlon) ? rlon : 0);
+        const prev = _parsePrevLatLon(row.dropping_lat_long);
+        roadMap.set(row.id,
+          (prev && _validGps(lat, lon)) ? await _osrmKm(prev.lon, prev.lat, lon, lat) : null);
+      }));
+      if (i + OSRM_CONCURRENCY < dpRows.length) await new Promise(r => setTimeout(r, 50));
+    }
+
+    // Phase 2: sequential pass — collect updates, Haversine fallback for OSRM failures
+    let prevKey = null, prevLat = 0, prevLon = 0;
+    const apiUpdates = [];
+    let osrmCount = 0, hvCount = 0;
+    for (const row of dpRows) {
+      const alat = parseFloat(row.alat) || 0, alon = parseFloat(row.alon) || 0;
+      const rlat = parseFloat(row.rlat) || 0, rlon = parseFloat(row.rlon) || 0;
+      const aOk = _validGps(alat, alon), rOk = _validGps(rlat, rlon);
+      const lat = aOk ? alat : (rOk ? rlat : 0);
+      const lon = aOk ? alon : (rOk ? rlon : 0);
+      if (row.rkey !== prevKey) { prevLat = 0; prevLon = 0; }
+
+      const roadKm = roadMap.get(row.id);
+      if (roadKm != null) {
+        apiUpdates.push([roadKm, row.id, false]); // unconditional — OSRM road distance wins
+        osrmCount++;
+      } else {
+        const prev = _parsePrevLatLon(row.dropping_lat_long);
+        const hv = prev
+          ? Math.round(_hvKm(prev.lat, prev.lon, lat, lon) * 100) / 100
+          : (prevLat ? Math.round(_hvKm(prevLat, prevLon, lat, lon) * 100) / 100 : 0);
+        apiUpdates.push([hv, row.id, true]); // only fill NULL — keeps Oracle value if present
+        if (hv > 0) hvCount++;
+      }
+
+      if (lat !== 0 && lon !== 0) { prevLat = lat; prevLon = lon; }
+      prevKey = row.rkey;
+    }
+
+    // Phase 3: batch-write results
+    const BATCH = 200;
+    for (let i = 0; i < apiUpdates.length; i += BATCH) {
+      await Promise.all(apiUpdates.slice(i, i + BATCH).map(([d, id, nullOnly]) =>
+        conn.execute(
+          nullOnly
+            ? 'UPDATE taxi_drop_point_log SET api_distance = ? WHERE id = ? AND api_distance IS NULL'
+            : 'UPDATE taxi_drop_point_log SET api_distance = ? WHERE id = ?',
+          [d, id]
+        )
+      ));
+    }
+    log(`api_distance: ${osrmCount} OSRM road, ${hvCount} Haversine fallback, ${dpRows.length - osrmCount - hvCount} from Oracle`);
+
+    // ── Derive route-level taxi_delay_log from drop point arrivals ───────────
+    await conn.execute('SET SESSION group_concat_max_len = 65536');
+    const [delDL] = await conn.execute(
+      'DELETE FROM taxi_delay_log WHERE report_date = ?', [syncDate]);
+    log(`Cleared ${delDL.affectedRows} existing taxi_delay_log rows for ${syncDate}`);
+
+    const [dlRes] = await conn.execute(`
+      INSERT INTO taxi_delay_log
+        (report_date, unit_name, route_name, sub_route_name, taxi_type, supply, vehicle_no,
+         scheduled_departure, actual_departure, taxi_delayed, route_master_km, total_app_km,
+         start_location, last_location, reached_time)
+      SELECT
+        sup_date,
+        unit_name,
+        route_name,
+        COALESCE(sub_route_name, '-'),
+        COALESCE(taxi_route_type, 'MAIN'),
+        SUM(no_of_packets),
+        MAX(vehicle_no),
+        MIN(scheduled_arrival),
+        MIN(actual_arrival),
+        CASE
+          WHEN MIN(actual_arrival) IS NULL OR MIN(scheduled_arrival) IS NULL THEN NULL
+          WHEN TIME_TO_SEC(MIN(actual_arrival)) < TIME_TO_SEC(MIN(scheduled_arrival))
+               AND (TIME_TO_SEC(MIN(scheduled_arrival)) - TIME_TO_SEC(MIN(actual_arrival))) > 43200
+          THEN TIME_TO_SEC(MIN(actual_arrival)) + 86400 - TIME_TO_SEC(MIN(scheduled_arrival))
+          ELSE TIME_TO_SEC(MIN(actual_arrival)) - TIME_TO_SEC(MIN(scheduled_arrival))
+        END,
+        MAX(route_master_km),
+        ROUND(SUM(CASE WHEN actual_arrival IS NOT NULL OR scheduled_arrival IS NOT NULL
+                       THEN COALESCE(api_distance, 0) ELSE 0 END), 2),
+        SUBSTRING_INDEX(GROUP_CONCAT(
+          drop_point_name
+          ORDER BY CASE WHEN actual_arrival IS NULL THEN 999999
+                        WHEN HOUR(actual_arrival) < 12 THEN TIME_TO_SEC(actual_arrival) + 86400
+                        ELSE TIME_TO_SEC(actual_arrival) END ASC
+          SEPARATOR '\x01'
+        ), '\x01', 1),
+        SUBSTRING_INDEX(GROUP_CONCAT(
+          CASE WHEN actual_lat IS NOT NULL AND actual_long IS NOT NULL THEN drop_point_name ELSE NULL END
+          ORDER BY CASE WHEN HOUR(actual_arrival) < 12 THEN TIME_TO_SEC(actual_arrival) + 86400
+                        ELSE TIME_TO_SEC(actual_arrival) END DESC
+          SEPARATOR '\x01'
+        ), '\x01', 1),
+        SEC_TO_TIME(COALESCE(MAX(
+          CASE WHEN actual_lat IS NOT NULL AND actual_long IS NOT NULL AND actual_arrival IS NOT NULL
+               THEN CASE WHEN HOUR(actual_arrival) < 12
+                         THEN TIME_TO_SEC(actual_arrival) + 86400
+                         ELSE TIME_TO_SEC(actual_arrival) END
+               ELSE NULL END
+        ), 0) % 86400)
+      FROM taxi_drop_point_log
+      WHERE sup_date = ?
+      GROUP BY sup_date, unit_name, route_code, route_name, sub_route_code, sub_route_name, taxi_route_type
+    `, [syncDate]);
+    log(`Derived ${dlRes.affectedRows} taxi_delay_log rows for ${syncDate}`);
     log(`=== Sync complete for ${syncDate} ===`);
 
   } catch (err) {

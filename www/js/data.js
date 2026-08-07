@@ -1,6 +1,6 @@
 /* ═══════════ Patrika Vitran Suite — seed data (from reference prototypes) ═══════════ */
 "use strict";
-const TODAY = "Tue 14 Jul 2026";
+const TODAY = new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 const fmtN = n => n.toLocaleString("en-IN");
 const fmtC = n => "₹" + n.toLocaleString("en-IN");
 const lakh = n => "₹" + (n / 100000).toFixed(1) + " L";
@@ -8,7 +8,7 @@ const lakh = n => "₹" + (n / 100000).toFixed(1) + " L";
 /* ---- users & permissions — 10-level hierarchy (from Hierarchy levels.docx) ---- */
 const USERS = [
   // L1 — Admin (Management / Board View)
-  { id:1,  name:"Sanjay Jain",   mobile:"9714022891", password:"patrika@123", role:"admin",             hierarchyLevel:1,  roleLabel:"Admin — Board View",                 scopeLabel:"All Rajasthan",               avatar:"SJ", dashboard:true,  modules:["agent","hawker","dcr","survey","taxi"] },
+  { id:1,  name:"Sanjay Jain",   mobile:"9714022891", password:"patrika@123", role:"admin",             hierarchyLevel:1,  roleLabel:"Admin — Board View",                 scopeLabel:"PAN India",               avatar:"SJ", dashboard:true,  modules:["agent","hawker","dcr","survey","taxi"] },
   // L2 — Vice President
   { id:7,  name:"Vikram Singh",  mobile:"9811111111", password:"vp@123",      role:"vp",                hierarchyLevel:2,  roleLabel:"Vice President",                     scopeLabel:"Rajasthan Region",            avatar:"VS", dashboard:true,  modules:["agent","dcr","survey"] },
   // L3 — Zonal Head
@@ -200,24 +200,50 @@ const MASTERS = [
 
 /* ---- Hierarchy drilldown data ---- */
 const ZONES_DATA = [
-  { id:1, name:"Rajasthan East", region:"Rajasthan", branches:4, agencies:44, copies_plan:186200, copies_del:183800, missed:2400, otd:96.2, collected:11200000, due:14050000, out:2850000, complaints:48 },
-  { id:2, name:"Rajasthan West", region:"Rajasthan", branches:3, agencies:32, copies_plan:143100, copies_del:139800, missed:3300, otd:95.2, collected:8400000,  due:10520000, out:2120000, complaints:31 },
-  { id:3, name:"MP Central",     region:"MP & CG",   branches:2, agencies:25, copies_plan:99200,  copies_del:96100,  missed:3100, otd:93.1, collected:5900000,  due:7790000,  out:1890000, complaints:22 },
-  { id:4, name:"CG North",       region:"MP & CG",   branches:2, agencies:16, copies_plan:74800,  copies_del:71200,  missed:3600, otd:91.4, collected:4200000,  due:5650000,  out:1450000, complaints:17 },
+  { id:1, name:"Rajasthan", region:"Rajasthan",      branches:15, agencies:92,  copies_plan:329300, copies_del:323600, missed:5700,  otd:95.8, collected:19600000, due:24570000, out:4970000, complaints:79  },
+  { id:2, name:"MP",        region:"Madhya Pradesh",  branches:8,  agencies:34,  copies_plan:99200,  copies_del:96100,  missed:3100,  otd:93.1, collected:5900000,  due:7790000,  out:1890000, complaints:22  },
+  { id:3, name:"CG",        region:"Chhattisgarh",    branches:3,  agencies:16,  copies_plan:74800,  copies_del:71200,  missed:3600,  otd:91.4, collected:4200000,  due:5650000,  out:1450000, complaints:17  },
+  { id:4, name:"National",  region:"Multi-state",     branches:7,  agencies:22,  copies_plan:86200,  copies_del:83900,  missed:2300,  otd:97.2, collected:5250000,  due:6465000,  out:1215000, complaints:12  },
 ];
 
 const BRANCHES_DATA = [
-  { id:1, zone_id:1, name:"Jaipur Main",   city:"Jaipur",   agencies:18, copies_plan:62800, copies_del:62100, missed:700,  otd:97.1, collected:3940000, due:4760000, out:820000,  complaints:14 },
-  { id:2, zone_id:1, name:"Jaipur North",  city:"Jaipur",   agencies:12, copies_plan:49200, copies_del:48300, missed:900,  otd:96.4, collected:2980000, due:3520000, out:540000,  complaints:9  },
-  { id:3, zone_id:2, name:"Jodhpur Main",  city:"Jodhpur",  agencies:15, copies_plan:51800, copies_del:50200, missed:1600, otd:94.1, collected:3180000, due:3960000, out:780000,  complaints:12 },
-  { id:4, zone_id:1, name:"Ajmer Main",    city:"Ajmer",    agencies:8,  copies_plan:32100, copies_del:31400, missed:700,  otd:95.3, collected:1920000, due:2310000, out:390000,  complaints:7  },
-  { id:5, zone_id:1, name:"Dausa Branch",  city:"Dausa",    agencies:6,  copies_plan:25200, copies_del:24600, missed:600,  otd:94.8, collected:1420000, due:1715000, out:295000,  complaints:5  },
-  { id:6, zone_id:2, name:"Bikaner Main",  city:"Bikaner",  agencies:10, copies_plan:38900, copies_del:37200, missed:1700, otd:92.8, collected:2380000, due:2990000, out:610000,  complaints:11 },
-  { id:7, zone_id:2, name:"Barmer Zone",   city:"Barmer",   agencies:7,  copies_plan:30800, copies_del:29400, missed:1400, otd:92.5, collected:1820000, due:2310000, out:490000,  complaints:8  },
-  { id:8, zone_id:3, name:"Bhopal Main",   city:"Bhopal",   agencies:14, copies_plan:59200, copies_del:56800, missed:2400, otd:92.1, collected:3490000, due:4630000, out:1140000, complaints:14 },
-  { id:9, zone_id:3, name:"Indore Branch", city:"Indore",   agencies:11, copies_plan:42800, copies_del:40200, missed:2600, otd:91.2, collected:2680000, due:3500000, out:820000,  complaints:9  },
-  { id:10,zone_id:4, name:"Raipur Main",   city:"Raipur",   agencies:9,  copies_plan:38900, copies_del:36400, missed:2500, otd:90.8, collected:2340000, due:3100000, out:760000,  complaints:11 },
-  { id:11,zone_id:4, name:"Bilaspur",      city:"Bilaspur", agencies:7,  copies_plan:33100, copies_del:30800, missed:2300, otd:91.2, collected:1980000, due:2570000, out:590000,  complaints:6  },
+  // Rajasthan — 15 units
+  { id:1,  zone_id:1, name:"JAIPUR RP",        city:"Jaipur",         agencies:18, copies_plan:68000, copies_del:67200, missed:800,  otd:97.3, collected:4200000, due:5100000, out:900000,  complaints:12 },
+  { id:2,  zone_id:1, name:"JODHPUR RP",        city:"Jodhpur",        agencies:12, copies_plan:42000, copies_del:41200, missed:800,  otd:97.1, collected:2600000, due:3200000, out:600000,  complaints:8  },
+  { id:3,  zone_id:1, name:"KOTA RP",           city:"Kota",           agencies:8,  copies_plan:28000, copies_del:27400, missed:600,  otd:97.1, collected:1700000, due:2100000, out:400000,  complaints:5  },
+  { id:4,  zone_id:1, name:"UDAIPUR RP",        city:"Udaipur",        agencies:7,  copies_plan:25000, copies_del:24400, missed:600,  otd:96.8, collected:1500000, due:1900000, out:400000,  complaints:5  },
+  { id:5,  zone_id:1, name:"AJMER RP",          city:"Ajmer",          agencies:7,  copies_plan:24000, copies_del:23400, missed:600,  otd:96.8, collected:1400000, due:1800000, out:400000,  complaints:4  },
+  { id:6,  zone_id:1, name:"BIKANER RP",        city:"Bikaner",        agencies:6,  copies_plan:22000, copies_del:21400, missed:600,  otd:96.6, collected:1300000, due:1600000, out:300000,  complaints:5  },
+  { id:7,  zone_id:1, name:"ALWAR RP",          city:"Alwar",          agencies:6,  copies_plan:20000, copies_del:19500, missed:500,  otd:96.4, collected:1200000, due:1500000, out:300000,  complaints:3  },
+  { id:8,  zone_id:1, name:"SIKAR RP",          city:"Sikar",          agencies:5,  copies_plan:18000, copies_del:17500, missed:500,  otd:96.2, collected:1100000, due:1350000, out:250000,  complaints:3  },
+  { id:9,  zone_id:1, name:"BHILWARA RP",       city:"Bhilwara",       agencies:5,  copies_plan:16000, copies_del:15500, missed:500,  otd:96.1, collected:950000,  due:1200000, out:250000,  complaints:3  },
+  { id:10, zone_id:1, name:"BARMER RP",         city:"Barmer",         agencies:4,  copies_plan:14000, copies_del:13500, missed:500,  otd:96.0, collected:850000,  due:1050000, out:200000,  complaints:3  },
+  { id:11, zone_id:1, name:"PALI RP",           city:"Pali",           agencies:3,  copies_plan:12000, copies_del:11600, missed:400,  otd:96.1, collected:720000,  due:900000,  out:180000,  complaints:2  },
+  { id:12, zone_id:1, name:"SRI GANGANAGAR RP", city:"Sri Ganganagar", agencies:3,  copies_plan:12000, copies_del:11600, missed:400,  otd:96.1, collected:720000,  due:900000,  out:180000,  complaints:2  },
+  { id:13, zone_id:1, name:"JHUNJHUNU",         city:"Jhunjhunu",      agencies:3,  copies_plan:10000, copies_del:9700,  missed:300,  otd:96.3, collected:600000,  due:750000,  out:150000,  complaints:2  },
+  { id:14, zone_id:1, name:"BHARATPUR RP",      city:"Bharatpur",      agencies:3,  copies_plan:10000, copies_del:9700,  missed:300,  otd:96.1, collected:600000,  due:750000,  out:150000,  complaints:2  },
+  { id:15, zone_id:1, name:"BANSWARA RP",       city:"Banswara",       agencies:2,  copies_plan:8300,  copies_del:8100,  missed:200,  otd:96.2, collected:500000,  due:620000,  out:120000,  complaints:2  },
+  // MP — 8 units
+  { id:16, zone_id:2, name:"INDORE PT",         city:"Indore",         agencies:8,  copies_plan:22000, copies_del:21200, missed:800,  otd:93.8, collected:1290000, due:1750000, out:460000,  complaints:6  },
+  { id:17, zone_id:2, name:"BHOPAL PT",         city:"Bhopal",         agencies:7,  copies_plan:20000, copies_del:19300, missed:700,  otd:93.5, collected:1170000, due:1600000, out:430000,  complaints:5  },
+  { id:18, zone_id:2, name:"GWALIOR PT",        city:"Gwalior",        agencies:5,  copies_plan:14000, copies_del:13400, missed:600,  otd:93.4, collected:820000,  due:1100000, out:280000,  complaints:4  },
+  { id:19, zone_id:2, name:"JABALPUR PT",       city:"Jabalpur",       agencies:4,  copies_plan:13000, copies_del:12500, missed:500,  otd:93.4, collected:760000,  due:1020000, out:260000,  complaints:3  },
+  { id:20, zone_id:2, name:"SAGAR PT",          city:"Sagar",          agencies:3,  copies_plan:10000, copies_del:9600,  missed:400,  otd:93.1, collected:585000,  due:780000,  out:195000,  complaints:2  },
+  { id:21, zone_id:2, name:"SATNA PT",          city:"Satna",          agencies:3,  copies_plan:8000,  copies_del:7700,  missed:300,  otd:93.0, collected:468000,  due:625000,  out:157000,  complaints:1  },
+  { id:22, zone_id:2, name:"CHHINDWARA PT",     city:"Chhindwara",     agencies:2,  copies_plan:7000,  copies_del:6700,  missed:300,  otd:92.7, collected:410000,  due:548000,  out:138000,  complaints:1  },
+  { id:23, zone_id:2, name:"KHANDWA PT",        city:"Khandwa",        agencies:2,  copies_plan:5200,  copies_del:4700,  missed:500,  otd:92.3, collected:307000,  due:410000,  out:103000,  complaints:0  },
+  // CG — 3 units
+  { id:24, zone_id:3, name:"RAIPUR PT",         city:"Raipur",         agencies:7,  copies_plan:38000, copies_del:36400, missed:1600, otd:91.4, collected:2240000, due:3000000, out:760000,  complaints:10 },
+  { id:25, zone_id:3, name:"BILASPUR PT",       city:"Bilaspur",       agencies:5,  copies_plan:22000, copies_del:20800, missed:1200, otd:90.7, collected:1290000, due:1740000, out:450000,  complaints:5  },
+  { id:26, zone_id:3, name:"JAGDALPUR PT",      city:"Jagdalpur",      agencies:4,  copies_plan:14800, copies_del:14000, missed:800,  otd:90.8, collected:870000,  due:1150000, out:280000,  complaints:2  },
+  // National — 7 units
+  { id:27, zone_id:4, name:"DELHI PT",          city:"Delhi",          agencies:6,  copies_plan:28000, copies_del:27200, missed:800,  otd:97.1, collected:1700000, due:2100000, out:400000,  complaints:5  },
+  { id:28, zone_id:4, name:"AHMEDABAD RP",      city:"Ahmedabad",      agencies:4,  copies_plan:16000, copies_del:15600, missed:400,  otd:97.5, collected:970000,  due:1200000, out:230000,  complaints:2  },
+  { id:29, zone_id:4, name:"BANGLORE RP",       city:"Bangalore",      agencies:3,  copies_plan:13000, copies_del:12700, missed:300,  otd:97.7, collected:790000,  due:970000,  out:180000,  complaints:1  },
+  { id:30, zone_id:4, name:"KOLKATA RP",        city:"Kolkata",        agencies:3,  copies_plan:10000, copies_del:9700,  missed:300,  otd:97.0, collected:610000,  due:750000,  out:140000,  complaints:2  },
+  { id:31, zone_id:4, name:"SURAT RP",          city:"Surat",          agencies:2,  copies_plan:8000,  copies_del:7800,  missed:200,  otd:97.5, collected:490000,  due:600000,  out:110000,  complaints:1  },
+  { id:32, zone_id:4, name:"HUBLI RP",          city:"Hubli",          agencies:2,  copies_plan:6500,  copies_del:6300,  missed:200,  otd:96.9, collected:400000,  due:490000,  out:90000,   complaints:1  },
+  { id:33, zone_id:4, name:"CHENNAI RP",        city:"Chennai",        agencies:2,  copies_plan:4700,  copies_del:4600,  missed:100,  otd:97.9, collected:290000,  due:355000,  out:65000,   complaints:0  },
 ];
 
 const AGENCIES_DATA = [

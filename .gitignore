@@ -5,3 +5,6 @@ __pycache__/
 logs/
 Input Reports/
 .claude/
+
+# stray logs outside logs/
+*.log

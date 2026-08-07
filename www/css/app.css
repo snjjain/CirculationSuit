@@ -222,12 +222,12 @@ td.r,th.r{text-align:right}
 .field-col{max-width:520px;margin:0 auto}
 
 /* Modal / toast */
-.modal-scrim{position:fixed;inset:0;background:rgba(12,18,30,.5);z-index:300;display:flex;align-items:flex-end;justify-content:center;padding:0}
+.modal-scrim{position:fixed;inset:0;background:rgba(12,18,30,.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0}
 .modal{width:min(500px,100%);background:var(--surf);border-radius:20px 20px 0 0;padding:22px 20px calc(22px + env(safe-area-inset-bottom));box-shadow:var(--shd);max-height:88vh;overflow:auto}
 .modal h3{font-family:Georgia,serif;font-size:17.5px;margin-bottom:4px}
 .modal .mint{color:var(--muted);font-size:12.5px;margin-bottom:15px}
 @media(min-width:640px){.modal-scrim{align-items:center;padding:18px}.modal{border-radius:20px}}
-.toast{position:fixed;bottom:calc(76px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:var(--navy);color:#fff;padding:11px 20px;border-radius:13px;font-weight:700;z-index:400;box-shadow:var(--shd);max-width:92vw;text-align:center;font-size:13.5px}
+.toast{position:fixed;bottom:calc(76px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:var(--navy);color:#fff;padding:11px 20px;border-radius:13px;font-weight:700;z-index:10000;box-shadow:var(--shd);max-width:92vw;text-align:center;font-size:13.5px}
 @media(min-width:821px){.toast{bottom:28px}}
 
 /* Bottom nav (mobile) */
@@ -256,3 +256,72 @@ td.r,th.r{text-align:right}
   .main{overflow:visible;padding:0}
   .card{box-shadow:none;break-inside:avoid}
 }
+
+/* ═══════════ Data-viz design system (v103) ═══════════ */
+/* Chart series tokens — categorical order fixed; validated for CVD + contrast */
+:root{
+  --chart-1:#1260BF; --chart-2:#C9961A; --chart-3:#0D9488; --chart-4:#6B4FA1; --chart-5:#C0392B;
+}
+@media (prefers-color-scheme: dark){:root{
+  --chart-1:#3E7DD1; --chart-2:#A87A0B; --chart-3:#0A8F80; --chart-4:#8464C4; --chart-5:#C24B3B;
+}}
+:root[data-theme="dark"]{
+  --chart-1:#3E7DD1; --chart-2:#A87A0B; --chart-3:#0A8F80; --chart-4:#8464C4; --chart-5:#C24B3B;
+}
+:root[data-theme="light"]{
+  --chart-1:#1260BF; --chart-2:#C9961A; --chart-3:#0D9488; --chart-4:#6B4FA1; --chart-5:#C0392B;
+}
+/* Aliases — variables referenced across the app that previously had no definition */
+:root{
+  --acc:var(--chart-1); --accent:var(--chart-1); --blue-d:var(--chart-1);
+  --border:var(--brd); --card:var(--surf); --surface:var(--surf); --surface-2:var(--surf2);
+  --fg:var(--ink); --text:var(--ink); --txt:var(--ink); --txt2:var(--muted); --ink-2:var(--muted);
+}
+
+/* Tooltip (singleton, positioned by JS) */
+.vz-tip{position:fixed;z-index:9999;pointer-events:none;background:var(--navy);color:#fff;
+  padding:7px 11px;border-radius:9px;font-size:12px;line-height:1.45;box-shadow:0 8px 24px rgba(0,0,0,.28);
+  opacity:0;transform:translateY(4px);transition:opacity .12s,transform .12s;max-width:260px}
+.vz-tip.show{opacity:1;transform:translateY(0)}
+.vz-tip b{color:#E0B34B}
+
+/* KPI cards */
+.vz-kgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:12px;margin-bottom:14px}
+.vz-kpi{position:relative;background:var(--surf);border:1px solid var(--brd2);border-radius:var(--r);
+  padding:14px 16px 12px;box-shadow:var(--shd);overflow:hidden;display:flex;flex-direction:column;gap:4px;
+  transition:transform .15s ease,box-shadow .15s ease;animation:vzUp .35s ease both}
+.vz-kpi:hover{transform:translateY(-2px);box-shadow:0 4px 8px rgba(28,43,69,.08),0 12px 28px rgba(28,43,69,.12)}
+.vz-kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--kpi-c,var(--chart-1));border-radius:4px 0 0 4px}
+.vz-kpi .kl{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.vz-kpi .kv{font-size:23px;font-weight:800;letter-spacing:-.01em;line-height:1.1}
+.vz-kpi .kd{display:flex;align-items:center;gap:6px;font-size:11.5px;flex-wrap:wrap}
+.vz-kpi .kspark{position:absolute;right:8px;bottom:6px;opacity:.9}
+.vz-pill{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px}
+.vz-pill.up{background:var(--grn-l);color:var(--grn)}
+.vz-pill.down{background:var(--red-l);color:var(--red)}
+.vz-pill.flat{background:var(--navy-l);color:var(--muted)}
+
+/* Charts */
+.vz-sec{background:var(--surf);border:1px solid var(--brd2);border-radius:var(--r);box-shadow:var(--shd);
+  padding:16px 18px;margin-bottom:14px;animation:vzUp .4s ease both}
+.vz-sec .vzt{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}
+.vz-sec .vzt b{font-size:13.5px;font-weight:800}
+.vz-sec .vzt small{color:var(--muted);font-size:11px}
+.vz-hrow{display:grid;grid-template-columns:minmax(90px,150px) 1fr 66px;gap:10px;align-items:center;
+  font-size:12px;padding:3px 0;border-radius:8px}
+.vz-hrow:hover{background:var(--surf2)}
+.vz-hrow .hl{color:var(--ink);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vz-hrow .ht{background:var(--navy-l);border-radius:5px;height:18px;position:relative;overflow:hidden}
+.vz-hrow .hb{position:absolute;left:0;top:0;bottom:0;border-radius:4px;
+  transform-origin:left;animation:vzBar .5s cubic-bezier(.22,.8,.36,1) both}
+.vz-hrow .hv{text-align:right;font-weight:800;font-variant-numeric:tabular-nums;font-size:11.5px}
+.vz-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--muted)}
+.vz-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.vz-alert{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:11px;margin-top:8px;
+  font-size:12.5px;line-height:1.5;background:var(--surf2);border:1px solid var(--brd2)}
+.vz-alert .ai{font-size:16px;line-height:1.3}
+@keyframes vzUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes vzBar{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes vzDraw{from{stroke-dashoffset:var(--len,1200)}to{stroke-dashoffset:0}}
+@media(max-width:640px){.vz-kgrid{grid-template-columns:repeat(2,1fr)}.vz-hrow{grid-template-columns:minmax(70px,105px) 1fr 58px}}
+@media print{.vz-kpi,.vz-sec{box-shadow:none;break-inside:avoid}.vz-kpi:hover{transform:none}}

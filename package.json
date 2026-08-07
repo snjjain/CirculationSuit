@@ -21,6 +21,7 @@
     "ios:open": "npx cap open ios"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@capacitor/android": "^6.1.0",
     "@capacitor/core": "^6.1.0",
     "@capacitor/ios": "^6.1.0",
@@ -29,6 +30,7 @@
     "express": "^4.19.2",
     "finalhandler": "^1.2.0",
     "mysql2": "^3.23.0",
+    "nodemailer": "^9.0.3",
     "oracledb": "^6.10.0",
     "pg": "^8.11.3",
     "serve-static": "^1.15.0",
