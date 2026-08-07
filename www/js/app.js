@@ -54,25 +54,26 @@ window.clearDateRange = () => {
   render();
 };
 
-/* ---------- PostgreSQL API client (port 8000) ---------- */
+/* ---------- REST API client (port 8001) — JWT bearer auth ---------- */
+let AUTH_TOKEN = null;   // set on login / restore; sent as Authorization: Bearer
 const api = {
   base: "http://localhost:8001",
   h() {
     const h = { "Content-Type": "application/json" };
-    if (S.user?.mobile) h["x-user-mobile"] = S.user.mobile;
-    if (S.user?.person_code) h["x-person-code"] = String(S.user.person_code);
-    if (S.user?.hierarchyLevel) h["x-hierarchy-level"] = String(S.user.hierarchyLevel);
-    return h;
+    if (AUTH_TOKEN) h["Authorization"] = "Bearer " + AUTH_TOKEN;
+    return h;   // identity/scope is derived server-side from the verified token, not client headers
   },
   async post(path, body) {
     try {
       const r = await fetch(this.base + path, { method: "POST", headers: this.h(), body: JSON.stringify(body) });
+      if (r.status === 401) { onAuthExpired(); return null; }
       return r.ok ? await r.json() : null;
     } catch { return null; }
   },
   async get(path) {
     try {
       const r = await fetch(this.base + path, { headers: this.h() });
+      if (r.status === 401) { onAuthExpired(); return null; }
       return r.ok ? await r.json() : null;
     } catch { return null; }
   }
@@ -166,10 +167,23 @@ const store = {
   push(k, v) { const d = this.read(); (d[k] = d[k] || []).push(v); this.write(d); }
 };
 
-function saveSession(u) { sessionStorage.setItem("patrika_user", u ? String(u.id) : ""); }
+function saveSession(u, token) {
+  if (u && token) {
+    sessionStorage.setItem("patrika_token", token);
+    sessionStorage.setItem("patrika_profile", JSON.stringify(u));
+  } else {
+    sessionStorage.removeItem("patrika_token");
+    sessionStorage.removeItem("patrika_profile");
+    sessionStorage.removeItem("patrika_user"); // legacy key cleanup
+  }
+}
 function restoreSession() {
-  const id = Number(sessionStorage.getItem("patrika_user"));
-  if (id) S.user = USERS.find(u => u.id === id) || null;
+  const token = sessionStorage.getItem("patrika_token");
+  const prof  = sessionStorage.getItem("patrika_profile");
+  if (token && prof) {
+    try { S.user = JSON.parse(prof); AUTH_TOKEN = token; }
+    catch { S.user = null; AUTH_TOKEN = null; }
+  }
 }
 
 /* ---------- primitives ---------- */
@@ -191,13 +205,26 @@ function go(screen) {
   S.screen = screen; S.sideOpen = false; render();
   const m = $(".main"); if (m) m.scrollTop = 0;
 }
-function login(id) { S.user = USERS.find(u => u.id === id); S.screen = "home"; saveSession(S.user); render(); }
-function loginWithUser(u) {
-  const dbUsers = S.live.dbUsers; // preserve user list across logins
-  S.live = { dbUsers };
-  S.user = u; S.screen = "home"; saveSession(u); render();
+function setLoggedIn(profile, token) {
+  S = { user: profile, screen: "home", openGroups: {}, sideOpen: false, live: {}, range: null };
+  AUTH_TOKEN = token;
+  saveSession(profile, token);
+  render();
 }
-function logout() { S = { user: null, screen: "home", openGroups: {}, sideOpen: false, live: {} }; saveSession(null); fetchHierarchyUsers(); render(); }
+function logout() {
+  api.post("/api/auth/logout", {}).catch(() => {});
+  S = { user: null, screen: "home", openGroups: {}, sideOpen: false, live: {} };
+  AUTH_TOKEN = null; saveSession(null);
+  render();
+}
+/* Called when any API call returns 401 (token expired/invalid) — force re-login */
+function onAuthExpired() {
+  if (!S.user && !AUTH_TOKEN) return;
+  S = { user: null, screen: "home", openGroups: {}, sideOpen: false, live: {} };
+  AUTH_TOKEN = null; saveSession(null);
+  toast("Session expired — please sign in again");
+  render();
+}
 function toggleSide() { S.sideOpen = !S.sideOpen; paintSide(); }
 function toggleGroup(g) { S.openGroups[g] = !S.openGroups[g]; render(); }
 function toggleTheme() {
@@ -6723,51 +6750,6 @@ function paintSide() {
 }
 
 function loginHTML() {
-  /* Build demo login list — real DB users when loaded, fallback to USERS */
-  let demoRows;
-  const dbU = S.live && S.live.dbUsers;
-  if (dbU && dbU.length) {
-    /* One entry per hierarchy level from DB, then show all users grouped by level */
-    const lvlOrder = [2, 3, 4, 5, 9];
-    const byLevel = {};
-    dbU.forEach(u => { (byLevel[u.hierarchyLevel] = byLevel[u.hierarchyLevel] || []).push(u); });
-
-    /* Admin entry (L1) always first — kept from static config */
-    const admin = USERS.find(u => u.hierarchyLevel === 1);
-    const adminRow = admin ? `<button class="persona" onclick="login(${admin.id})">
-      <span class="av" style="background:var(--gold-l);color:var(--gold-d)">${admin.avatar}</span>
-      <span style="flex:1;min-width:0"><b>${admin.name}</b><small>${admin.roleLabel} · ${admin.scopeLabel}</small></span>
-      <span class="chip mut" style="font-size:10px;padding:1px 6px;flex:none">L1</span></button>` : "";
-
-    // Use roleLabel from the API (derived from _LEVEL_META in server.py)
-    const levelLabel = {};
-    dbU.forEach(u => { if (!levelLabel[u.hierarchyLevel]) levelLabel[u.hierarchyLevel] = u.roleLabel; });
-    const dbRows = lvlOrder.flatMap(lvl => {
-      const list = byLevel[lvl] || [];
-      if (!list.length) return [];
-      /* Show all users for this level (scrollable) */
-      const header = `<div style="padding:6px 8px 2px;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase">${levelLabel[lvl] || "Level "+lvl}</div>`;
-      const rows = list.map(u => {
-        const uJson = esc(JSON.stringify(u));
-        return `<button class="persona" onclick="loginWithUser(JSON.parse(this.dataset.u))" data-u="${uJson}">
-          <span class="av" style="background:var(--blue-l);color:var(--blue-d)">${esc(u.avatar)}</span>
-          <span style="flex:1;min-width:0"><b>${esc(u.name)}</b><small>${esc(u.unit_code)} · ${esc(u.scopeLabel||u.unit_code)}</small></span>
-          <span class="chip mut" style="font-size:10px;padding:1px 6px;flex:none">L${u.hierarchyLevel}</span></button>`;
-      }).join("");
-      return [header + rows];
-    }).join("");
-
-    demoRows = adminRow + dbRows;
-  } else {
-    /* Fallback to static demo users while API loads */
-    demoRows = USERS.map(u => `<button class="persona" onclick="login(${u.id})">
-      <span class="av" style="background:var(--gold-l);color:var(--gold-d)">${u.avatar}</span>
-      <span style="flex:1;min-width:0"><b>${u.name}</b><small>${u.roleLabel} · ${u.scopeLabel}</small></span>
-      <span class="chip mut" style="font-size:10px;padding:1px 6px;flex:none">L${u.hierarchyLevel}</span></button>`).join("");
-  }
-
-  const demoTitle = dbU ? `Real users from hierarchy master (${(dbU.length)} active)` : "Loading users…";
-
   return `<div class="login">
     <div class="login-brand">
       <img class="login-logo" src="assets/patrika-logo.png" alt="Patrika Group">
@@ -6777,31 +6759,99 @@ function loginHTML() {
       <small>Rajasthan Patrika · Circulation Operating System</small>
     </div>
     <div class="login-pane"><div class="login-card">
-      <h2>Sign in</h2><p>Use your registered mobile number. Only modules assigned to your role will be visible.</p>
+      <h2>Sign in</h2><p>Use your registered mobile number and password. Only modules assigned to your role will be visible.</p>
       <div id="loginErr"></div>
-      <div class="fld"><label>Mobile number</label><input id="loginMob" type="tel" maxlength="10" placeholder="10-digit mobile" inputmode="numeric"></div>
-      <div class="fld"><label>Password</label><input id="loginPwd" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
-      <button class="btn navy block" onclick="doLogin()">Sign in →</button>
-      <div class="demo-block">
-        <h4>${demoTitle}</h4>
-        <div style="max-height:420px;overflow-y:auto;border-radius:8px">${demoRows}</div>
+      <div class="fld"><label>Mobile number</label><input id="loginMob" type="tel" maxlength="10" placeholder="10-digit mobile" inputmode="numeric" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('loginPwd').focus()"></div>
+      <div class="fld"><label>Password</label><input id="loginPwd" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"></div>
+      <button class="btn navy block" id="loginBtn" onclick="doLogin()">Sign in →</button>
+      <div style="text-align:center;margin-top:14px">
+        <a href="#" onclick="forgotPassword();return false" style="font-size:13px;color:var(--muted);text-decoration:none">Forgot / reset password?</a>
       </div>
     </div></div></div>`;
 }
+window.forgotPassword = () => {
+  modal(`<h3>Reset your password</h3>
+    <p class="mint">For security, passwords are reset by your administrator.</p>
+    <p style="font-size:13px;line-height:1.6">Please contact your <b>Circulation IT Administrator</b>. They will set a temporary password, which you'll be asked to change the next time you sign in.</p>
+    <div style="display:flex;gap:9px;margin-top:16px"><button class="btn pri block" onclick="closeModals()">Got it</button></div>`);
+};
 window.doLogin = async () => {
-  const mob = $("#loginMob").value.replace(/\D/g, ""), pwd = $("#loginPwd").value.trim();
-  // Try PostgreSQL via API first; fall back to local USERS array if API is offline
-  const apiUser = await api.post("/api/login", { mobile: mob, password: pwd });
-  const u = apiUser
-    ? USERS.find(x => x.mobile === mob)  // use local record for role/modules config
-    : USERS.find(x => x.mobile === mob && x.password === pwd);
-  if (!u) { $("#loginErr").innerHTML = `<div class="err">Invalid mobile number or password. Try a demo login below.</div>`; return; }
-  login(u.id);
+  const errEl = $("#loginErr");
+  const mob = $("#loginMob").value.replace(/\D/g, ""), pwd = $("#loginPwd").value;
+  if (!mob || !pwd) { errEl.innerHTML = `<div class="err">Enter your mobile number and password.</div>`; return; }
+  const btn = $("#loginBtn"); if (btn) { btn.disabled = true; btn.textContent = "Signing in…"; }
+  let data = null, detail = "Invalid mobile number or password";
+  try {
+    const r = await fetch(api.base + "/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mobile: mob, password: pwd }) });
+    const j = await r.json().catch(() => null);
+    if (r.ok && j && j.token) data = j; else detail = (j && j.detail) || detail;
+  } catch { detail = "Cannot reach the server. Check your connection and try again."; }
+  if (btn) { btn.disabled = false; btn.textContent = "Sign in →"; }
+  if (!data) { errEl.innerHTML = `<div class="err">${esc(detail)}</div>`; return; }
+  setLoggedIn(data.user, data.token);   // render() routes to the forced-change screen if required
+};
+
+/* ---------- password change (forced on first login, or voluntary from account menu) ---------- */
+function changePasswordHTML(forced) {
+  return `<div class="login">
+    <div class="login-brand">
+      <img class="login-logo" src="assets/patrika-logo.png" alt="Patrika Group">
+      <h1>Set a new password</h1>
+      <p>For your security, please choose a new password before continuing to the dashboard.</p>
+      <div class="rule"></div><small>Patrika Vitran Suite</small>
+    </div>
+    <div class="login-pane"><div class="login-card">
+      <h2>Change password</h2>
+      <p>Signed in as <b>${esc(S.user.name)}</b>. Your account requires a password change.</p>
+      <div id="cpErr"></div>
+      <div class="fld"><label>Current / temporary password</label><input id="cpCur" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+      <div class="fld"><label>New password</label><input id="cpNew" type="password" placeholder="At least 6 characters" autocomplete="new-password"></div>
+      <div class="fld"><label>Confirm new password</label><input id="cpNew2" type="password" placeholder="Re-enter new password" autocomplete="new-password" onkeydown="if(event.key==='Enter')doChangePassword(true)"></div>
+      <button class="btn navy block" id="cpBtn" onclick="doChangePassword(true)">Update password →</button>
+      <div style="text-align:center;margin-top:12px"><a href="#" onclick="logout();return false" style="font-size:12px;color:var(--muted)">Cancel and sign out</a></div>
+    </div></div></div>`;
+}
+window.openChangePassword = () => {
+  modal(`<h3>Change password</h3>
+    <div id="cpErr"></div>
+    <div class="fld"><label>Current password</label><input id="cpCur" type="password" autocomplete="current-password"></div>
+    <div class="fld"><label>New password</label><input id="cpNew" type="password" placeholder="At least 6 characters" autocomplete="new-password"></div>
+    <div class="fld"><label>Confirm new password</label><input id="cpNew2" type="password" autocomplete="new-password" onkeydown="if(event.key==='Enter')doChangePassword(false)"></div>
+    <div style="display:flex;gap:9px;margin-top:16px"><button class="btn pri block" id="cpBtn" onclick="doChangePassword(false)">Update</button><button class="btn" onclick="closeModals()">Cancel</button></div>`);
+};
+window.doChangePassword = async (forced) => {
+  const errEl = $("#cpErr");
+  const cur = ($("#cpCur")?.value) || "", nw = ($("#cpNew")?.value) || "", nw2 = ($("#cpNew2")?.value) || "";
+  if (nw.length < 6) { errEl.innerHTML = `<div class="err">New password must be at least 6 characters.</div>`; return; }
+  if (nw !== nw2)    { errEl.innerHTML = `<div class="err">New passwords do not match.</div>`; return; }
+  const btn = $("#cpBtn"); if (btn) { btn.disabled = true; btn.textContent = "Updating…"; }
+  let ok = false, detail = "Could not update password";
+  try {
+    const r = await fetch(api.base + "/api/auth/change-password", { method: "POST", headers: api.h(), body: JSON.stringify({ currentPassword: cur, newPassword: nw }) });
+    if (r.status === 401) { onAuthExpired(); return; }
+    const j = await r.json().catch(() => null);
+    ok = r.ok && j && j.ok; if (!ok) detail = (j && j.detail) || detail;
+  } catch { detail = "Cannot reach the server."; }
+  if (btn) { btn.disabled = false; btn.textContent = forced ? "Update password →" : "Update"; }
+  if (!ok) { errEl.innerHTML = `<div class="err">${esc(detail)}</div>`; return; }
+  if (S.user) { S.user.mustChangePassword = false; saveSession(S.user, AUTH_TOKEN); }
+  closeModals();
+  toast("Password updated successfully");
+  S.screen = "home"; render();
+};
+window.userMenu = () => {
+  modal(`<h3>${esc(S.user.name)}</h3>
+    <p class="mint">${esc(S.user.roleLabel)}${S.user.scopeLabel ? " · " + esc(S.user.scopeLabel) : ""}</p>
+    <div style="display:flex;flex-direction:column;gap:9px;margin-top:16px">
+      <button class="btn block" onclick="closeModals();openChangePassword()">🔑 Change password</button>
+      <button class="btn navy block" onclick="logout()">↪ Logout</button>
+    </div>`);
 };
 
 function render() {
   const app = $("#app");
   if (!S.user) { app.innerHTML = loginHTML(); return; }
+  if (S.user.mustChangePassword) { app.innerHTML = changePasswordHTML(true); return; }
   const view = VIEWS[S.screen] || VIEWS.home;
   app.innerHTML = `<div class="shell">
     <header class="topbar">
@@ -6810,8 +6860,8 @@ function render() {
       <div class="top-sp"></div>
       <button class="iconbtn" onclick="toggleTheme()" title="Toggle theme">◐</button>
       <button class="iconbtn" onclick="toast('3 notifications — vehicle delay, SLA risk, settlement ready')" title="Notifications">🔔<span class="dot"></span></button>
-      <button class="me" onclick="logout()" title="Logout"><span class="av">${S.user.avatar}</span>
-        <span class="mi"><b>${S.user.name}</b><small>${S.user.roleLabel} · tap to logout</small></span></button>
+      <button class="me" onclick="userMenu()" title="Account"><span class="av">${S.user.avatar}</span>
+        <span class="mi"><b>${S.user.name}</b><small>${S.user.roleLabel} · tap for account</small></span></button>
     </header>
     <aside class="side" id="side">${sideHTML()}</aside>
     <div class="sb-overlay" id="sbOverlay" onclick="S.sideOpen=false;paintSide()"></div>
@@ -6826,5 +6876,9 @@ function render() {
 
 restoreSession();
 render();
-/* Pre-fetch hierarchy users so the login page shows real names immediately */
-if (!S.user) fetchHierarchyUsers();
+/* Validate any restored token in the background; refresh the profile or force re-login on 401 */
+if (S.user && AUTH_TOKEN) {
+  api.get("/api/auth/me").then(d => {
+    if (d && d.user) { S.user = d.user; saveSession(d.user, AUTH_TOKEN); render(); }
+  });
+}

@@ -148,8 +148,8 @@ async function getScopeUnitCodes(personCode, hierarchyLevel) {
 }
 
 async function getOuScopeFilter(req) {
-  const personCode = req.headers['x-person-code'] || '';
-  const hl = parseInt(req.headers['x-hierarchy-level'] || '1', 10);
+  const personCode = req.auth ? (req.auth.personCode || '') : (req.headers['x-person-code'] || '');
+  const hl = req.auth ? req.auth.hierarchyLevel : parseInt(req.headers['x-hierarchy-level'] || '1', 10);
   const unitCodes = await getScopeUnitCodes(personCode, hl);
   if (!unitCodes) return { clause: '', params: [] };
   if (!unitCodes.length) return { clause: ' AND 1=0', params: [] };
@@ -158,8 +158,8 @@ async function getOuScopeFilter(req) {
 }
 
 async function getColScopeFilter(req) {
-  const personCode = req.headers['x-person-code'] || '';
-  const hl = parseInt(req.headers['x-hierarchy-level'] || '1', 10);
+  const personCode = req.auth ? (req.auth.personCode || '') : (req.headers['x-person-code'] || '');
+  const hl = req.auth ? req.auth.hierarchyLevel : parseInt(req.headers['x-hierarchy-level'] || '1', 10);
   const unitCodes = await getScopeUnitCodes(personCode, hl);
   if (!unitCodes) return { clause: '', params: [] };
   if (!unitCodes.length) return { clause: ' AND 1=0', params: [] };
@@ -189,6 +189,22 @@ function inClause(arr) {
   return { sql: `IN (${arr.map(() => '?').join(',')})`, params: arr };
 }
 
+// ── Authentication & authorization (bcrypt + JWT) ───────────────────────────────
+// Registers /api/login, /api/auth/*, /api/admin/users*, /api/admin/audit and returns
+// the requireAuth/requireAdmin middleware + helpers. Must be set up BEFORE the guard
+// so the login/auth routes match first.
+const installAuth = require('./auth');
+const auth = installAuth({ app, q, getConn, LEVEL_META });
+
+// Guard: every /api/* request must carry a valid JWT, except these public endpoints.
+// Identity/scope is taken from verified token claims (req.auth), never from client headers.
+const PUBLIC_API = new Set(['/api/login', '/api/health']);
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  if (PUBLIC_API.has(req.path)) return next();
+  return auth.requireAuth(req, res, next);
+});
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 // GET /api/health
@@ -201,21 +217,7 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// POST /api/login
-app.post('/api/login', async (req, res) => {
-  try {
-    const mobile = String(req.body.mobile || '').trim().replace(/\s/g, '');
-    const { password } = req.body;
-    const { rows } = await q(
-      'SELECT id, mobile, name, role, district FROM users WHERE mobile = ? AND password = ? AND is_active = 1',
-      [mobile, password]
-    );
-    if (!rows.length) return res.status(401).json({ detail: 'Invalid mobile number or password' });
-    res.json(rows[0]);
-  } catch (e) {
-    res.status(500).json({ detail: String(e) });
-  }
-});
+// POST /api/login is now provided by auth.js (bcrypt + JWT). See installAuth() above.
 
 // GET /api/customers
 app.get('/api/customers', async (req, res) => {
