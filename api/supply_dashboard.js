@@ -69,16 +69,27 @@ module.exports = function registerSupplyDash(ctx) {
   }
 
   // ════ Filters ════
+  // Filter dropdowns are slow-changing reference data derived from full scans of the large
+  // supply_data table — cache in-memory per scope (30-min TTL) so the dashboard isn't blocked.
+  const _supdFiltersCache = new Map();
+  const _SUPD_FILTERS_TTL = 30 * 60 * 1000;
   app.get('/api/supply-dash/filters', async (req, res) => {
     try {
       const sc2 = await scopeUnits(req);
+      const key = JSON.stringify(sc2.params || []);
+      const now = Date.now();
+      const hit = _supdFiltersCache.get(key);
+      if (hit && hit.exp > now && !('refresh' in req.query)) return res.json(hit.data);
+
       const [units, execs] = await Promise.all([
         q(`SELECT DISTINCT unit_code, unit_name FROM supply_data WHERE 1=1${on(sc2, 'unit_code')} ORDER BY unit_name`, sc2.params),
         q(`SELECT DISTINCT executive_code, executive_name FROM agency_master
            WHERE executive_name IS NOT NULL${on(sc2, 'unit')} ORDER BY executive_name LIMIT 500`, sc2.params),
       ]);
       const d = await refDates();
-      res.json({ units: units.rows, executives: execs.rows, data_upto: d ? d.cur : null });
+      const data = { units: units.rows, executives: execs.rows, data_upto: d ? d.cur : null };
+      _supdFiltersCache.set(key, { data, exp: now + _SUPD_FILTERS_TTL });
+      res.json(data);
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
