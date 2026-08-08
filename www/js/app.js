@@ -2686,11 +2686,18 @@ function colQS(extra) {
 async function colFetch() {
   const st = colState();
   st.loading = true; st.error = null; render();
+  // Filter dropdown options are slow-changing and independent — load them WITHOUT blocking the
+  // dashboard (they used to make the whole screen wait on a full-table scan).
+  if (!st._filtersLoaded && !st._filtersLoading) {
+    st._filtersLoading = true;
+    fetch(colApi() + '/filters', { headers: api.h() }).then(r => r.json())
+      .then(f => { if (f) st.opts = f; st._filtersLoaded = true; st._filtersLoading = false; if (S.screen === 'collections') render(); })
+      .catch(() => { st._filtersLoading = false; });
+  }
   try {
     const h = { headers: api.h() };
-    const [kpis, filters, trend, modes, agencies, behavior, appUsage] = await Promise.all([
+    const [kpis, trend, modes, agencies, behavior, appUsage] = await Promise.all([
       fetch(colApi() + '/kpis'            + colQS(), h).then(r=>r.json()),
-      fetch(colApi() + '/filters', h).then(r=>r.json()),
       fetch(colApi() + '/trend'           + colQS({granularity:st.gran}), h).then(r=>r.json()),
       fetch(colApi() + '/payment-modes'   + colQS(), h).then(r=>r.json()),
       fetch(colApi() + '/agencies'        + colQS({limit:300}), h).then(r=>r.json()),
@@ -2698,7 +2705,7 @@ async function colFetch() {
       fetch(colApi() + '/app-usage'       + colQS(), h).then(r=>r.json()),
     ]);
     Object.assign(st, {
-      kpis, opts: filters || st.opts,
+      kpis,
       trend:    trend.rows    || [],
       modes:    modes.rows    || [],
       agencies: agencies.rows || [],

@@ -103,6 +103,19 @@ function _haversineKm(lat1, lon1, lat2, lon2) {
   )`);
 })().catch(e => console.warn('[startup] user_permissions init:', e.message));
 
+// Ensure dashboard performance indexes exist (idempotent — errors if already present are ignored).
+// These make the collection filter-dropdown scans fast (district & agency-name lookups).
+;(async () => {
+  const idxs = [
+    ['agency_collection', 'idx_district',    'district_name'],
+    ['agency_collection', 'idx_agcode_name', 'ag_code, ag_name'],
+  ];
+  for (const [tbl, name, cols] of idxs) {
+    try { await q(`CREATE INDEX ${name} ON ${tbl} (${cols})`); }
+    catch (_) { /* already exists */ }
+  }
+})().catch(() => {});
+
 // ── RBAC metadata ─────────────────────────────────────────────────────────────
 const LEVEL_META = {
   1:  { roleLabel: 'Admin — Board View',   role: 'admin',            dashboard: true,  modules: ['agent','hawker','dcr','survey','taxi'] },
@@ -3213,9 +3226,18 @@ function colFiltersNoDate(query) {
 }
 
 // GET /api/collection/filters
+// Dropdown options are slow-changing reference data derived from full-table scans, so they are
+// cached in-memory per scope (TTL below) to avoid a multi-second scan on every dashboard load.
+const _colFiltersCache = new Map(); // key -> { data, exp }
+const COL_FILTERS_TTL_MS = 30 * 60 * 1000;
 app.get('/api/collection/filters', async (req, res) => {
   try {
     const sc = await getColScopeFilter(req);
+    const key = sc.clause + '|' + JSON.stringify(sc.params);
+    const now = Date.now();
+    const hit = _colFiltersCache.get(key);
+    if (hit && hit.exp > now && !('refresh' in req.query)) return res.json(hit.data);
+
     const [states, branches, districts, cats, agencies] = await Promise.all([
       q(`SELECT DISTINCT state_name FROM agency_collection WHERE state_name IS NOT NULL${sc.clause} ORDER BY state_name`, sc.params),
       q(`SELECT DISTINCT branch_name FROM agency_collection WHERE branch_name IS NOT NULL${sc.clause} ORDER BY branch_name`, sc.params),
@@ -3223,13 +3245,15 @@ app.get('/api/collection/filters', async (req, res) => {
       q(`SELECT DISTINCT payment_cat FROM agency_collection WHERE payment_cat IS NOT NULL${sc.clause} ORDER BY payment_cat`, sc.params),
       q(`SELECT DISTINCT ag_code, MAX(ag_name) ag_name FROM agency_collection WHERE ag_code IS NOT NULL${sc.clause} GROUP BY ag_code ORDER BY MAX(ag_name)`, sc.params),
     ]);
-    res.json({
+    const data = {
       states: states.rows.map(r => r.state_name),
       branches: branches.rows.map(r => r.branch_name),
       districts: districts.rows.map(r => r.district_name),
       payment_cats: cats.rows.map(r => r.payment_cat),
       agencies: agencies.rows,
-    });
+    };
+    _colFiltersCache.set(key, { data, exp: now + COL_FILTERS_TTL_MS });
+    res.json(data);
   } catch (e) { res.status(500).json({ detail: String(e) }); }
 });
 
