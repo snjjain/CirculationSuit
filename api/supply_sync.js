@@ -299,10 +299,12 @@ async function ensureSchema(conn) {
     subsubroute_code  VARCHAR(20),
     synced_at         DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uq_supply (unit_code, publ, edtn, agcd, dpcd, sup_type_code, supply_date),
-    INDEX idx_sd_date  (supply_date),
-    INDEX idx_sd_unit  (unit_code, supply_date),
-    INDEX idx_sd_state (state_code, supply_date),
-    INDEX idx_sd_agcd  (agcd)
+    INDEX idx_sd_date      (supply_date),
+    INDEX idx_sd_unit      (unit_code, supply_date),
+    INDEX idx_sd_dateunit  (supply_date, unit_code),
+    INDEX idx_sd_state     (state_code, supply_date),
+    INDEX idx_sd_statename (state_name, unit_code),
+    INDEX idx_sd_agcd      (agcd)
   ) CHARACTER SET utf8mb4`);
 
   // Sync-log for historical chunks
