@@ -3258,11 +3258,26 @@ app.get('/api/collection/billing-vs-collection', async (req, res) => {
       return { cls: '', p: [] };
     };
 
+    // bill_amt in agency_outstanding is CUMULATIVE (period_from is always Jan 1), so the
+    // billing FOR the month = this period's cumulative − the previous period's cumulative.
+    let prevMonth = null;
+    if (/^\d{4}-\d{2}$/.test(billMonth)) {
+      const [yy, mm] = billMonth.split('-').map(Number);
+      if (mm > 1) prevMonth = `${yy}-${String(mm - 1).padStart(2, '0')}`; // Jan: cumulative == monthly
+    } else {
+      const pr = await q(`SELECT MAX(period_label) pl FROM agency_outstanding WHERE period_label <> 'CURRENT' AND period_label < ?`,
+        [billMonth === 'CURRENT' ? '9999-99' : billMonth]);
+      prevMonth = pr.rows[0]?.pl || null;
+    }
+    const prevM = prevMonth || '__none__';
+
     const bw = unitCl('unit_code'), cw = unitCl('unit_code');
     const [billing, collection, stmap] = await Promise.all([
-      q(`SELECT unit_code, MAX(unit_name) unit_name, SUM(bill_amt) billing
-         FROM agency_outstanding WHERE period_label = ?${bw.cls}
-         GROUP BY unit_code`, [billMonth, ...bw.p]),
+      q(`SELECT unit_code, MAX(unit_name) unit_name,
+                SUM(CASE WHEN period_label = ? THEN bill_amt ELSE 0 END)
+              - SUM(CASE WHEN period_label = ? THEN bill_amt ELSE 0 END) billing
+         FROM agency_outstanding WHERE period_label IN (?, ?)${bw.cls}
+         GROUP BY unit_code`, [billMonth, prevM, billMonth, prevM, ...bw.p]),
       q(`SELECT unit_code, MAX(state_name) state_name, MAX(branch_name) unit_name,
                 -SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) collection
          FROM agency_collection
@@ -3288,12 +3303,15 @@ app.get('/api/collection/billing-vs-collection', async (req, res) => {
     if (stateF) units = units.filter(u => u.state === stateF);
     units.sort((a, b) => (a.state === b.state ? b.billing - a.billing : (a.state < b.state ? -1 : 1)));
 
+    // State-wise summary: core states stay separate; all other states → NATIONAL bucket
+    const CORE = new Set(['RAJASTHAN', 'MADHYA PRADESH', 'CHHATTISGARH']);
+    const regionOf = s => CORE.has(String(s || '').toUpperCase()) ? String(s).toUpperCase() : 'NATIONAL';
     const st = {};
-    units.forEach(u => { const s = st[u.state] = st[u.state] || { state: u.state, billing: 0, collection: 0, units: 0 };
+    units.forEach(u => { const rg = regionOf(u.state); const s = st[rg] = st[rg] || { state: rg, billing: 0, collection: 0, units: 0 };
       s.billing += u.billing; s.collection += u.collection; s.units++; });
     const states = Object.values(st).map(s => ({ ...s, outstanding: s.billing - s.collection,
       coll_pct: s.billing ? Math.round(s.collection / s.billing * 1000) / 10 : null }))
-      .sort((a, b) => b.billing - a.billing);
+      .sort((a, b) => (a.state === 'NATIONAL') - (b.state === 'NATIONAL') || b.billing - a.billing);
 
     const tb = states.reduce((a, s) => a + s.billing, 0), tc = states.reduce((a, s) => a + s.collection, 0);
     res.json({ bill_month: billMonth, coll_from: from, coll_to: to, states, units,
