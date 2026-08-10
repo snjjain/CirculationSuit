@@ -3149,26 +3149,92 @@ function colBehaviorTab() {
 
 VIEWS.collections = () => {
   const st = colState();
-  if (!st.kpis && !st.loading && !st.error) { colFetch(); return pagehead('Collections','Loading collection data...'); }
-  const tabs = [['overview','📊 Overview'],['trend','📈 Trend'],['modes','💳 Modes'],['agencies','🏢 Agencies'],['behavior','📋 Behaviour']];
+  const tabs = [['overview','📊 Overview'],['trend','📈 Trend'],['modes','💳 Modes'],['agencies','🏢 Agencies'],['behavior','📋 Behaviour'],['billing','🧾 Bill vs Collection'],['short_payment','⚠️ Short Payment']];
+  const OWN = st.tab === 'billing' || st.tab === 'short_payment';   // tabs with their own data source
+  // Standard tabs load the shared collection dataset first; the "own-data" tabs skip that gate.
+  if (!OWN && !st.kpis && !st.loading && !st.error) { colFetch(); return pagehead('Collections','Loading collection data...'); }
   const tabBar = `<div style="display:flex;border-bottom:1px solid var(--brd);margin-bottom:16px;overflow-x:auto">
     ${tabs.map(([id,lbl])=>`<button onclick="colState().tab='${id}';render()"
       style="padding:10px 18px;border:none;border-bottom:3px solid ${st.tab===id?'var(--chart-1)':'transparent'};background:none;font-size:13px;font-weight:${st.tab===id?'700':'500'};color:${st.tab===id?'var(--chart-1)':'var(--muted)'};cursor:pointer;white-space:nowrap;transition:color .2s,border-color .2s">${lbl}</button>`).join('')}
   </div>`;
   let content;
-  if (st.loading) content = '<div style="text-align:center;padding:60px;color:var(--muted)">⏳ Loading collection data...</div>';
-  else if (st.error) content = `<div class="card pad" style="color:var(--red)">⚠️ ${esc(st.error)} <button class="btn sm" style="margin-left:8px" onclick="colFetch()">Retry</button></div>`;
-  else {
-    const tab = st.tab;
-    if      (tab==='overview') content = colOverviewTab();
-    else if (tab==='trend')    content = colTrendTab();
-    else if (tab==='modes')    content = colModesTab();
-    else if (tab==='agencies') content = colAgenciesTab();
-    else                       content = colBehaviorTab();
-  }
-  const sub = st.kpis ? (st.kpis.last_date ? `Jan–Jul 2026 · last payment ${st.kpis.last_date}` : 'Jan–Jul 2026') : 'Loading...';
-  return pagehead('Collections', sub) + colFilterPanel() + tabBar + content;
+  if      (st.tab==='billing')       content = colBillingTab();
+  else if (st.tab==='short_payment') content = colShortPayTab();
+  else if (st.loading) content = '<div style="text-align:center;padding:60px;color:var(--muted)">⏳ Loading collection data...</div>';
+  else if (st.error)   content = `<div class="card pad" style="color:var(--red)">⚠️ ${esc(st.error)} <button class="btn sm" style="margin-left:8px" onclick="colFetch()">Retry</button></div>`;
+  else if (st.tab==='overview') content = colOverviewTab();
+  else if (st.tab==='trend')    content = colTrendTab();
+  else if (st.tab==='modes')    content = colModesTab();
+  else if (st.tab==='agencies') content = colAgenciesTab();
+  else                          content = colBehaviorTab();
+  const sub = st.kpis ? (st.kpis.last_date ? `Jan–Jul 2026 · last payment ${st.kpis.last_date}` : 'Jan–Jul 2026') : 'Collections';
+  // Bill-vs-Collection uses only the date range; Short Payment has its own filters — hide the shared panel there
+  const showPanel = st.tab !== 'short_payment';
+  return pagehead('Collections', sub) + (showPanel ? colFilterPanel() : '') + tabBar + content;
 };
+
+/* ---- Collections: Billing vs Collection tab ---- */
+function _colBillSig() { const f = colState().filters; return [f.from, f.to, f.state].join('|'); }
+function colBillingFetch() {
+  const st = colState(), sig = _colBillSig();
+  if (st._billSig === sig && (st.billing || st._billLoading)) return;
+  st._billSig = sig; st._billLoading = true; st.billing = null;
+  const f = st.filters, p = [];
+  if (f.from)  p.push('from=' + f.from);
+  if (f.to)    p.push('to=' + f.to);
+  if (f.state) p.push('state_name=' + encodeURIComponent(f.state));
+  fetch(colApi() + '/billing-vs-collection' + (p.length ? '?' + p.join('&') : ''), { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.billing = d; st._billLoading = false; if (S.screen === 'collections' && st.tab === 'billing') render(); })
+    .catch(e => { st.billing = { _err: String(e) }; st._billLoading = false; if (S.screen === 'collections' && st.tab === 'billing') render(); });
+}
+function colBillingTab() {
+  colBillingFetch();
+  const st = colState(), d = st.billing;
+  if (!d) return '<div style="text-align:center;padding:60px;color:var(--muted)">⏳ Loading billing vs collection…</div>';
+  if (d._err) return `<div class="card pad" style="color:var(--red)">⚠️ ${esc(d._err)}</div>`;
+  const money = v => fmtC(v);
+  const MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const monLbl = m => { const [y, mm] = String(m).split('-'); return MONS[(+mm) - 1] + ' ' + y; };
+  const pctCell = p => p == null ? '—' : `<span style="color:${p >= 80 ? 'var(--grn)' : p >= 50 ? 'var(--gold)' : 'var(--red)'};font-weight:700">${p}%</span>`;
+  const cell = (v, extra = '') => `<td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums;${extra}">${money(v)}</td>`;
+  const hdr = `<div class="card pad" style="margin-bottom:14px">
+    <div style="font-size:13px;color:var(--muted)">Billing <b style="color:var(--ink)">${monLbl(d.bill_month)}</b> &nbsp;→&nbsp; Collection <b style="color:var(--ink)">${esc(d.coll_from)} to ${esc(d.coll_to)}</b></div>
+    <div style="display:flex;gap:26px;flex-wrap:wrap;margin-top:10px">
+      <div><div class="lbl">Billing</div><b class="num" style="font-size:18px">${money(d.total_billing)}</b></div>
+      <div><div class="lbl">Collection</div><b class="num" style="font-size:18px;color:var(--grn)">${money(d.total_collection)}</b></div>
+      <div><div class="lbl">Outstanding</div><b class="num" style="font-size:18px;color:var(--red)">${money(d.total_outstanding)}</b></div>
+      <div><div class="lbl">Collection %</div><b class="num" style="font-size:18px">${d.total_pct == null ? '—' : d.total_pct + '%'}</b></div>
+    </div></div>`;
+  const th = 'style="padding:8px 12px;text-align:right"', thl = 'style="padding:8px 12px;text-align:left"', thc = 'style="padding:8px 12px;text-align:center"';
+  const stTable = `<div class="card" style="padding:0;overflow:hidden;margin-bottom:16px">
+    <div class="cardhead" style="padding:12px 14px;border:none"><h3>State-wise</h3></div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:var(--surf2)"><th ${thl}>State</th><th ${th}>Billing</th><th ${th}>Collection</th><th ${th}>Outstanding</th><th ${thc}>Coll %</th><th ${th}>Units</th></tr></thead>
+      <tbody>${d.states.map(s => `<tr style="border-top:1px solid var(--brd)">
+        <td style="padding:7px 12px"><b>${esc(s.state)}</b></td>${cell(s.billing)}${cell(s.collection, 'color:var(--grn)')}${cell(s.outstanding, 'color:var(--red)')}
+        <td style="padding:7px 12px;text-align:center">${pctCell(s.coll_pct)}</td><td style="padding:7px 12px;text-align:right">${s.units}</td></tr>`).join('') || `<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">No data for this period</td></tr>`}</tbody>
+    </table></div></div>`;
+  const unTable = `<div class="card" style="padding:0;overflow:hidden">
+    <div class="cardhead" style="padding:12px 14px;border:none"><h3>Unit-wise (${d.units.length})</h3></div>
+    <div style="overflow-x:auto;max-height:520px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:var(--surf2);position:sticky;top:0"><th ${thl}>Unit / Branch</th><th ${thl}>State</th><th ${th}>Billing</th><th ${th}>Collection</th><th ${th}>Outstanding</th><th ${thc}>Coll %</th></tr></thead>
+      <tbody>${d.units.map(u => `<tr style="border-top:1px solid var(--brd)">
+        <td style="padding:7px 12px"><b>${esc(u.unit_name)}</b></td><td style="padding:7px 12px;color:var(--muted)">${esc(u.state)}</td>
+        ${cell(u.billing)}${cell(u.collection, 'color:var(--grn)')}${cell(u.outstanding, 'color:var(--red)')}
+        <td style="padding:7px 12px;text-align:center">${pctCell(u.coll_pct)}</td></tr>`).join('') || `<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">No data</td></tr>`}</tbody>
+    </table></div></div>`;
+  return hdr + stTable + unTable;
+}
+
+/* ---- Collections: Short Payment tab (embeds the existing Short Payment report) ---- */
+let _spEmbed = false;
+function _spVisible() { return S.screen === 'short_payment' || (S.screen === 'collections' && colState().tab === 'short_payment'); }
+function colShortPayTab() {
+  _spEmbed = true;
+  let html; try { html = VIEWS.short_payment(); } finally { _spEmbed = false; }
+  return html;
+}
 
 /* ---- Dashboard: Settlements ---- */
 VIEWS.settlements = () => {
@@ -4286,8 +4352,8 @@ function spLoad(pg) {
   p.set('page', sp.page);
   fetch(spApi('report') + '?' + p.toString(), { headers: api.h() })
     .then(r => r.json())
-    .then(d => { sp.data = d; sp._loading = false; if (S.screen === 'short_payment') render(); })
-    .catch(() => { sp._loading = false; if (S.screen === 'short_payment') render(); });
+    .then(d => { sp.data = d; sp._loading = false; if (_spVisible()) render(); })
+    .catch(() => { sp._loading = false; if (_spVisible()) render(); });
 }
 
 window.spDrillState = function(state) {
@@ -4327,9 +4393,9 @@ VIEWS.short_payment = function() {
         const fi = Math.max(0, sp.availMonths.length - 6);
         sp.fromMonth = sp.availMonths[fi];
       }
-      if (S.screen === 'short_payment') spLoad();
+      if (_spVisible()) spLoad();
     });
-    return pagehead('Short Payment Report', 'Bill-wise collection & short payment analysis') +
+    return (_spEmbed ? '' : pagehead('Short Payment Report', 'Bill-wise collection & short payment analysis')) +
       `<div style="text-align:center;padding:40px;color:var(--muted)">Loading…</div>`;
   }
 
@@ -4412,12 +4478,12 @@ VIEWS.short_payment = function() {
   </div>`;
 
   if (sp._loading || !d) {
-    return pagehead('Short Payment Report', 'Bill-wise collection & short payment analysis') + filtersBar +
+    return (_spEmbed ? '' : pagehead('Short Payment Report', 'Bill-wise collection & short payment analysis')) + filtersBar +
       `<div style="text-align:center;padding:40px;color:var(--muted)">Loading report…</div>`;
   }
 
   if (d.error === 'no_monthly_data') {
-    return pagehead('Short Payment Report', 'Bill-wise collection & short payment analysis') + filtersBar +
+    return (_spEmbed ? '' : pagehead('Short Payment Report', 'Bill-wise collection & short payment analysis')) + filtersBar +
       `<div class="card" style="padding:24px;text-align:center">
         <div style="font-size:32px;margin-bottom:8px">📅</div>
         <div style="font-weight:700">Monthly snapshot data not found</div>
@@ -4586,7 +4652,7 @@ VIEWS.short_payment = function() {
     </div>` : `<div style="font-size:11px;color:var(--muted);margin-top:4px">${total.toLocaleString()} agencies</div>`}
   </div>`;
 
-  return pagehead('Short Payment Report', 'Bill-wise collection & short payment analysis') +
+  return (_spEmbed ? '' : pagehead('Short Payment Report', 'Bill-wise collection & short payment analysis')) +
     filtersBar + breadcrumb + kpis + summTable + tbl;
 };
 

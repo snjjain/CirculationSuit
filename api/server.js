@@ -3225,6 +3225,83 @@ function colFiltersNoDate(query) {
   return { clause, params };
 }
 
+// GET /api/collection/billing-vs-collection
+// Billing (agency_outstanding.bill_amt for the bill month) vs Collection (agency_collection
+// receipts over the collection date range), state-wise + unit-wise.
+// Default: collection = current month → today, bill month = the calendar month before it
+// (e.g. bill July → collection Aug). Params: from, to, bill_month(YYYY-MM), state_name, unit_code.
+app.get('/api/collection/billing-vs-collection', async (req, res) => {
+  try {
+    const pad = n => String(n).padStart(2, '0');
+    const now = new Date();
+    const defFrom = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
+    const defTo   = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const from = String(req.query.from || defFrom).slice(0, 10);
+    const to   = String(req.query.to   || defTo).slice(0, 10);
+    // Bill month = explicit, else the calendar month BEFORE the collection range start
+    let billMonth = String(req.query.bill_month || '').trim();
+    if (!billMonth) {
+      const d = new Date(from + 'T00:00:00Z');
+      d.setUTCMonth(d.getUTCMonth() - 1);
+      billMonth = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
+    }
+    const stateF = String(req.query.state_name || '').trim();
+    const unitF  = String(req.query.unit_code  || '').trim();
+
+    // Role scope (non-admin → restrict to allowed units)
+    const { personCode, hl } = scopeHdrs(req);
+    const scoped = await getScopeUnitCodes(personCode, hl); // null = all
+    const unitCl = (col) => {
+      if (unitF) return { cls: ` AND ${col} = ?`, p: [unitF] };
+      if (scoped && !scoped.length) return { cls: ' AND 1=0', p: [] };
+      if (scoped) return { cls: ` AND ${col} IN (${scoped.map(() => '?').join(',')})`, p: scoped };
+      return { cls: '', p: [] };
+    };
+
+    const bw = unitCl('unit_code'), cw = unitCl('unit_code');
+    const [billing, collection, stmap] = await Promise.all([
+      q(`SELECT unit_code, MAX(unit_name) unit_name, SUM(bill_amt) billing
+         FROM agency_outstanding WHERE period_label = ?${bw.cls}
+         GROUP BY unit_code`, [billMonth, ...bw.p]),
+      q(`SELECT unit_code, MAX(state_name) state_name, MAX(branch_name) unit_name,
+                -SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) collection
+         FROM agency_collection
+         WHERE is_valid = 1 AND coll_date BETWEEN ? AND ?${cw.cls}
+         GROUP BY unit_code`, [from, to, ...cw.p]),
+      q(`SELECT unit_code, MAX(state_name) state_name FROM agency_collection
+         WHERE state_name IS NOT NULL AND state_name <> '' GROUP BY unit_code`),
+    ]);
+
+    const u2s = {}; stmap.rows.forEach(r => { u2s[r.unit_code] = r.state_name; });
+    const byUnit = {};
+    const ensure = (uc, nm) => (byUnit[uc] = byUnit[uc] || { unit_code: uc, unit_name: nm || uc, state: null, billing: 0, collection: 0 });
+    billing.rows.forEach(r => { const u = ensure(r.unit_code, r.unit_name); u.billing = Number(r.billing) || 0; if (r.unit_name) u.unit_name = r.unit_name; });
+    collection.rows.forEach(r => { const u = ensure(r.unit_code, r.unit_name); u.collection = Number(r.collection) || 0; if (r.state_name) u.state = r.state_name; if (r.unit_name) u.unit_name = r.unit_name; });
+
+    let units = Object.values(byUnit).map(u => {
+      const state = u.state || u2s[u.unit_code] || '—';
+      return { unit_code: u.unit_code, unit_name: u.unit_name, state,
+        billing: Math.round(u.billing), collection: Math.round(u.collection),
+        outstanding: Math.round(u.billing - u.collection),
+        coll_pct: u.billing ? Math.round(u.collection / u.billing * 1000) / 10 : null };
+    });
+    if (stateF) units = units.filter(u => u.state === stateF);
+    units.sort((a, b) => (a.state === b.state ? b.billing - a.billing : (a.state < b.state ? -1 : 1)));
+
+    const st = {};
+    units.forEach(u => { const s = st[u.state] = st[u.state] || { state: u.state, billing: 0, collection: 0, units: 0 };
+      s.billing += u.billing; s.collection += u.collection; s.units++; });
+    const states = Object.values(st).map(s => ({ ...s, outstanding: s.billing - s.collection,
+      coll_pct: s.billing ? Math.round(s.collection / s.billing * 1000) / 10 : null }))
+      .sort((a, b) => b.billing - a.billing);
+
+    const tb = states.reduce((a, s) => a + s.billing, 0), tc = states.reduce((a, s) => a + s.collection, 0);
+    res.json({ bill_month: billMonth, coll_from: from, coll_to: to, states, units,
+      total_billing: tb, total_collection: tc, total_outstanding: tb - tc,
+      total_pct: tb ? Math.round(tc / tb * 1000) / 10 : null });
+  } catch (e) { res.status(500).json({ detail: String(e) }); }
+});
+
 // GET /api/collection/filters
 // Dropdown options are slow-changing reference data derived from full-table scans, so they are
 // cached in-memory per scope (TTL below) to avoid a multi-second scan on every dashboard load.
