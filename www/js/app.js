@@ -5502,6 +5502,7 @@ function rcLoadMapMarkers() {
         showCoverageOnHover: false,
         spiderfyOnMaxZoom: true,
         maxClusterRadius: 45,
+        disableClusteringAtZoom: 12,   // zoomed into an area → show every reader's actual location
         iconCreateFunction: rcClusterIcon,
       })
     : L.layerGroup();
