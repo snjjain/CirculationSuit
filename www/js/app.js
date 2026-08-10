@@ -5285,7 +5285,7 @@ const RC_STATUS_ORDER = ['NEW','RP_READER','NOT_INTERESTED','FOLLOW_UP','REPLACE
 /* Inject minimal RC styles once */
 (function() {
   const s = document.createElement('style');
-  s.textContent = `.rc-news-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s;user-select:none}.rc-news-chip:hover{opacity:.85}.rc-tabs .btn{border-radius:0}.rc-tabs .btn:first-child{border-radius:var(--r-sm) 0 0 var(--r-sm)}.rc-tabs .btn:last-child{border-radius:0 var(--r-sm) var(--r-sm) 0}.rc-reader-pin{background:none;border:none}.rc-reader-pin svg{display:block;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.45))}`;
+  s.textContent = `.rc-news-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s;user-select:none}.rc-news-chip:hover{opacity:.85}.rc-tabs .btn{border-radius:0}.rc-tabs .btn:first-child{border-radius:var(--r-sm) 0 0 var(--r-sm)}.rc-tabs .btn:last-child{border-radius:0 var(--r-sm) var(--r-sm) 0}.rc-reader-pin{background:none;border:none}.rc-reader-pin svg{display:block;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.45))}.rc-cluster{background:none;border:none}`;
   document.head.appendChild(s);
 })();
 
@@ -5472,6 +5472,20 @@ function rcReaderIcon(color) {
   return icon;
 }
 
+/* Clean, on-brand cluster bubble (navy circle + white count) shown when many readers overlap */
+function rcClusterIcon(cluster) {
+  const n = cluster.getChildCount();
+  const size = n < 10 ? 30 : n < 100 ? 36 : n < 1000 ? 42 : 48;
+  const fs   = n < 1000 ? 12 : 11;
+  return L.divIcon({
+    className: 'rc-cluster',
+    html: `<div style="width:${size}px;height:${size}px;line-height:${size}px;border-radius:50%;` +
+          `background:rgba(28,43,69,.92);color:#fff;text-align:center;font-weight:700;font-size:${fs}px;` +
+          `border:2px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.4)">${n >= 1000 ? (n/1000).toFixed(1) + 'k' : n}</div>`,
+    iconSize: [size, size],
+  });
+}
+
 function rcLoadMapMarkers() {
   if (!_rcMap || !window.L) return;
   const mks = S.live.rcMarkers || [];
@@ -5480,7 +5494,17 @@ function rcLoadMapMarkers() {
   if (_rcCluster && _rcCluster._mksRef === mks && _rcCluster._nwRef === nwKey) return;
   if (_rcCluster) { try { _rcMap.removeLayer(_rcCluster); } catch (_) {} }
 
-  const layer = L.layerGroup();
+  // Cluster overlapping readers into clean count-bubbles (expand on zoom) — avoids the
+  // cluttered pile-up of hundreds of pins at wide zoom. Falls back to a plain group.
+  const layer = (typeof L.markerClusterGroup === 'function')
+    ? L.markerClusterGroup({
+        chunkedLoading: true,
+        showCoverageOnHover: false,
+        spiderfyOnMaxZoom: true,
+        maxClusterRadius: 45,
+        iconCreateFunction: rcClusterIcon,
+      })
+    : L.layerGroup();
   layer._mksRef = mks;
   layer._nwRef  = nwKey;
   _rcCluster = layer;
