@@ -47,7 +47,7 @@ const MYSQL_CONFIG = {
 const LOG_FILE = path.resolve(__dirname, '../logs/supply_sync.log');
 const SEP = '\x1c';
 const D   = 'CHR(28)';
-const NCOLS = 29;
+const NCOLS = 28;
 
 // ── Logger ────────────────────────────────────────────────────────────────────
 function log(msg) {
@@ -90,7 +90,7 @@ function monthlyChunks(fromStr, toStr) {
 }
 
 // ── Oracle SQL builder ────────────────────────────────────────────────────────
-// 29 fields, each on its own line (sqlplus 2499-char line limit)
+// 28 fields, each on its own line (sqlplus 2499-char line limit)
 function buildSqlScript(spoolFile, fromDate, toDate) {
   const spoolEsc = spoolFile.replace(/\\/g, '/');
   const S = f =>
@@ -109,23 +109,22 @@ function buildSqlScript(spoolFile, fromDate, toDate) {
     S('x.agcd'),                            //  9
     S('x.dpcd'),                            // 10
     S('x.ag_name'),                         // 11
-    S('x.AGN_CLASS'),                       // 12  agency class (CIR_AGENCY_CLASS_MAST.CLASS_DESC)
-    S('x.city_code'),                       // 13
-    S('x.city_name'),                       // 14
-    S('x.dist_code'),                       // 15
-    S('x.dist_name'),                       // 16
-    S('x.state_code'),                      // 17
-    S('x.state_name'),                      // 18
-    `NVL(TO_CHAR(x.supdate,'YYYY-MM-DD'),'')`, // 19  supply_date
-    `NVL(TO_CHAR(x.sup_copy),'0')`,         // 20  sup_copy
-    `NVL(TO_CHAR(x.sup_rate),'0')`,         // 21  sup_rate
-    S('x.comm_fix_auto_spl'),               // 22
-    S('x.comm_code'),                       // 23
-    S('SUBSTR(x.comm_rate,1,1)'),           // 24  comm_type
-    S('SUBSTR(x.comm_rate,2,10)'),          // 25  comm_rate (numeric part)
-    S('x.route_code'),                      // 26
-    S('x.subroute_code'),                   // 27
-    S('x.subsubroute_code'),                // 28
+    S('x.city_code'),                       // 12
+    S('x.city_name'),                       // 13
+    S('x.dist_code'),                       // 14
+    S('x.dist_name'),                       // 15
+    S('x.state_code'),                      // 16
+    S('x.state_name'),                      // 17
+    `NVL(TO_CHAR(x.supdate,'YYYY-MM-DD'),'')`, // 18  supply_date
+    `NVL(TO_CHAR(x.sup_copy),'0')`,         // 19  sup_copy
+    `NVL(TO_CHAR(x.sup_rate),'0')`,         // 20  sup_rate
+    S('x.comm_fix_auto_spl'),               // 21
+    S('x.comm_code'),                       // 22
+    S('SUBSTR(x.comm_rate,1,1)'),           // 23  comm_type
+    S('SUBSTR(x.comm_rate,2,10)'),          // 24  comm_rate (numeric part)
+    S('x.route_code'),                      // 25
+    S('x.subroute_code'),                   // 26
+    S('x.subsubroute_code'),                // 27
   ].join(`\n  || ${D} ||\n  `);
 
   return `SET PAGESIZE 0
@@ -148,7 +147,7 @@ FROM (
     d.sup_type_code,
     (select SUP_TY_NAME from cir_supply_type_mast
      where comp_code=d.comp_code and SUP_TY_CODE=d.sup_type_code) supply_type_name,
-    d.agcd, d.dpcd, m.ag_name, cm.class_desc AGN_CLASS, m.city_code,
+    d.agcd, d.dpcd, m.ag_name, m.city_code,
     (select city_name from cir_city_mast
      where comp_code=d.comp_code and city_code=m.city_code) city_name,
     m.dist_code,
@@ -163,11 +162,10 @@ FROM (
       d.comm_fix_auto_spl,d.comm_code,
       TO_CHAR(d.supdate,'DD/MM/YYYY'),'DD/MM/YYYY',0,null,null) comm_rate,
     d.route_code, d.subroute_code, d.subsubroute_code
-  from cir_dbksup d, cir_agmast m, cir_publ_mast p, cir_edtn_mast e, cir_agency_class_mast cm
+  from cir_dbksup d, cir_agmast m, cir_publ_mast p, cir_edtn_mast e
   where d.comp_code = m.comp_code
     and d.comp_code = p.comp_code
     and d.comp_code = e.comp_code
-    and m.ag_class = cm.class_code
     and d.unit_code = m.unit
     and d.publ = p.publ
     and d.edtn = e.edtn
@@ -241,28 +239,27 @@ function lineToParams(f) {
     str(f[9]),    // agcd
     str(f[10]),   // dpcd
     str(f[11]),   // ag_name
-    str(f[12]),   // agn_class
-    str(f[13]),   // city_code
-    str(f[14]),   // city_name
-    str(f[15]),   // dist_code
-    str(f[16]),   // dist_name
-    str(f[17]),   // state_code
-    str(f[18]),   // state_name
-    dateVal(f[19]), // supply_date
-    num(f[20]),   // sup_copy
-    num(f[21]),   // sup_rate
-    str(f[22]),   // comm_fix_auto_spl
-    str(f[23]),   // comm_code
-    str(f[24]),   // comm_type
-    str(f[25]),   // comm_rate
-    str(f[26]),   // route_code
-    str(f[27]),   // subroute_code
-    str(f[28]),   // subsubroute_code
+    str(f[12]),   // city_code
+    str(f[13]),   // city_name
+    str(f[14]),   // dist_code
+    str(f[15]),   // dist_name
+    str(f[16]),   // state_code
+    str(f[17]),   // state_name
+    dateVal(f[18]), // supply_date
+    num(f[19]),   // sup_copy
+    num(f[20]),   // sup_rate
+    str(f[21]),   // comm_fix_auto_spl
+    str(f[22]),   // comm_code
+    str(f[23]),   // comm_type
+    str(f[24]),   // comm_rate
+    str(f[25]),   // route_code
+    str(f[26]),   // subroute_code
+    str(f[27]),   // subsubroute_code
   ];
 }
 
 const COL_LIST = `comp_code, unit_code, unit_name, publ, publ_name, edtn, edtn_name,
-     sup_type_code, supply_type_name, agcd, dpcd, ag_name, agn_class,
+     sup_type_code, supply_type_name, agcd, dpcd, ag_name,
      city_code, city_name, dist_code, dist_name, state_code, state_name,
      supply_date, sup_copy, sup_rate,
      comm_fix_auto_spl, comm_code, comm_type, comm_rate,
@@ -284,7 +281,6 @@ async function ensureSchema(conn) {
     agcd              VARCHAR(20)   NOT NULL,
     dpcd              VARCHAR(20)   NOT NULL,
     ag_name           VARCHAR(300),
-    agn_class         VARCHAR(100),
     city_code         VARCHAR(20),
     city_name         VARCHAR(200),
     dist_code         VARCHAR(20),
@@ -308,10 +304,6 @@ async function ensureSchema(conn) {
     INDEX idx_sd_state (state_code, supply_date),
     INDEX idx_sd_agcd  (agcd)
   ) CHARACTER SET utf8mb4`);
-
-  // Migration: add agn_class to an already-existing supply_data table (idempotent)
-  try { await conn.execute(`ALTER TABLE supply_data ADD COLUMN agn_class VARCHAR(100) AFTER ag_name`); }
-  catch (_) { /* column already exists */ }
 
   // Sync-log for historical chunks
   await conn.execute(`CREATE TABLE IF NOT EXISTS supply_sync_log (
@@ -352,7 +344,7 @@ async function oracleQuery(fromDate, toDate) {
   return { parsed, bad, elapsed };
 }
 
-// ── Bulk upsert (idempotent) — updates existing rows so re-runs backfill agn_class ──
+// ── Bulk INSERT IGNORE (idempotent, used for all modes) ───────────────────────
 async function bulkInsert(conn, parsed, label) {
   if (!parsed.length) return 0;
 
@@ -362,18 +354,7 @@ async function bulkInsert(conn, parsed, label) {
     const chunk  = parsed.slice(i, i + BATCH);
     const values = chunk.map(lineToParams);
     await conn.query(
-      `INSERT INTO supply_data (${COL_LIST}) VALUES ?
-       ON DUPLICATE KEY UPDATE
-         unit_name=VALUES(unit_name), publ_name=VALUES(publ_name), edtn_name=VALUES(edtn_name),
-         supply_type_name=VALUES(supply_type_name), ag_name=VALUES(ag_name), agn_class=VALUES(agn_class),
-         city_code=VALUES(city_code), city_name=VALUES(city_name),
-         dist_code=VALUES(dist_code), dist_name=VALUES(dist_name),
-         state_code=VALUES(state_code), state_name=VALUES(state_name),
-         sup_copy=VALUES(sup_copy), sup_rate=VALUES(sup_rate),
-         comm_fix_auto_spl=VALUES(comm_fix_auto_spl), comm_code=VALUES(comm_code),
-         comm_type=VALUES(comm_type), comm_rate=VALUES(comm_rate),
-         route_code=VALUES(route_code), subroute_code=VALUES(subroute_code),
-         subsubroute_code=VALUES(subsubroute_code), synced_at=CURRENT_TIMESTAMP`,
+      `INSERT IGNORE INTO supply_data (${COL_LIST}) VALUES ?`,
       [values]
     );
     inserted += chunk.length;
