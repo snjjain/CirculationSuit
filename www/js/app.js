@@ -5567,7 +5567,7 @@ function rcFilterPanel(f, opts, news) {
       <div class="fld" style="margin:0;flex:1;min-width:130px"><label>Unit / Branch</label>
         <select id="rc-unit" onchange="rcCascadeUnit()"><option value="">All Units</option>${uOpts}</select></div>
       <div class="fld" style="margin:0;flex:1;min-width:110px"><label>Locality</label>
-        <select id="rc-loc"><option value="">All Localities</option>${lOpts}</select></div>
+        <select id="rc-loc" onchange="rcCascadeLocality()"><option value="">All Localities</option>${lOpts}</select></div>
       ${nwDropdown}
       <div style="display:flex;gap:8px;flex-shrink:0;padding-bottom:2px">
         <button class="btn pri" onclick="rcApplyFilters()">Apply</button>
@@ -5839,6 +5839,14 @@ function rcCaptureDomFilters() {
   if (nwChks.length) f.newspapers = [...document.querySelectorAll('.rc-news-filter-chk:checked')].map(el => el.value);
 }
 
+// Immediately refresh the map + lists for the current geo selection (no "Apply" click needed),
+// so selecting a State / Unit / Locality zooms the map straight to that area.
+function rcApplyGeo() {
+  S.live.rcSummary = null; S.live.rcMarkers = null; S.live.rcReaders = null;
+  S.live._rcSumLoad = S.live._rcMkLoad = S.live._rcRdrLoad = false;
+  render();   // VIEWS.readers_connect bootstrap re-fetches markers → rcLoadMapMarkers fitBounds → zoom
+}
+
 window.rcCascadeState = () => {
   rcCaptureDomFilters();
   S.live.rcFilters.state_name = document.getElementById('rc-state')?.value || '';
@@ -5852,7 +5860,7 @@ window.rcCascadeState = () => {
     S.live.rcFilterOpts.localities = [];
     // newspapers list is global — keep it for the map dropdown
   }
-  render();
+  rcApplyGeo();   // zoom the map to the selected state immediately
 };
 
 window.rcCascadeUnit = () => {
@@ -5870,11 +5878,17 @@ window.rcCascadeUnit = () => {
         if (S.screen === 'readers_connect') render();
       }
     });
-  } else {
+  } else if (S.live.rcFilterOpts) {
     // Unit cleared — clear localities; keep unit list and global newspaper list as-is
-    if (S.live.rcFilterOpts) S.live.rcFilterOpts.localities = [];
-    render();
+    S.live.rcFilterOpts.localities = [];
   }
+  rcApplyGeo();   // zoom the map to the selected unit immediately
+};
+
+window.rcCascadeLocality = () => {
+  rcCaptureDomFilters();
+  S.live.rcFilters.locality_code = document.getElementById('rc-loc')?.value || '';
+  rcApplyGeo();   // zoom the map to the selected locality immediately
 };
 
 window.rcRefreshMap = () => {
