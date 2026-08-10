@@ -5458,15 +5458,15 @@ const _rcIconCache = {};
 function rcReaderIcon(color) {
   if (_rcIconCache[color]) return _rcIconCache[color];
   const html =
-    `<svg width="22" height="30" viewBox="0 0 22 30" xmlns="http://www.w3.org/2000/svg">` +
-    `<path d="M11 0C5 0 0 4.7 0 10.6 0 18.6 11 30 11 30s11-11.4 11-19.4C22 4.7 17 0 11 0z" fill="${color}" stroke="#fff" stroke-width="1.6"/>` +
+    `<svg width="14" height="19" viewBox="0 0 22 30" xmlns="http://www.w3.org/2000/svg">` +
+    `<path d="M11 0C5 0 0 4.7 0 10.6 0 18.6 11 30 11 30s11-11.4 11-19.4C22 4.7 17 0 11 0z" fill="${color}" stroke="#fff" stroke-width="2"/>` +
     `<circle cx="11" cy="10.4" r="3.7" fill="#fff"/></svg>`;
   const icon = L.divIcon({
     className: 'rc-reader-pin',
     html,
-    iconSize: [22, 30],
-    iconAnchor: [11, 30],       // tip sits on the exact GPS point
-    tooltipAnchor: [0, -26],
+    iconSize: [14, 19],
+    iconAnchor: [7, 19],        // tip sits on the exact GPS point
+    tooltipAnchor: [0, -17],
   });
   _rcIconCache[color] = icon;
   return icon;
