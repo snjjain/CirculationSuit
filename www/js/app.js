@@ -5285,7 +5285,7 @@ const RC_STATUS_ORDER = ['NEW','RP_READER','NOT_INTERESTED','FOLLOW_UP','REPLACE
 /* Inject minimal RC styles once */
 (function() {
   const s = document.createElement('style');
-  s.textContent = `.rc-news-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s;user-select:none}.rc-news-chip:hover{opacity:.85}.rc-tabs .btn{border-radius:0}.rc-tabs .btn:first-child{border-radius:var(--r-sm) 0 0 var(--r-sm)}.rc-tabs .btn:last-child{border-radius:0 var(--r-sm) var(--r-sm) 0}`;
+  s.textContent = `.rc-news-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s;user-select:none}.rc-news-chip:hover{opacity:.85}.rc-tabs .btn{border-radius:0}.rc-tabs .btn:first-child{border-radius:var(--r-sm) 0 0 var(--r-sm)}.rc-tabs .btn:last-child{border-radius:0 var(--r-sm) var(--r-sm) 0}.rc-reader-pin{background:none;border:none}.rc-reader-pin svg{display:block;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.45))}`;
   document.head.appendChild(s);
 })();
 
@@ -5452,6 +5452,26 @@ function rcNewsLabel(name) {
   return String(name).toUpperCase() === 'NONE' ? 'None' : name;
 }
 
+/* Distinctive teardrop map-pin for a reader (coloured per newspaper) — stands out from
+   the OpenStreetMap POI glyphs (hospital, restaurant, etc.) that plain dots blended into. */
+const _rcIconCache = {};
+function rcReaderIcon(color) {
+  if (_rcIconCache[color]) return _rcIconCache[color];
+  const html =
+    `<svg width="22" height="30" viewBox="0 0 22 30" xmlns="http://www.w3.org/2000/svg">` +
+    `<path d="M11 0C5 0 0 4.7 0 10.6 0 18.6 11 30 11 30s11-11.4 11-19.4C22 4.7 17 0 11 0z" fill="${color}" stroke="#fff" stroke-width="1.6"/>` +
+    `<circle cx="11" cy="10.4" r="3.7" fill="#fff"/></svg>`;
+  const icon = L.divIcon({
+    className: 'rc-reader-pin',
+    html,
+    iconSize: [22, 30],
+    iconAnchor: [11, 30],       // tip sits on the exact GPS point
+    tooltipAnchor: [0, -26],
+  });
+  _rcIconCache[color] = icon;
+  return icon;
+}
+
 function rcLoadMapMarkers() {
   if (!_rcMap || !window.L) return;
   const mks = S.live.rcMarkers || [];
@@ -5474,15 +5494,12 @@ function rcLoadMapMarkers() {
     const lat = parseFloat(m.lat), lng = parseFloat(m.lng);
     if (!isFinite(lat) || !isFinite(lng) || (lat === 0 && lng === 0)) return;
     const col = rcNewsColor(m);
-    const mk  = L.circleMarker([lat, lng], {
-      radius: 5, fillColor: col, color: '#fff',
-      weight: 1, opacity: 1, fillOpacity: 0.88
-    });
+    const mk  = L.marker([lat, lng], { icon: rcReaderIcon(col) });
     mk.on('click', () => { if (m.r_id) window.rcViewReader(m.r_id); });
     const ttHtml = `<b>${esc(m.r_name || m.r_id || '—')}</b><br>` +
       `${esc(m.unit_name || '')} · ${esc(m.locality_name || ('Zone ' + (m.locality_code || '?')))}<br>` +
       `<span style="color:${rcNwColor(m.newspaper_name)}">${esc(rcNewsLabel(m.newspaper_name))}</span>`;
-    mk.bindTooltip(ttHtml, { sticky: true, direction: 'top', offset: [0, -5] });
+    mk.bindTooltip(ttHtml, { sticky: true, direction: 'top', offset: [0, 0] });
     layer.addLayer(mk);
     bounds.push([lat, lng]);
   });
