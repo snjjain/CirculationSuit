@@ -790,7 +790,7 @@ function vzDonut(o) {
 
 /* ═══════════ Supply Management Dashboard ═══════════ */
 function _supdState() {
-  return S.live.supd || (S.live.supd = { tab: 'overview', unit: '', agentOrder: 'supply', trendGran: 'daily', trendDays: 30 });
+  return S.live.supd || (S.live.supd = { tab: 'overview', state: '', unit: '', from: '', to: '', agentOrder: 'supply', trendGran: 'daily', trendDays: 30 });
 }
 const _supdN = v => v == null ? '—' : Number(v).toLocaleString('en-IN');
 const _supdINR = v => v == null ? '—' : (Math.abs(v) >= 1e7 ? '₹' + (v / 1e7).toFixed(2) + ' Cr' : Math.abs(v) >= 1e5 ? '₹' + (v / 1e5).toFixed(2) + ' L' : '₹' + Math.round(v).toLocaleString('en-IN'));
@@ -798,7 +798,12 @@ const _supdPct = p => p == null ? '—' : `${p >= 0 ? '+' : ''}${p}%`;
 const _supdDelta = v => v == null ? '—' : `<span style="color:${v > 0 ? 'var(--grn)' : v < 0 ? 'var(--red)' : 'var(--muted)'}">${v > 0 ? '▲ ' : v < 0 ? '▼ ' : ''}${Math.abs(v).toLocaleString('en-IN')}</span>`;
 
 function _supdQS(st) {
-  return st.unit ? `?unit_code=${encodeURIComponent(st.unit)}` : '';
+  const p = [];
+  if (st.state) p.push('state_name=' + encodeURIComponent(st.state));
+  if (st.unit)  p.push('unit_code='  + encodeURIComponent(st.unit));
+  if (st.from)  p.push('from=' + st.from);
+  if (st.to)    p.push('to='   + st.to);
+  return p.length ? '?' + p.join('&') : '';
 }
 function _supdFetch(key, path, force) {
   const st = _supdState();
@@ -815,6 +820,31 @@ window.supdUnit = u => {
   const st = _supdState();
   st.unit = u;
   ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
+  render();
+};
+const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
+// State dropdown: cascade the Unit list to that state (data refreshes when Apply is pressed)
+window.supdSetState = (v) => {
+  const st = _supdState();
+  st.state = v; st.unit = '';
+  render();
+};
+// Apply the State / Unit / date-range filters
+window.supdApply = () => {
+  const st = _supdState();
+  st.state = (document.getElementById('supd-state') || {}).value || '';
+  st.unit  = (document.getElementById('supd-unit')  || {}).value || '';
+  st.from  = (document.getElementById('supd-from')  || {}).value || '';
+  st.to    = (document.getElementById('supd-to')    || {}).value || '';
+  if ((st.from && !st.to) || (!st.from && st.to)) { toast('Pick both From and To dates (or leave both blank for the latest day)'); return; }
+  if (st.from && st.to && st.from > st.to) { const t = st.from; st.from = st.to; st.to = t; }
+  _supdClearData(st);
+  render();
+};
+window.supdResetFilters = () => {
+  const st = _supdState();
+  st.state = ''; st.unit = ''; st.from = ''; st.to = '';
+  _supdClearData(st);
   render();
 };
 window.supdAgentOrder = o => { const st = _supdState(); st.agentOrder = o; st.agents = null; render(); };
@@ -927,7 +957,8 @@ function _supdBranches(st) {
 }
 
 function _supdAgents(st) {
-  const qs = _supdQS(st) + (st.unit ? '&' : '?') + `order=${st.agentOrder}&limit=100` + (st.agentQ ? `&search=${encodeURIComponent(st.agentQ)}` : '');
+  const base = _supdQS(st);
+  const qs = base + (base ? '&' : '?') + `order=${st.agentOrder}&limit=100` + (st.agentQ ? `&search=${encodeURIComponent(st.agentQ)}` : '');
   _supdFetch('agents', '/api/supply-dash/agents' + qs);
   const d = st.agents;
   const bar = `<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
@@ -977,7 +1008,8 @@ function _supdExecs(st) {
 }
 
 function _supdTrend(st) {
-  const qs = _supdQS(st) + (st.unit ? '&' : '?') + `granularity=${st.trendGran}&days=${st.trendDays}`;
+  const base = _supdQS(st);
+  const qs = base + (base ? '&' : '?') + `granularity=${st.trendGran}&days=${st.trendDays}`;
   _supdFetch('trend', '/api/supply-dash/trend' + qs);
   const d = st.trend;
   const bar = `<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
@@ -1028,17 +1060,34 @@ VIEWS.supply_dash = () => {
   _supdFetch('filters', '/api/supply-dash/filters');
   const tabs = [['overview', '📊 Overview'], ['branches', '🏢 Branches'], ['agents', '👤 Agents'],
                 ['execs', '👔 Executives'], ['trend', '📈 Trends'], ['exceptions', '⚠️ Exceptions']];
-  const units = (st.filters && st.filters.units) || [];
-  const unitSel = `<select onchange="supdUnit(this.value)"
-      style="background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:7px 10px;font-size:12px;color:var(--fg)">
-    <option value="">All Branches</option>
-    ${units.map(u => `<option value="${esc(u.unit_code)}" ${st.unit === u.unit_code ? 'selected' : ''}>${esc(u.unit_name)}</option>`).join('')}
+  const allUnits  = (st.filters && st.filters.units)  || [];
+  const states    = (st.filters && st.filters.states) || [];
+  const dispUnits = st.state ? allUnits.filter(u => u.state_name === st.state) : allUnits;
+  const selSty = 'background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:7px 10px;font-size:12px;color:var(--fg)';
+  const stateSel = `<select id="supd-state" onchange="supdSetState(this.value)" style="${selSty}">
+    <option value="">All States</option>
+    ${states.map(s => `<option value="${esc(s.state_name)}" ${st.state === s.state_name ? 'selected' : ''}>${esc(s.state_name)}</option>`).join('')}
   </select>`;
-  const tabBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-    ${tabs.map(([k, l]) => `<button class="btn ${st.tab === k ? 'pri' : ''}" onclick="supdTab('${k}')">${l}</button>`).join('')}
-    <span style="margin-left:auto"></span>${unitSel}
+  const unitSel = `<select id="supd-unit" style="${selSty}">
+    <option value="">All Branches</option>
+    ${dispUnits.map(u => `<option value="${esc(u.unit_code)}" ${st.unit === u.unit_code ? 'selected' : ''}>${esc(u.unit_name)}</option>`).join('')}
+  </select>`;
+  const hasFilter = !!(st.state || st.unit || st.from || st.to);
+  const filterBar = `<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+    <span style="font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Filters</span>
+    ${stateSel}${unitSel}
+    <span style="display:inline-flex;gap:6px;align-items:center;font-size:11px;color:var(--muted)">
+      <input id="supd-from" type="date" value="${st.from || ''}" style="${selSty}"> to
+      <input id="supd-to" type="date" value="${st.to || ''}" style="${selSty}">
+    </span>
+    <button class="btn pri" onclick="supdApply()">Apply</button>
+    ${hasFilter ? `<button class="btn" onclick="supdResetFilters()">Reset</button>` : ''}
+    <span style="margin-left:auto"></span>
     <button class="btn" title="Print / save as PDF" onclick="window.print()">🖨</button>
     <button class="btn" onclick="supdRefresh()">↻</button>
+  </div>`;
+  const tabBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+    ${tabs.map(([k, l]) => `<button class="btn ${st.tab === k ? 'pri' : ''}" onclick="supdTab('${k}')">${l}</button>`).join('')}
   </div>`;
   const bodyMap = { overview: _supdOverview, branches: _supdBranches, agents: _supdAgents,
                     execs: _supdExecs, trend: _supdTrend, exceptions: _supdExceptions };
@@ -1047,7 +1096,7 @@ VIEWS.supply_dash = () => {
     : '';
   return pagehead('Supply Dashboard', 'Agency supply · growth & reduction · exceptions — decision view for HO, ZH, Incharge & Executives') + `
     <style>._cmd-strip-item{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px}</style>
-    ${tabBar}${(bodyMap[st.tab] || _supdOverview)(st)}${dataNote}`;
+    ${filterBar}${tabBar}${(bodyMap[st.tab] || _supdOverview)(st)}${dataNote}`;
 };
 
 /* ═══════════ AI Insights & Action Center ═══════════ */

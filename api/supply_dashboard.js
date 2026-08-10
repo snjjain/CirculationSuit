@@ -34,10 +34,21 @@ module.exports = function registerSupplyDash(ctx) {
     const personCode = req.headers['x-person-code'] || '';
     const hl = parseInt(req.headers['x-hierarchy-level'] || '1', 10);
     const allowed = await getScopeUnitCodes(personCode, hl); // null = all
-    const want = (req.query.unit_code || '').trim();
+    const want  = (req.query.unit_code  || '').trim();
+    const state = (req.query.state_name || '').trim();
+    // Explicit unit selection is the most specific — use it directly.
     if (want) {
       if (allowed && !allowed.includes(want)) return { clause: ' AND 1=0', params: [] };
       return { clause: ' AND {col} = ?', params: [want] };
+    }
+    // State selection → restrict to that state's units (intersected with the role scope).
+    // Reuses the {col} IN (...) machinery so every endpoint honours it without per-query edits.
+    if (state) {
+      const { rows } = await q('SELECT DISTINCT unit_code FROM supply_data WHERE state_name = ?', [state]);
+      let stateUnits = rows.map(r => r.unit_code);
+      if (allowed) stateUnits = stateUnits.filter(u => allowed.includes(u));
+      if (!stateUnits.length) return { clause: ' AND 1=0', params: [] };
+      return { clause: ` AND {col} IN (${stateUnits.map(() => '?').join(',')})`, params: stateUnits };
     }
     if (!allowed) return { clause: '', params: [] };
     if (!allowed.length) return { clause: ' AND 1=0', params: [] };
@@ -47,7 +58,27 @@ module.exports = function registerSupplyDash(ctx) {
 
   // ── Reference dates (cached 5 min) ──────────────────────────────────────────
   let _dates = null, _datesAt = 0;
-  async function refDates() {
+  async function refDates(req) {
+    const fmt = x => new Date(x).toISOString().slice(0, 10);
+    const from = (req && req.query && req.query.from || '').trim();
+    const to   = (req && req.query && req.query.to   || '').trim();
+
+    // Custom date range: cur = last supply day IN the range, prev = first supply day in the
+    // range → all the existing cur-vs-prev logic then reads as "change over the selected period".
+    if (from && to) {
+      const { rows } = await q(
+        `SELECT MAX(supply_date) cur_day, MIN(supply_date) prev_day
+         FROM supply_data WHERE supply_date BETWEEN ? AND ?`, [from, to]);
+      const cur = rows[0]?.cur_day, prev = rows[0]?.prev_day;
+      if (!cur) return null;
+      return {
+        cur: fmt(cur),
+        prev: prev && fmt(prev) !== fmt(cur) ? fmt(prev) : null,
+        monthStart: from, prevMonthStart: from, range: true, from, to,
+      };
+    }
+
+    // Default: latest loaded supply day (cached 5 min)
     if (_dates && Date.now() - _datesAt < 5 * 60 * 1000) return _dates;
     const { rows } = await q(`
       SELECT MAX(supply_date) AS cur_day,
@@ -59,7 +90,6 @@ module.exports = function registerSupplyDash(ctx) {
     const d = new Date(cur);
     const monthStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
     const prevMonthStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1));
-    const fmt = x => x.toISOString().slice(0, 10);
     _dates = {
       cur: fmt(new Date(cur)), prev: prev ? fmt(new Date(prev)) : null,
       monthStart: fmt(monthStart), prevMonthStart: fmt(prevMonthStart),
@@ -81,13 +111,14 @@ module.exports = function registerSupplyDash(ctx) {
       const hit = _supdFiltersCache.get(key);
       if (hit && hit.exp > now && !('refresh' in req.query)) return res.json(hit.data);
 
-      const [units, execs] = await Promise.all([
-        q(`SELECT DISTINCT unit_code, unit_name FROM supply_data WHERE 1=1${on(sc2, 'unit_code')} ORDER BY unit_name`, sc2.params),
+      const [units, states, execs] = await Promise.all([
+        q(`SELECT DISTINCT unit_code, unit_name, state_name FROM supply_data WHERE 1=1${on(sc2, 'unit_code')} ORDER BY unit_name`, sc2.params),
+        q(`SELECT DISTINCT state_name FROM supply_data WHERE state_name IS NOT NULL AND state_name<>''${on(sc2, 'unit_code')} ORDER BY state_name`, sc2.params),
         q(`SELECT DISTINCT executive_code, executive_name FROM agency_master
            WHERE executive_name IS NOT NULL${on(sc2, 'unit')} ORDER BY executive_name LIMIT 500`, sc2.params),
       ]);
-      const d = await refDates();
-      const data = { units: units.rows, executives: execs.rows, data_upto: d ? d.cur : null };
+      const d = await refDates(req);
+      const data = { units: units.rows, states: states.rows, executives: execs.rows, data_upto: d ? d.cur : null };
       _supdFiltersCache.set(key, { data, exp: now + _SUPD_FILTERS_TTL });
       res.json(data);
     } catch (e) { res.status(500).json({ detail: String(e) }); }
@@ -96,7 +127,7 @@ module.exports = function registerSupplyDash(ctx) {
   // ════ 1. KPI cards ════
   app.get('/api/supply-dash/kpis', async (req, res) => {
     try {
-      const d = await refDates();
+      const d = await refDates(req);
       if (!d) return res.json({ no_data: true });
       const sc2 = await scopeUnits(req);
       const S = on(sc2, 'unit_code'), P = sc2.params;
@@ -167,7 +198,7 @@ module.exports = function registerSupplyDash(ctx) {
   // ════ 2. Branch-wise ════
   app.get('/api/supply-dash/branches', async (req, res) => {
     try {
-      const d = await refDates();
+      const d = await refDates(req);
       if (!d) return res.json({ rows: [] });
       const sc2 = await scopeUnits(req);
       const S = on(sc2, 'unit_code');
@@ -205,7 +236,7 @@ module.exports = function registerSupplyDash(ctx) {
   // ════ 4. Agent-wise ════
   app.get('/api/supply-dash/agents', async (req, res) => {
     try {
-      const d = await refDates();
+      const d = await refDates(req);
       if (!d) return res.json({ rows: [] });
       const sc2 = await scopeUnits(req);
       const S = on(sc2, 's.unit_code');
@@ -253,7 +284,7 @@ module.exports = function registerSupplyDash(ctx) {
   // ════ 5. Executive performance ════
   app.get('/api/supply-dash/executives', async (req, res) => {
     try {
-      const d = await refDates();
+      const d = await refDates(req);
       if (!d) return res.json({ rows: [] });
       const sc2 = await scopeUnits(req);
       const S = on(sc2, 's.unit_code');
@@ -289,7 +320,7 @@ module.exports = function registerSupplyDash(ctx) {
   // ════ 6. Trend ════
   app.get('/api/supply-dash/trend', async (req, res) => {
     try {
-      const d = await refDates();
+      const d = await refDates(req);
       if (!d) return res.json({ rows: [] });
       const sc2 = await scopeUnits(req);
       const S = on(sc2, 'unit_code');
@@ -323,7 +354,7 @@ module.exports = function registerSupplyDash(ctx) {
   // ════ 11. Exceptions ════
   app.get('/api/supply-dash/exceptions', async (req, res) => {
     try {
-      const d = await refDates();
+      const d = await refDates(req);
       if (!d) return res.json({ no_data: true });
       const sc2 = await scopeUnits(req);
       const S = on(sc2, 'unit_code');
@@ -383,7 +414,7 @@ module.exports = function registerSupplyDash(ctx) {
   // ════ 14. AI Insights (auto-generated sentences) ════
   app.get('/api/supply-dash/insights', async (req, res) => {
     try {
-      const d = await refDates();
+      const d = await refDates(req);
       if (!d) return res.json({ insights: [] });
       const sc2 = await scopeUnits(req);
       const S = on(sc2, 'unit_code');
