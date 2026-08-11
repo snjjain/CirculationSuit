@@ -513,20 +513,19 @@ module.exports = function registerSupplyDash(ctx) {
   }
   const mkDelta = (cur, prev) => ({ current: cur, previous: prev, diff: cur - prev, growth_pct: r1(pct(cur, prev)) });
 
-  // Sale date windows. Single day: cur = latest business day, prev = day before.
-  // Date range: cur = the selected [from,to] period; prev = the immediately-preceding
-  // equal-length period (so "Prev" is a real comparison window, not a day inside the range).
-  const _addDays = (ds, n) => { const dt = new Date(ds + 'T00:00:00Z'); dt.setUTCDate(dt.getUTCDate() + n); return dt.toISOString().slice(0, 10); };
+  // Sale date windows. Both single-day and date-range are a TWO-DAY comparison, never a sum:
+  //   default   → current = latest business day, previous = the day before.
+  //   date range → current = To date (latest supply day in range), previous = From date
+  //                (earliest supply day in range). So "01→06 Aug" reads as 06 Aug vs 01 Aug.
   async function saleWin(req) {
     const d = await refDates(req);
     if (!d) return null;
     if (d.range && d.from && d.to) {
-      const days = Math.max(1, Math.round((Date.parse(d.to) - Date.parse(d.from)) / 86400000) + 1);
-      const pT = _addDays(d.from, -1), pF = _addDays(d.from, -days);
-      return { range: true, cF: d.from, cT: d.to, pF, pT, data_upto: d.cur, cur_label: `${d.from} → ${d.to}`, prev_label: `${pF} → ${pT}` };
+      const prev = d.prev || d.cur;   // refDates gives cur=MAX(day in range), prev=MIN(day in range)
+      return { range: true, cF: d.cur, cT: d.cur, pF: prev, pT: prev, data_upto: d.cur, cur_label: d.cur, prev_label: prev };
     }
     const prev = d.prev || d.cur;
-    return { range: false, cF: d.cur, cT: d.cur, pF: prev, pT: prev, data_upto: d.cur, cur_label: d.cur, prev_label: d.prev };
+    return { range: false, cF: d.cur, cT: d.cur, pF: prev, pT: prev, data_upto: d.cur, cur_label: d.cur, prev_label: prev };
   }
   // cur/prev SUM over the windows; the last two params are always (w.pF, w.cT) for the WHERE span.
   const winMeta = w => ({ data_upto: w.data_upto, range: w.range, cur_label: w.cur_label, prev_label: w.prev_label });
