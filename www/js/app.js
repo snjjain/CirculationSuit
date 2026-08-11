@@ -1394,7 +1394,7 @@ window.supdUnit = u => {
   ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
   render();
 };
-const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'covidSummary', 'covidAgentStates', 'covidCashStates'].forEach(k => { st[k] = null; });
+const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'execBreakdown', 'covidSummary', 'covidAgentStates', 'covidCashStates'].forEach(k => { st[k] = null; });
 // State dropdown: cascade the Unit list to that state (data refreshes when Apply is pressed)
 window.supdSetState = (v) => {
   const st = _supdState();
@@ -1556,13 +1556,32 @@ function _supdAgents(st) {
   return bar + table(['Agent', 'Branch', 'Executive', '>Supply', '>Prev', '>Change', '>Outstanding', '>Last Visit'], rows);
 }
 
+window.supdExecDrill = (name, state) => { const st = _supdState(); st.execDrill = name || ''; st.execState = state || ''; st.execBreakdown = null; render(); };
+function _supdExecDrill(st) {
+  const qs = _supdQS(st), state = st.execState;
+  const path = `/api/supply-dash/executive/${encodeURIComponent(st.execDrill)}${qs}${state ? (qs ? '&' : '?') + 'state=' + encodeURIComponent(state) : ''}`;
+  _supdFetch('execBreakdown', path);
+  const d = st.execBreakdown;
+  const link = (txt, fn, active) => `<span onclick="${fn}" style="cursor:pointer;color:${active ? 'var(--ink)' : 'var(--gold-d)'};font-weight:${active ? 700 : 500}">${txt}</span>`;
+  const en = esc(st.execDrill).replace(/'/g, "\\'");
+  const crumbs = [link('Executives', "supdExecDrill('')"), link(esc(st.execDrill), `supdExecDrill('${en}')`, !state)];
+  if (state) crumbs.push(link(esc(state), '', true));
+  const bc = `<div style="font-size:12.5px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${crumbs.join('<span style="color:var(--muted)">›</span>')}</div>`;
+  if (!d) return bc + _cmdSkel();
+  if (d._err) return bc + `<div class="card pad" style="color:var(--muted)">No data.</div>`;
+  const cellFn = state
+    ? r => `<td>${esc(r.label)}</td>`
+    : r => `<td><span onclick="supdExecDrill('${en}','${esc(r.code).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.label)}</span></td>`;
+  return bc + _supdDrillTable(d, state ? 'Branch' : 'State', cellFn, 'agent', d.total);
+}
 function _supdExecs(st) {
+  if (st.execDrill) return _supdExecDrill(st);
   _supdFetch('execs', '/api/supply-dash/executives' + _supdQS(st));
   const d = st.execs;
   if (!d) return _cmdSkel();
   if (d._err || !d.rows || !d.rows.length) return `<div class="card pad" style="color:var(--muted)">No executive data.</div>`;
   const rows = d.rows.map(r => `<tr>
-    <td>${r.rank}</td><td><b>${esc(r.executive)}</b></td>
+    <td>${r.rank}</td><td><span onclick="supdExecDrill('${esc(r.executive).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:700">${esc(r.executive)}</span></td>
     <td class="r num">${_supdN(r.agents)}</td>
     <td class="r num">${_supdN(r.supply)}</td>
     <td class="r num" style="color:var(--grn)">${_supdN(r.growth)}</td>
@@ -1575,7 +1594,7 @@ function _supdExecs(st) {
       ${vzKpi({ icon: '🏆', label: 'Highest Growth', value: `<span style="font-size:15px">${esc(best ? best.executive : '—')}</span>`, status: 'good', sub: best ? `+${_supdN(best.net_change)} copies` : '' })}
       ${vzKpi({ icon: '⚠️', label: 'Lowest Performance', value: `<span style="font-size:15px">${esc(worst ? worst.executive : '—')}</span>`, status: 'bad', sub: worst ? `${_supdN(worst.net_change)} copies` : '' })}
     </div>`
-    + `<div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="btn" onclick="supdCSV('execs')">⬇ Excel/CSV</button></div>`
+    + `<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:6px"><span class="lbl" style="align-self:center;color:var(--muted)">tap an executive for state → branch breakdown</span><button class="btn" onclick="supdCSV('execs')">⬇ Excel/CSV</button></div>`
     + table(['#', 'Executive', '>Agents', '>Supply', '>Growth', '>Reduction', '>Net', '>Visits'], rows);
 }
 

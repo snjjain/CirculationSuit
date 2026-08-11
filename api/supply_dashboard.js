@@ -841,4 +841,39 @@ module.exports = function registerSupplyDash(ctx) {
       res.json({ ...winMeta(w), unit_code: unit, editions, centers: out });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
+
+  // ════ EXECUTIVE drill — one executive's agent supply by STATE, then by BRANCH ════
+  app.get('/api/supply-dash/executive/:name', async (req, res) => {
+    try {
+      const w = await saleWin(req);
+      if (!w) return res.json({ rows: [] });
+      const name = req.params.name;
+      const state = (req.query.state || '').trim();
+      const execJoin = `JOIN (SELECT DISTINCT unit, agcd FROM agency_master
+          WHERE ag_class_name = 'CREDIT SALE' AND COALESCE(supply_stop_flag,'N') = 'N'
+            AND (suspend_date IS NULL OR suspend_date > CURDATE()) AND executive_name = ?) cm
+        ON cm.unit = s.unit_code AND cm.agcd = s.agcd`;
+      const selCol = state ? `s.unit_code code, MAX(s.unit_name) label` : `s.state_name code, COALESCE(NULLIF(s.state_name,''),'—') label`;
+      const grpCol = state ? 's.unit_code' : 's.state_name';
+      const stCls = state ? ' AND s.state_name = ?' : '';
+      const { rows } = await q(`
+        SELECT ${selCol},
+               SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) supply,
+               SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prev_supply,
+               COUNT(DISTINCT s.agcd) agents
+        FROM supply_data s ${execJoin}
+        WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${stCls}
+        GROUP BY ${grpCol} ORDER BY supply DESC`,
+        [w.cF, w.pF, name, w.cF, w.pF, ...(state ? [state] : [])]);
+      const total = rows.reduce((a, r) => a + N(r.supply), 0);
+      res.json({
+        ...winMeta(w), executive: name, state: state || null, level: state ? 'branch' : 'state', total,
+        rows: rows.map(r => ({
+          code: r.code, label: r.label, agents: N(r.agents), supply: N(r.supply), prev_supply: N(r.prev_supply),
+          net_change: N(r.supply) - N(r.prev_supply), growth_pct: r1(pct(N(r.supply), N(r.prev_supply))),
+          contribution_pct: total ? r1(N(r.supply) / total * 100) : null,
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
 };
