@@ -681,6 +681,163 @@ VIEWS.agent_pay = () => {
     </div></div>`, false);
 };
 
+/* ═══════════ DCR app — circulation-staff agent/hawker visits (branch-scoped, live) ═══════════ */
+/* Generic lazy loader (re-renders on completion) — shared by DCR screens */
+const _liveInflight = new Set();
+function liveGet(cacheKey, path) {
+  if (cacheKey in S.live) return S.live[cacheKey];
+  if (!_liveInflight.has(cacheKey)) {
+    _liveInflight.add(cacheKey);
+    api.get(path).then(d => { S.live[cacheKey] = d || null; _liveInflight.delete(cacheKey); render(); });
+  }
+  return undefined;
+}
+
+const DCR_MODULES = [
+  { key: "visit",  screen: "dcr_visit",  icon: "📝", tint: "var(--gold-l)", label: "Record Visit",  desc: "Log an agent or hawker visit." },
+  { key: "today",  screen: "dcr_today",  icon: "📋", tint: "var(--blue-l)", label: "Today's Visits", desc: "Visits you've submitted today." },
+  { key: "report", screen: "dcr_report", icon: "📊", tint: "var(--grn-l)",  label: "Day Report",     desc: "Your visit summary for the day." },
+];
+function dcrCtx() { return S.live.dcr && S.live.dcr.context; }
+async function fetchDcr() {
+  if (S.live._dcrLoading) return; S.live._dcrLoading = true;
+  const context = await api.get("/api/dcr/context");
+  S.live.dcr = { context }; S.live._dcrLoading = false;
+  if (S.screen === "app_dcr" || String(S.screen).indexOf("dcr_") === 0) render();
+}
+function dcrBackBar() {
+  return `<div style="display:flex;gap:8px;margin-bottom:12px">
+    <button class="btn sm" onclick="go('app_dcr')">← DCR Home</button>
+    <button class="btn sm" onclick="go('home')">Apps</button></div>`;
+}
+function dcrHeader() {
+  const ctx = dcrCtx(); const s = ctx && ctx.staff; if (!s) return "";
+  const units = ((ctx.unit_codes) || []).join(", ") || "all branches";
+  return `<div class="pagehead"><div>
+    <div class="crumbs">DCR · Daily Collection Register</div>
+    <h2>${s.name || "Staff"}</h2>
+    <div class="sub">Emp ${s.employee_code || "—"} · Branch ${units}</div></div></div>`;
+}
+function dcrModuleBar() {
+  return `<div class="seg" style="margin-bottom:12px">${DCR_MODULES.map(m => `<button class="${S.screen === m.screen ? "on" : ""}" onclick="go('${m.screen}')">${m.icon} ${m.label}</button>`).join("")}</div>`;
+}
+function dcrScreen(inner) {
+  if (!S.live.dcr) { if (!S.live._dcrLoading) fetchDcr(); return dcrBackBar() + `<div class="card pad">Loading…</div>`; }
+  return dcrBackBar() + dcrHeader() + dcrModuleBar() + inner;
+}
+
+/* ── DCR icon dashboard ── */
+VIEWS.app_dcr = () => {
+  if (!S.live.dcr) { if (!S.live._dcrLoading) fetchDcr(); return dcrBackBar() + `<div class="card pad">Loading…</div>`; }
+  const rep = liveGet("dcrRep_" + todayISO(), "/api/dcr/day-report");
+  const kpis = `<div class="grid kpis">
+    ${kpi("Today's Visits", rep ? _n(rep.total) : "—", todayISO(), "fl", "var(--gold-l)", "📝")}
+    ${kpi("Agent Visits", rep ? _n(rep.agent_visits) : "—", "", "fl", "var(--blue-l)", "🏢")}
+    ${kpi("Hawker Visits", rep ? _n(rep.hawker_visits) : "—", "", "fl", "var(--teal-l)", "🛵")}</div>`;
+  const tiles = DCR_MODULES.map(m => `<button class="card appcard" onclick="go('${m.screen}')">
+    <div class="app-top"><div class="aico" style="background:${m.tint}">${m.icon}</div></div>
+    <b>${m.label}</b><small>${m.desc}</small></button>`).join("");
+  return dcrBackBar() + dcrHeader() + kpis + `<div class="sb-lbl" style="padding-left:2px">Modules</div><div class="applist">${tiles}</div>`;
+};
+
+/* ── Record a Visit ── */
+function dcrSelectedHTML(sel) {
+  const ic = (S.live.dcrType || "agent") === "hawker" ? "🛵" : "🏢";
+  return `<div class="card pad" style="background:var(--surf2);margin-bottom:12px;display:flex;align-items:center;gap:10px">
+    <div class="aico" style="background:var(--gold-l);width:34px;height:34px;font-size:16px">${ic}</div>
+    <div style="flex:1;min-width:0"><b>${sel.name || sel.code}</b><small style="display:block;color:var(--muted)">${sel.code} · ${sel.extra || ""} · ${sel.unit_code}</small></div>
+    <button class="btn sm" onclick="dcrClearSel()">✕</button></div>`;
+}
+window.dcrSetType = t => { S.live.dcrType = t; S.live.dcrSelected = null; S.live.dcrTargets = null; render(); };
+window.dcrClearSel = () => { S.live.dcrSelected = null; render(); };
+window.dcrSearch = async () => {
+  const el = document.getElementById("dcr-q"); const res = document.getElementById("dcr-results");
+  if (!el || !res) return;
+  const q = el.value || "", type = S.live.dcrType || "agent";
+  if (q.trim().length < 1) { res.innerHTML = ""; return; }
+  res.innerHTML = `<div class="lbl" style="padding:6px">Searching…</div>`;
+  const data = await api.get(`/api/dcr/targets?type=${type}&q=${encodeURIComponent(q)}&limit=20`);
+  S.live.dcrTargets = (data && data.targets) || [];
+  res.innerHTML = S.live.dcrTargets.length
+    ? S.live.dcrTargets.map((t, i) => `<button class="dcr-opt" onclick="dcrPick(${i})"><b>${t.name || t.code}</b><small>${t.code} · ${t.extra || ""}</small></button>`).join("")
+    : `<div class="lbl" style="padding:6px;color:var(--muted)">No matches in your branch</div>`;
+};
+window.dcrPick = i => {
+  const t = (S.live.dcrTargets || [])[i]; if (!t) return;
+  S.live.dcrSelected = t;
+  const res = document.getElementById("dcr-results"); if (res) res.innerHTML = "";
+  const q = document.getElementById("dcr-q"); if (q) q.value = "";
+  const sc = document.getElementById("dcr-selected"); if (sc) sc.innerHTML = dcrSelectedHTML(t);
+};
+window.dcrGeo = () => {
+  if (!navigator.geolocation) { toast("Location not available"); return; }
+  navigator.geolocation.getCurrentPosition(
+    p => { S.live.dcrGeo = { lat: p.coords.latitude, lng: p.coords.longitude }; const g = document.getElementById("dcr-geo"); if (g) g.textContent = "✓ " + S.live.dcrGeo.lat.toFixed(4) + ", " + S.live.dcrGeo.lng.toFixed(4); toast("Location captured"); },
+    () => toast("Could not get location"));
+};
+window.dcrSubmitVisit = async () => {
+  const sel = S.live.dcrSelected; if (!sel) { toast("Please select an agent or hawker"); return; }
+  const body = { target_type: S.live.dcrType || "agent", unit_code: sel.unit_code, target_code: sel.code, target_name: sel.name, target_extra: sel.extra, purpose: gv("dcr-purpose"), outcome: gv("dcr-outcome"), remarks: gv("dcr-remarks") };
+  if (S.live.dcrGeo) { body.lat = S.live.dcrGeo.lat; body.lng = S.live.dcrGeo.lng; }
+  const r = await api.post("/api/dcr/visit", body);
+  if (r && r.ok) { toast("✓ Visit recorded"); S.live.dcrSelected = null; S.live.dcrGeo = null; delete S.live["dcrToday_" + todayISO()]; delete S.live["dcrRep_" + todayISO()]; go("dcr_today"); }
+  else toast((r && r.detail) || "Could not submit");
+};
+VIEWS.dcr_visit = () => {
+  if (!S.live.dcr) { if (!S.live._dcrLoading) fetchDcr(); return dcrBackBar() + `<div class="card pad">Loading…</div>`; }
+  const type = S.live.dcrType || "agent", sel = S.live.dcrSelected;
+  const inner = `<div class="card pad field-col">
+    <div class="lbl" style="margin-bottom:8px">Record a Visit</div>
+    <div class="seg" style="margin-bottom:12px">
+      <button class="${type === "agent" ? "on" : ""}" onclick="dcrSetType('agent')">🏢 Agent</button>
+      <button class="${type === "hawker" ? "on" : ""}" onclick="dcrSetType('hawker')">🛵 Hawker</button></div>
+    <div class="fld"><label>Find ${type}</label><input id="dcr-q" placeholder="Search name or code…" oninput="dcrSearch()" autocomplete="off"></div>
+    <div id="dcr-results" class="dcr-results"></div>
+    <div id="dcr-selected">${sel ? dcrSelectedHTML(sel) : ""}</div>
+    <div class="fld"><label>Purpose</label><select id="dcr-purpose">
+      <option>Routine visit</option><option>Collection</option><option>Supply issue</option><option>Complaint</option><option>New agency/hawker</option><option>Payment follow-up</option><option>Other</option></select></div>
+    <div class="fld"><label>Outcome</label><select id="dcr-outcome">
+      <option>Met</option><option>Not available</option><option>Resolved</option><option>Pending</option><option>Escalated</option></select></div>
+    <div class="fld"><label>Remarks</label><textarea id="dcr-remarks" placeholder="Notes from the visit…"></textarea></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+      <button class="btn sm" onclick="dcrGeo()">📍 Use my location</button>
+      <span id="dcr-geo" class="lbl" style="color:var(--muted)">${S.live.dcrGeo ? "✓ " + S.live.dcrGeo.lat.toFixed(4) + ", " + S.live.dcrGeo.lng.toFixed(4) : "optional"}</span></div>
+    <button class="btn pri block" onclick="dcrSubmitVisit()">Submit visit</button></div>`;
+  return dcrScreen(inner);
+};
+
+/* ── Today's Visits ── */
+VIEWS.dcr_today = () => {
+  if (!S.live.dcr) { if (!S.live._dcrLoading) fetchDcr(); return dcrBackBar() + `<div class="card pad">Loading…</div>`; }
+  const data = liveGet("dcrToday_" + todayISO(), "/api/dcr/visits?date=" + todayISO());
+  let inner;
+  if (data === undefined) inner = `<div class="card pad">Loading…</div>`;
+  else {
+    const rows = ((data && data.visits) || []).map(v => `<tr>
+      <td>${(v.created_at || "").slice(11, 16)}</td>
+      <td><span class="chip ${v.target_type === "hawker" ? "teal" : "info"}">${v.target_type}</span></td>
+      <td>${v.target_name || v.target_code}</td><td>${v.purpose || ""}</td><td>${v.outcome || ""}</td></tr>`);
+    inner = `<div class="card"><div class="cardhead"><h3>Today's Visits</h3><span class="lbl">${todayISO()}</span></div>
+      <div class="tablewrap"><table><thead><tr><th>Time</th><th>Type</th><th>Target</th><th>Purpose</th><th>Outcome</th></tr></thead>
+      <tbody>${rows.join("") || `<tr><td colspan="5" style="color:var(--muted)">No visits yet — record one from the DCR home</td></tr>`}</tbody></table></div></div>`;
+  }
+  return dcrScreen(inner);
+};
+
+/* ── Day Report ── */
+VIEWS.dcr_report = () => {
+  if (!S.live.dcr) { if (!S.live._dcrLoading) fetchDcr(); return dcrBackBar() + `<div class="card pad">Loading…</div>`; }
+  const rep = liveGet("dcrRep_" + todayISO(), "/api/dcr/day-report");
+  let inner;
+  if (rep === undefined) inner = `<div class="card pad">Loading…</div>`;
+  else inner = `<div class="grid kpis">
+      ${kpi("Total Visits", _n(rep && rep.total), todayISO(), "fl", "var(--gold-l)", "📝")}
+      ${kpi("Agent Visits", _n(rep && rep.agent_visits), "", "fl", "var(--blue-l)", "🏢")}
+      ${kpi("Hawker Visits", _n(rep && rep.hawker_visits), "", "fl", "var(--teal-l)", "🛵")}</div>
+    <div class="card pad"><p style="color:var(--muted);font-size:13px;line-height:1.6">Your submitted visits for ${todayISO()}, branch-scoped. Tour planning (plan visits ahead) is the next DCR addition.</p></div>`;
+  return dcrScreen(inner);
+};
+
 /* Remaining field apps still open their standalone prototype in an iframe (redesigned one-by-one). */
 Object.keys(APP_META).forEach(k => { if (!VIEWS["app_" + k]) VIEWS["app_" + k] = () => appFrameView(k); });
 
@@ -5435,295 +5592,8 @@ VIEWS.manage_rights = () => {
     </div>`;
 };
 
-/* ═══════════ FIELD APPS ═══════════ */
-
-/* ---- Agent App ---- */
-VIEWS.agent_day = () => {
-  const rows = ROUTES.map(r => `<tr><td><b>${r.id}</b></td><td>${r.hawker}</td>
-    <td class="r num">${r.copies}</td><td>${chip(r.status === "Completed" ? "good" : "info", r.status)}</td></tr>`).join("");
-  return pagehead("Agent App — My Day", "Shree Ganesh News Agency · Malviya Nagar") + `
-    <div class="grid kpis">
-      ${kpi("Today's allocation", "4,820", "6 routes", "fl", "var(--red-l)", "📦")}
-      ${kpi("Routes done", "4 / 6", "", "", "var(--grn-l)", "🛣️")}
-      ${kpi("Collection due", fmtC(184200), "23 households", "fl", "var(--gold-l)", "₹")}
-      ${kpi("June settlement", fmtC(6620), "awaiting approval", "fl", "var(--blue-l)", "🧾")}
-    </div>` +
-    table(["Route", "Hawker", ">Copies", "Status"], [rows]);
-};
-VIEWS.agent_supply = () => {
-  const saved = store.get("returns", null);
-  const rows = SUPPLY.map((s, i) => {
-    const ret = saved ? saved[i] : 0;
-    return `<tr><td><b>${s.pub}</b></td><td class="r num">${fmtN(s.supply)}</td>
-      <td class="r num">₹${s.rate.toFixed(2)}</td>
-      <td class="r"><input data-ret="${i}" type="number" min="0" max="${s.supply}" value="${ret}" ${saved ? "disabled" : ""}
-        style="width:84px;text-align:right;background:var(--surf2);border:1px solid var(--brd);border-radius:8px;padding:6px 8px"></td>
-      <td class="r num" data-net="${i}">${fmtN(s.supply - ret)}</td></tr>`;
-  }).join("");
-  return pagehead("Supply & Net Sales", "Enter unsold returns to compute today's net sale") + `
-    <div class="card"><div class="cardhead"><h3>Today's supply — ${TODAY}</h3>${saved ? chip("good", "Returns saved") : chip("warn", "Returns pending")}</div>
-      <div class="tablewrap"><table><thead><tr><th>Publication</th><th class="r">Supply</th><th class="r">Rate</th><th class="r">Returns</th><th class="r">Net sale</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>
-      ${saved ? "" : `<div style="padding:14px 16px"><button class="btn pri" onclick="saveReturns()">Save returns & lock</button></div>`}</div>
-    <div style="height:13px"></div>
-    <div class="card pad"><div class="cardhead" style="padding:0 0 9px;border:none"><h3>Competitor copies in my area</h3></div>
-      <div class="stat-pair"><span>Dainik Bhaskar</span><b>1,240 <span class="chip good">▼ 40 this month</span></b></div>
-      <div class="stat-pair"><span>Times of India</span><b>310 <span class="chip crit">▲ 10 this month</span></b></div>
-      <div class="stat-pair"><span>Dainik Navjyoti</span><b>180 <span class="chip mut">flat</span></b></div></div>`;
-};
-window.saveReturns = () => {
-  const vals = [...document.querySelectorAll("[data-ret]")].map(el => Math.max(0, Number(el.value) || 0));
-  store.set("returns", vals); toast("Returns saved — net sale updated ✓"); render();
-};
-VIEWS.agent_ledger = () => {
-  const rows = LEDGER.map(l => `<tr><td class="num">${l[0]}</td><td>${l[1]}</td>
-    <td class="r num">${l[2]}</td><td class="r num up">${l[3]}</td><td class="r num"><b>${l[4]}</b></td></tr>`).join("");
-  return pagehead("Bills & Ledger", "Agency account with Patrika — running balance",
-    `<button class="btn pri" onclick="toast('Statement sent on WhatsApp ✓')">Send on WhatsApp</button>`) + `
-    <div class="grid kpis">
-      ${kpi("Current balance", "₹1,84,200 Dr", "", "", "var(--red-l)", "🧾")}
-      ${kpi("June bill", lakh(545420), "1,41,300 copies", "fl", "var(--gold-l)", "📰")}
-      ${kpi("June commission", fmtC(41180), "12.4% blended", "up", "var(--grn-l)", "💰")}
-    </div>` +
-    table(["Date", "Particulars", ">Debit", ">Credit", ">Balance"], [rows]);
-};
-VIEWS.agent_complaints = () => {
-  const mine = COMPLAINTS.filter(c => c.route.startsWith("MN") || c.route.startsWith("CS"));
-  const rows = mine.map(c => `<tr><td><b>${c.id}</b></td>
-    <td><b>${c.cust}</b><br><small style="color:var(--muted)">${c.cat}</small></td>
-    <td>${c.route}</td><td>${chip(c.slaState === "crit" ? "crit" : c.slaState === "warn" ? "warn" : "good", c.sla)}</td>
-    <td class="r"><button class="btn sm" onclick="toast('Marked resolved — pending customer confirmation')">Resolve</button></td></tr>`).join("");
-  return pagehead("Complaints — My Territory", "Tickets on my agency routes") +
-    table(["Ticket", "Customer", "Route", "SLA", ">"], [rows]);
-};
-
-/* ---- Hawker App ---- */
-function stopState() { return store.get("stops", STOPS.map(s => s.st)); }
-VIEWS.hawker_day = () => {
-  const st = stopState();
-  const done = st.filter(x => x === "done").length, miss = st.filter(x => x === "miss").length;
-  const checked = store.get("checkin", null);
-  return `<div class="field-col">` + pagehead("Hawker App — My Day", "Route MN-04 · Malviya Nagar") + `
-    <div class="bigstat">
-      <div class="card"><div class="lbl">Today's copies</div><div class="v num">365</div></div>
-      <div class="card"><div class="lbl">Stops</div><div class="v num">${STOPS.length}</div></div>
-      <div class="card"><div class="lbl">Delivered</div><div class="v num up">${done}</div></div>
-      <div class="card"><div class="lbl">Missed</div><div class="v num ${miss ? "dn" : ""}">${miss}</div></div>
-    </div>
-    <div class="card pad" style="margin-bottom:13px">
-      <div class="cardhead" style="padding:0 0 9px;border:none"><h3>Duty</h3>${checked ? chip("good", "Checked in · " + checked) : chip("warn", "Not checked in")}</div>
-      ${checked ? `<p style="color:var(--muted);font-size:12.5px">Bundle verified — RP City 342 + Plus 23. Have a good run! 🛵</p>`
-        : `<button class="btn pri block" onclick="store.set('checkin', new Date().toTimeString().slice(0,5));toast('Checked in — GPS stamped ✓');render()">✋ Check in & verify bundle</button>`}
-    </div>
-    <div class="card pad"><div class="cardhead" style="padding:0 0 9px;border:none"><h3>To collect today</h3></div>
-      <div class="stat-pair"><span>Pending amount</span><b class="num">${fmtC(STOPS.filter((s, i) => s.collect && st[i] !== "done").reduce((a, s) => a + s.collect, 0) || 3355)}</b></div>
-      <div class="stat-pair"><span>Households</span><b class="num">${STOPS.filter(s => s.collect > 0).length}</b></div>
-      <button class="btn navy block" style="margin-top:10px" onclick="go('hawker_collect')">Open collect list →</button>
-    </div></div>`;
-};
-VIEWS.hawker_route = () => {
-  const st = stopState();
-  const items = STOPS.map((s, i) => `<div class="stop ${st[i] === "done" ? "done" : st[i] === "miss" ? "miss" : ""}">
-    <div class="n">${s.n}</div>
-    <div class="info"><b>${s.name}</b><small>${s.addr} · ${s.pubs}${s.collect ? " · collect " + fmtC(s.collect) : ""}</small></div>
-    ${st[i] === "pending"
-      ? `<button class="tapbtn ok" aria-label="delivered" onclick="markStop(${i},'done')">✓</button>
-         <button class="tapbtn no" aria-label="missed" onclick="markStop(${i},'miss')">✕</button>`
-      : `<span class="chip ${st[i] === "done" ? "good" : "crit"}">${st[i] === "done" ? "Delivered" : "Missed"}</span>`}
-  </div>`).join("");
-  const done = st.filter(x => x === "done").length;
-  return `<div class="field-col">` + pagehead("My Route — MN-04", `${done}/${STOPS.length} stops done · window 05:00–07:30`) + `
-    <div class="card">${items}</div>
-    <button class="btn block" style="margin-top:12px" onclick="store.set('stops', null);toast('Route reset (demo)');render()">Reset demo route</button></div>`;
-};
-window.markStop = (i, v) => {
-  const st = stopState(); st[i] = v; store.set("stops", st);
-  toast(v === "done" ? "Delivered ✓" : "Marked missed — customer notified"); render();
-};
-VIEWS.hawker_readers = () => {
-  const rows = CUSTOMERS.filter(c => c.route === "MN-04").map(c => `<tr class="rowbtn" onclick='custDetail("${c.id}")'>
-    <td><b>${c.name}</b><br><small style="color:var(--muted)">${c.addr.split(",")[0]}</small></td>
-    <td>${c.plan.split(" · ")[0]}</td><td class="r num">${c.out ? fmtC(c.out) : "—"}</td>
-    <td>${chip(c.status === "Active" ? "good" : "warn", c.status)}</td></tr>`).join("");
-  return pagehead("My Readers", "126 households on route MN-04") +
-    table(["Reader", "Plan", ">Due", "Status"], [rows]);
-};
-VIEWS.hawker_collect = () => {
-  const collected = store.get("hawkerCollected", []);
-  const items = PAYMENTS.map((p, i) => {
-    const isDone = collected.includes(p.id);
-    return `<div class="stop ${isDone ? "done" : ""}">
-      <div class="n">₹</div>
-      <div class="info"><b>${p.cust}</b><small>${p.id} · ${p.due}</small></div>
-      <b class="num" style="margin-right:6px">${fmtC(p.amt)}</b>
-      ${isDone ? `<span class="chip good">Collected</span>` : `<button class="btn good sm" onclick="hawkerCollect(${i})">Collect</button>`}</div>`;
-  }).join("");
-  const total = PAYMENTS.filter(p => collected.includes(p.id)).reduce((a, p) => a + p.amt, 0);
-  return `<div class="field-col">` + pagehead("Collect", "Payments due on my route") + `
-    <div class="bigstat">
-      <div class="card"><div class="lbl">Collected today</div><div class="v num up">${fmtC(1440 + total)}</div></div>
-      <div class="card"><div class="lbl">Still pending</div><div class="v num">${fmtC(PAYMENTS.filter(p => !collected.includes(p.id)).reduce((a, p) => a + p.amt, 0))}</div></div>
-    </div><div class="card">${items}</div></div>`;
-};
-window.hawkerCollect = i => {
-  const p = PAYMENTS[i];
-  formModal("Record payment", `${p.cust} · ${fmtC(p.amt)}`,
-    [{ k: "mode", label: "Mode", type: "select", opts: ["UPI (show QR)", "Cash"] }],
-    "Confirm received", v => {
-      const c = store.get("hawkerCollected", []); c.push(p.id); store.set("hawkerCollected", c);
-      store.push("receipts", { no: "R-" + Math.floor(99150 + Math.random() * 800), cust: p.cust, amt: p.amt, mode: v.mode || "UPI", by: S.user.name, at: "just now" });
-      api.post("/api/payments", { customer_name: p.cust, amount: p.amt, method: v.mode || "UPI", notes: "hawker collect" });
-      toast(`Receipt sent to customer — ${fmtC(p.amt)} ✓`); render();
-    });
-};
-VIEWS.hawker_earn = () => `<div class="field-col">` + pagehead("Earnings — July", "Delivery + incentives + referrals") + `
-    <div class="bigstat">
-      <div class="card"><div class="lbl">Month so far</div><div class="v num">₹4,318</div></div>
-      <div class="card"><div class="lbl">Projected</div><div class="v num up">₹9,860</div></div>
-    </div>
-    <div class="card pad">
-      <div class="stat-pair"><span>Delivery (₹0.35 × 12,336 copies)</span><b class="num">₹4,318</b></div>
-      <div class="stat-pair"><span>On-time streak bonus (26 days)</span><b class="num">₹150 on track</b></div>
-      <div class="stat-pair"><span>Referrals (2 × ₹100)</span><b class="num">₹200</b></div>
-      <div class="stat-pair"><span>Collection incentive</span><b class="num">₹312</b></div>
-      <div class="stat-pair"><span>June payout</span><b class="num up">₹9,214 · paid 05 Jul</b></div>
-    </div></div>`;
-
-/* ---- DCR Forms ---- */
-VIEWS.dcr_att = () => {
-  const att = store.get("dcrAtt", null);
-  return `<div class="field-col">` + pagehead("DCR — Attendance", "Daily Collection Register · field attendance") + `
-    <div class="card pad" style="text-align:center">
-      <div style="font-size:44px;margin-bottom:6px">${att ? "✅" : "🕘"}</div>
-      <h3 class="serif" style="font-size:18px">${att ? "Checked in at " + att : "You have not checked in"}</h3>
-      <p style="color:var(--muted);font-size:12.5px;margin:6px 0 14px">${TODAY} · GPS + selfie stamped on check-in</p>
-      ${att
-        ? `<button class="btn crit" onclick="store.set('dcrAtt',null);toast('Checked out — day summary saved');render()">Check out</button>`
-        : `<button class="btn pri" onclick="store.set('dcrAtt', new Date().toTimeString().slice(0,5));toast('Checked in ✓ GPS 26.85, 75.81');render()">✋ Check in now</button>`}
-    </div>
-    <div style="height:13px"></div>
-    <div class="card"><div class="cardhead"><h3>Today's visit plan</h3><span class="chip mut">${TOUR.length} visits</span></div>
-      ${TOUR.map(v => `<div class="exc"><div class="sev" style="background:var(--gold)"></div>
-        <div style="flex:1;min-width:0"><b>${v.time} · ${v.type}</b><small>${v.target}<br>${v.why}</small></div></div>`).join("")}</div></div>`;
-};
-VIEWS.dcr_visit = () => {
-  const visits = store.get("dcrVisits", []);
-  return `<div class="field-col">` + pagehead("DCR — Visit Entry", "Record each field visit with outcome & collections") + `
-    <button class="btn pri block" onclick="newVisit()" style="margin-bottom:13px">＋ New visit entry</button>
-    <div class="card">${visits.length ? visits.slice().reverse().map(v => `<div class="exc">
-        <div class="sev" style="background:var(--grn)"></div>
-        <div style="flex:1;min-width:0"><b>${esc(v.type)} — ${esc(v.target)}</b>
-        <small>${esc(v.outcome)}${Number(v.amt) ? " · collected " + fmtC(Number(v.amt)) : ""}${v.notes ? " · " + esc(v.notes) : ""}</small></div>
-        <small style="color:var(--muted)">${v.at}</small></div>`).join("")
-      : `<div style="padding:22px;text-align:center;color:var(--muted)">No visits recorded yet today.</div>`}</div></div>`;
-};
-window.newVisit = () => formModal("New visit entry", "GPS and time are stamped automatically.",
-  [{ k: "type", label: "Visit type", type: "select", opts: ["Agency visit", "Hawker visit", "Reader visit", "New area survey", "Collection visit"] },
-   { k: "target", label: "Visited whom / where", ph: "e.g. Shivam Distributors — Mansarovar" },
-   { k: "outcome", label: "Outcome", type: "select", opts: ["Completed — positive", "Completed — follow-up needed", "Payment collected", "Not available", "Rescheduled"] },
-   { k: "amt", label: "Amount collected (₹, if any)", type: "number", val: 0 },
-   { k: "notes", label: "Notes", type: "textarea", ph: "key points, commitments, issues" }],
-  "Save visit", v => {
-    if (!v.target) { toast("Enter whom you visited"); return false; }
-    store.push("dcrVisits", { ...v, at: new Date().toTimeString().slice(0, 5) });
-    api.post("/api/visits", { visit_type: v.type, target: v.target, outcome: v.outcome, amount: Number(v.amt) || 0, notes: v.notes || "" });
-    toast("Visit saved ✓"); render();
-  });
-VIEWS.dcr_report = () => {
-  const visits = store.get("dcrVisits", []);
-  const total = visits.reduce((a, v) => a + (Number(v.amt) || 0), 0);
-  const submitted = store.get("dcrSubmitted", false);
-  return `<div class="field-col">` + pagehead("DCR — Day Report", "Submit once at end of day · locks the register") + `
-    <div class="bigstat">
-      <div class="card"><div class="lbl">Visits logged</div><div class="v num">${visits.length}</div></div>
-      <div class="card"><div class="lbl">Collected on visits</div><div class="v num up">${fmtC(total)}</div></div>
-    </div>
-    <div class="card pad">
-      <div class="stat-pair"><span>Attendance</span><b>${store.get("dcrAtt", null) ? "Checked in ✓" : "Missing ✕"}</b></div>
-      <div class="stat-pair"><span>Planned visits covered</span><b class="num">${Math.min(visits.length, TOUR.length)} / ${TOUR.length}</b></div>
-      <div class="stat-pair"><span>Status</span><b>${submitted ? "Submitted to DMO ✓" : "Draft"}</b></div>
-      ${submitted ? "" : `<button class="btn pri block" style="margin-top:12px" onclick="store.set('dcrSubmitted',true);toast('Day report submitted to DMO ✓');render()">Submit day report</button>`}
-    </div>
-    ${submitted ? `<button class="btn block" style="margin-top:12px" onclick="store.set('dcrSubmitted',false);store.set('dcrVisits',[]);toast('Demo reset');render()">Reset demo</button>` : ""}</div>`;
-};
-
-/* ---- Survey Form ---- */
-VIEWS.survey_new = () => `<div class="field-col">` + pagehead("Survey — New Lead", "Field lead capture · takes under a minute") + `
-    <div class="card pad">
-      <div class="fld"><label>Respondent name *</label><input id="sv_name" placeholder="Full name"></div>
-      <div class="fld"><label>Mobile *</label><input id="sv_phone" type="tel" maxlength="10" placeholder="10-digit mobile"></div>
-      <div class="fld"><label>Area / colony</label><input id="sv_area" placeholder="e.g. Nirman Nagar B"></div>
-      <div class="fld"><label>Currently reads</label><select id="sv_current">
-        <option>No newspaper</option><option>Rajasthan Patrika</option><option>Dainik Bhaskar</option><option>Times of India</option><option>Other</option></select></div>
-      <div class="fld"><label>Interested in</label><select id="sv_pub">
-        <option>Rajasthan Patrika City</option><option>RP City + Patrika Plus</option><option>Catch (weekly)</option><option>Trial 14-day (free)</option></select></div>
-      <div class="fld"><label>Interest level</label><select id="sv_interest">
-        <option>High — start immediately</option><option>Medium — needs follow-up</option><option>Low — revisit later</option></select></div>
-      <div class="fld"><label>Remarks</label><textarea id="sv_notes" placeholder="preferences, best time to visit…"></textarea></div>
-      <div class="stat-pair" style="border:none"><span>📍 GPS</span><b class="num">26.8512, 75.8125 (auto)</b></div>
-      <button class="btn pri block" onclick="submitSurvey()">Submit survey ✓</button>
-    </div></div>`;
-window.submitSurvey = () => {
-  const g = id => document.getElementById(id).value.trim();
-  const name = g("sv_name"), phone = g("sv_phone").replace(/\D/g, "");
-  if (!name || !/^\d{10}$/.test(phone)) { toast("Name and a valid 10-digit mobile are required"); return; }
-  const interest = g("sv_interest");
-  store.push("leads", { name, phone, area: g("sv_area") || "—", pub: g("sv_pub"), stage: "Surveyed",
-    next: interest.startsWith("High") ? "Start subscription" : "Follow up",
-    score: interest.startsWith("High") ? 85 : interest.startsWith("Medium") ? 60 : 35,
-    notes: g("sv_notes"), at: TODAY });
-  api.post("/api/leads", { name, mobile: phone, area: g("sv_area") || "—", publication: g("sv_pub"), interest, notes: g("sv_notes") });
-  toast("Survey submitted ✓ Lead added"); go("survey_leads");
-};
-VIEWS.survey_leads = () => {
-  const mine = store.get("leads", []);
-  const all = [...mine.slice().reverse(), ...LEADLIST];
-  const rows = all.map(l => `<tr>
-    <td><b>${esc(l.name)}</b><br><small style="color:var(--muted)">${esc(l.area)} · ${esc(l.phone)}</small></td>
-    <td>${esc(l.pub)}</td>
-    <td>${chip(l.stage === "Converted" ? "good" : "info", l.stage)}</td>
-    <td><div class="bar"><i style="width:${l.score}%;background:${l.score >= 75 ? "var(--grn)" : "var(--gold)"}"></i></div></td></tr>`).join("");
-  return pagehead("My Leads", `${all.length} leads · ${mine.length} captured by you`,
-    `<button class="btn pri" onclick="go('survey_new')">＋ New survey</button>`) +
-    table(["Lead", "Publication", "Stage", "Score"], [rows]);
-};
-
-/* ---- Taxi Fleet ---- */
-VIEWS.taxi_trips = () => {
-  const mine = store.get("trips", []);
-  const rows = [...mine.slice().reverse(), ...TRIPS].map(tp => `<tr>
-    <td><b>${tp.id}</b><br><small style="color:var(--muted)">${esc(tp.veh)}</small></td>
-    <td>${esc(tp.driver)}</td><td>${esc(tp.route)}</td><td class="r num">${tp.load}</td>
-    <td>${chip(tp.status === "Completed" ? "good" : tp.status === "Delayed" ? "crit" : "info", tp.status)}</td></tr>`).join("");
-  return pagehead("Taxi Fleet — Today's Trips", "Press dispatch runs · " + TODAY,
-    `<button class="btn pri" onclick="go('taxi_log')">＋ Log trip</button>`) +
-    table(["Trip", "Driver", "Route", ">Load", "Status"], [rows]);
-};
-VIEWS.taxi_log = () => `<div class="field-col">` + pagehead("Log Trip", "Record a dispatch run") + `
-    <div class="card pad">
-      <div class="fld"><label>Vehicle *</label><select id="tx_veh">${VEHICLES.map(v => `<option>${v.no} — ${v.type}</option>`).join("")}</select></div>
-      <div class="fld"><label>Route *</label><input id="tx_route" placeholder="e.g. Press → Chomu → Samod"></div>
-      <div class="fld"><label>Copies loaded</label><input id="tx_load" type="number" placeholder="e.g. 4200"></div>
-      <div class="fld"><label>Departure time</label><input id="tx_dep" type="time" value="04:30"></div>
-      <div class="fld"><label>Notes</label><textarea id="tx_notes" placeholder="checkpoints, handover details…"></textarea></div>
-      <button class="btn pri block" onclick="logTrip()">Start trip ✓</button>
-    </div></div>`;
-window.logTrip = () => {
-  const g = id => document.getElementById(id).value.trim();
-  if (!g("tx_route")) { toast("Enter the route"); return; }
-  const vehNo = g("tx_veh").split(" — ")[0];
-  store.push("trips", { id: "T-" + Math.floor(4480 + Math.random() * 400), veh: vehNo, driver: S.user.name,
-    load: fmtN(Number(g("tx_load")) || 0), route: g("tx_route"), dep: g("tx_dep"), eta: "—", status: "In transit", delay: 0 });
-  api.post("/api/trips", { vehicle_no: vehNo, route: g("tx_route"), bundles: Number(g("tx_load")) || 0, departure: g("tx_dep") });
-  toast("Trip started — live tracking on ✓"); go("taxi_trips");
-};
-VIEWS.taxi_vehicles = () => {
-  const rows = VEHICLES.map(v => `<tr><td><b>${v.no}</b></td><td>${v.type}</td><td>${v.driver}</td>
-    <td class="num">${v.fitness}</td><td class="num">${v.insurance}</td>
-    <td>${chip(v.status === "Idle" ? "mut" : v.status === "Delayed" ? "crit" : "good", v.status)}</td></tr>`).join("");
-  return pagehead("Vehicles", "Fleet register & compliance") +
-    table(["Vehicle", "Type", "Driver", "Fitness", "Insurance", "Status"], [rows]);
-};
+/* Field apps: Agent & DCR are native modules (defined above); Hawker/Survey/Taxi open
+   their real prototype via iframe (app_<key>). Legacy in-SPA field screens removed here. */
 
 /* ═══════════ READERS CONNECT ═══════════ */
 
@@ -7498,12 +7368,14 @@ function sideHTML() {
     if (g.apps) html += g.apps.map(a => {
       const scr = "app_" + a.key;
       const nm = (APP_META[a.key] && APP_META[a.key].name) || a.label;
-      const inApp = a.key === "agent" && (S.screen === "app_agent" || String(S.screen).indexOf("agent_") === 0);
+      const inApp = S.screen === scr || String(S.screen).indexOf(a.key + "_") === 0;
+      const mods = a.key === "agent" ? (typeof AGENT_MODULES !== "undefined" ? AGENT_MODULES : null)
+        : a.key === "dcr" ? (typeof DCR_MODULES !== "undefined" ? DCR_MODULES : null) : null;
       let h = `<button class="nav-item ${S.screen === scr ? "on" : ""}" onclick="go('${scr}')">
         <span class="nico" style="background:${a.tint}">${a.icon}</span><span>${nm}</span></button>`;
-      // When inside the Agent app, expand its feature modules in the sidebar for easy access
-      if (inApp && typeof AGENT_MODULES !== "undefined") {
-        h += `<div class="subnav">${AGENT_MODULES.map(m => `<button class="nav-item ${S.screen === m.screen ? "on" : ""}" onclick="go('${m.screen}')"><span>${m.icon} ${m.label}</span></button>`).join("")}</div>`;
+      // When inside an app that has feature modules, expand them in the sidebar for easy access
+      if (inApp && mods) {
+        h += `<div class="subnav">${mods.map(m => `<button class="nav-item ${S.screen === m.screen ? "on" : ""}" onclick="go('${m.screen}')"><span>${m.icon} ${m.label}</span></button>`).join("")}</div>`;
       }
       return h;
     }).join("");

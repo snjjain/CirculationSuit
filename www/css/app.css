@@ -211,6 +211,13 @@ td.r,th.r{text-align:right}
   .appframe-wrap{height:calc(100dvh - var(--header-h) - 150px)}
 }
 
+/* DCR visit-target search results */
+.dcr-results{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;max-height:280px;overflow-y:auto}
+.dcr-opt{text-align:left;padding:9px 12px;border:1px solid var(--brd);border-radius:var(--r-sm);background:var(--surf)}
+.dcr-opt:hover{border-color:var(--gold);background:var(--surf2)}
+.dcr-opt b{display:block;font-size:13.5px}
+.dcr-opt small{color:var(--muted);font-size:11.5px}
+
 /* Hero (home) */
 .hero{background:linear-gradient(135deg,var(--navy) 0%,#2A3F65 100%);border-radius:var(--r);color:#fff;padding:22px;margin-bottom:15px;position:relative;overflow:hidden}
 .hero::after{content:"";position:absolute;inset:0;background:radial-gradient(420px 200px at 90% 0%,rgba(201,150,26,.28),transparent 60%)}
