@@ -186,12 +186,18 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
       const ip = ipOf(req);
       if (!ident || !password) return res.status(400).json({ detail: 'User ID / mobile number and password are required' });
 
+      // Identity can be a User ID, a mobile number, OR a staff employee code
+      // (hierarchy_master.employee_code — used by circulation staff for the DCR app).
       const { rows } = await q(
-        `SELECT * FROM app_users
-         WHERE (username IS NOT NULL AND LOWER(username) = LOWER(?))
-            OR (mobile   IS NOT NULL AND mobile = ? AND ? <> '')
+        `SELECT au.* FROM app_users au
+         WHERE (au.username IS NOT NULL AND LOWER(au.username) = LOWER(?))
+            OR (au.mobile   IS NOT NULL AND au.mobile = ? AND ? <> '')
+            OR (au.person_code IN (
+                  SELECT person_code FROM hierarchy_master
+                   WHERE employee_code IS NOT NULL AND employee_code <> '0'
+                     AND UPPER(employee_code) = UPPER(?)))
          LIMIT 1`,
-        [ident, identDig, identDig]);
+        [ident, identDig, identDig, ident]);
       const u = rows[0];
       if (!u) { await audit('login_fail', { detail: `unknown id ${ident}`, ip }); return res.status(401).json({ detail: 'Invalid User ID / mobile number or password' }); }
       if (!u.is_active) { await audit('login_fail', { target: u.person_code, actorName: u.name, detail: 'inactive account', ip }); return res.status(403).json({ detail: 'Your account is inactive. Please contact the administrator.' }); }
