@@ -360,7 +360,7 @@ VIEWS.home = () => {
     const a = APP_MENU[k]; if (!a) return;
     if (typeof permAllows === "function" && permAllows(k, "view") === false) return;
     const m = APP_META[k] || {};
-    cards.push({ screen:a.sub[0][0], name:m.name || a.label, audience:m.audience || "",
+    cards.push({ screen:"app_" + k, name:m.name || a.label, audience:m.audience || "",
       icon:a.icon, tint:a.tint, desc:a.desc, tags:a.sub.map(s => s[1]) });
   });
 
@@ -377,6 +377,19 @@ VIEWS.home = () => {
     <div class="sb-lbl" style="padding-left:2px">Your Applications</div>
     ${grid}`;
 };
+
+/* ---- Field apps served as their real standalone HTML, opened inside the authenticated
+        shell (SSO — the app auto-skips its own login using the shared session). ---- */
+function appFrameView(key) {
+  const title = (APP_META[key] && APP_META[key].name) || (APP_MENU[key] && APP_MENU[key].label) || key;
+  return `<div class="appframe-bar">
+      <button class="btn sm" onclick="go('home')" aria-label="Back to applications">← Apps</button>
+      <b>${title}</b>
+      <button class="btn sm" onclick="var f=document.querySelector('.appframe'); if(f) f.contentWindow.location.reload();" aria-label="Reload app">↻</button>
+    </div>
+    <div class="appframe-wrap"><iframe class="appframe" src="apps/${key}.html" title="${title}" allow="geolocation; clipboard-write"></iframe></div>`;
+}
+Object.keys(APP_META).forEach(k => { VIEWS["app_" + k] = () => appFrameView(k); });
 
 /* ---- Dashboard: Command Centre ---- */
 /* ── Command Centre helpers ─────────────────────────────── */
@@ -7190,11 +7203,10 @@ function sideHTML() {
     if (g.items) html += g.items.map(i => `<button class="nav-item ${S.screen === i.id ? "on" : ""}" onclick="go('${i.id}')">
       <span class="nico">${i.icon}</span><span>${i.label}</span>${i.badge ? `<span class="cnt num">${i.badge}</span>` : ""}</button>`).join("");
     if (g.apps) html += g.apps.map(a => {
-      const active = a.sub.some(s => s[0] === S.screen);
-      const open = S.openGroups[a.key] ?? active;
-      return `<button class="nav-item ${active ? "on" : ""}" onclick="toggleGroup('${a.key}')" aria-expanded="${open}">
-        <span class="nico" style="background:${a.tint}">${a.icon}</span><span>${a.label}</span><span class="chev ${open ? "open" : ""}">▶</span></button>
-        ${open ? `<div class="subnav">${a.sub.map(s => `<button class="nav-item ${S.screen === s[0] ? "on" : ""}" onclick="go('${s[0]}')"><span>${s[1]}</span></button>`).join("")}</div>` : ""}`;
+      const scr = "app_" + a.key;
+      const nm = (APP_META[a.key] && APP_META[a.key].name) || a.label;
+      return `<button class="nav-item ${S.screen === scr ? "on" : ""}" onclick="go('${scr}')">
+        <span class="nico" style="background:${a.tint}">${a.icon}</span><span>${nm}</span></button>`;
     }).join("");
   }
   html += `<div class="side-foot">Patrika Vitran Suite · v1.0</div>`;
@@ -7207,10 +7219,10 @@ function bottomHTML() {
   if (u.dashboard) {
     if (hl <= 4) items.push(["command", "Dashboard", "📊"], ["approvals", "Approvals", "✅"]);
     else         items.push(["routes",  "Routes",    "🛣️"], ["collections", "Collect", "₹"]);
-  } else {
-    const first = APP_MENU[u.modules[0]];
-    items.push([first.sub[0][0], first.label.split(" ")[0], first.icon]);
-    if (u.modules[1]) { const b = APP_MENU[u.modules[1]]; items.push([b.sub[0][0], b.label.split(" ")[0], b.icon]); }
+  } else if (u.modules && u.modules.length) {
+    const nm = k => (APP_META[k] && APP_META[k].name) || APP_MENU[k].label.split(" ")[0];
+    items.push(["app_" + u.modules[0], nm(u.modules[0]), APP_MENU[u.modules[0]].icon]);
+    if (u.modules[1]) items.push(["app_" + u.modules[1], nm(u.modules[1]), APP_MENU[u.modules[1]].icon]);
   }
   items.push(["__menu", "Menu", "☰"]);
   return items.map(([id, label, ico]) => `<button class="${S.screen === id ? "on" : ""}"

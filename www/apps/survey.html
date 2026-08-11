@@ -1,0 +1,1127 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Lead Survey Form · Patrika</title>
+<style>
+/* ── TOKENS ─────────────────────────────────────── */
+:root{
+  --grn:#1A6B45;--grn-d:#124D32;--grn-l:rgba(26,107,69,.10);--grn-ll:#EAF4EE;
+  --navy:#1C2B45;--gold:#D4820A;--gold-l:rgba(212,130,10,.10);
+  --red:#C0392B;--red-l:rgba(192,57,43,.09);
+  --amb:#D97706;--amb-l:rgba(217,119,6,.10);
+  --blue:#1565C0;--blue-l:rgba(21,101,192,.09);
+  --pur:#6D28D9;--pur-l:rgba(109,40,217,.09);
+  --slt:#475569;--slt-l:rgba(71,85,105,.09);
+  --bg:#F4F8F5;--surf:#FFFFFF;--surf2:#EDF2EE;
+  --brd:rgba(26,107,69,.14);
+  --txt:#1C2B45;--txt2:#3D5A48;--txt3:#7A9A85;
+  --auto-bg:#EAF4EE;--auto-brd:rgba(26,107,69,.22);
+  --shd:0 2px 10px rgba(26,107,69,.09);
+  --shd-lg:0 6px 24px rgba(26,107,69,.14);
+  --r:12px;--r-sm:8px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#0C1812;--surf:#142010;--surf2:#1C2E1C;
+  --brd:rgba(26,107,69,.22);--txt:#DCF0E4;--txt2:#8ABBA0;--txt3:#476B56;
+  --auto-bg:rgba(26,107,69,.18);--auto-brd:rgba(26,107,69,.35);
+  --shd:0 2px 10px rgba(0,0,0,.3);--shd-lg:0 6px 24px rgba(0,0,0,.4);
+  --grn-l:rgba(26,107,69,.2);--grn-ll:rgba(26,107,69,.15);
+  --gold-l:rgba(212,130,10,.15);--red-l:rgba(192,57,43,.15);
+  --amb-l:rgba(217,119,6,.15);--blue-l:rgba(21,101,192,.15);--pur-l:rgba(109,40,217,.15);--slt-l:rgba(71,85,105,.15);
+}}
+:root[data-theme=dark]{
+  --bg:#0C1812;--surf:#142010;--surf2:#1C2E1C;
+  --brd:rgba(26,107,69,.22);--txt:#DCF0E4;--txt2:#8ABBA0;--txt3:#476B56;
+  --auto-bg:rgba(26,107,69,.18);--auto-brd:rgba(26,107,69,.35);
+  --shd:0 2px 10px rgba(0,0,0,.3);--shd-lg:0 6px 24px rgba(0,0,0,.4);
+  --grn-l:rgba(26,107,69,.2);--grn-ll:rgba(26,107,69,.15);
+  --gold-l:rgba(212,130,10,.15);--red-l:rgba(192,57,43,.15);
+  --amb-l:rgba(217,119,6,.15);--blue-l:rgba(21,101,192,.15);--pur-l:rgba(109,40,217,.15);--slt-l:rgba(71,85,105,.15);
+}
+:root[data-theme=light]{
+  --bg:#F4F8F5;--surf:#FFFFFF;--surf2:#EDF2EE;
+  --brd:rgba(26,107,69,.14);--txt:#1C2B45;--txt2:#3D5A48;--txt3:#7A9A85;
+  --auto-bg:#EAF4EE;--auto-brd:rgba(26,107,69,.22);
+  --shd:0 2px 10px rgba(26,107,69,.09);--shd-lg:0 6px 24px rgba(26,107,69,.14);
+  --grn-l:rgba(26,107,69,.10);--grn-ll:#EAF4EE;
+  --gold-l:rgba(212,130,10,.10);--red-l:rgba(192,57,43,.09);
+  --amb-l:rgba(217,119,6,.10);--blue-l:rgba(21,101,192,.09);--pur-l:rgba(109,40,217,.09);--slt-l:rgba(71,85,105,.09);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:system-ui,-apple-system,'Segoe UI',sans-serif;
+  background:#1A3020;min-height:100vh;display:flex;
+  align-items:center;justify-content:center;padding:24px;
+  background-image:radial-gradient(ellipse at 20% 20%,rgba(26,107,69,.3) 0%,transparent 55%),
+                   radial-gradient(ellipse at 80% 90%,rgba(212,130,10,.08) 0%,transparent 50%);
+}
+
+/* ── PHONE ──────────────────────────────────────── */
+.phone{
+  width:390px;height:844px;background:var(--bg);border-radius:44px;overflow:hidden;
+  position:relative;display:flex;flex-direction:column;
+  box-shadow:0 0 0 10px #0A1510,0 30px 80px rgba(0,0,0,.55),inset 0 0 0 2px #1E3025;
+}
+.sbar{
+  height:44px;background:var(--grn-d);flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between;padding:0 22px;
+}
+.sbar .t{color:#fff;font-size:15px;font-weight:600}
+.sbar .ic{color:rgba(255,255,255,.7);font-size:11px;display:flex;gap:6px}
+
+/* ── SCREENS ────────────────────────────────────── */
+.screen{display:none;flex-direction:column;flex:1;overflow:hidden}
+.screen.active{display:flex}
+
+/* ── SCROLLABLE BODY ────────────────────────────── */
+.scr-body{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.scr-body::-webkit-scrollbar{display:none}
+
+/* ── TOAST ──────────────────────────────────────── */
+.toast{
+  position:absolute;bottom:80px;left:14px;right:14px;
+  background:var(--navy);color:#fff;border-radius:var(--r-sm);
+  padding:12px 16px;font-size:13px;font-weight:600;
+  display:flex;align-items:center;gap:10px;z-index:200;
+  box-shadow:var(--shd-lg);transform:translateY(120%);opacity:0;
+  transition:transform .3s,opacity .3s;pointer-events:none;
+}
+.toast.show{transform:translateY(0);opacity:1}
+.toast .tk{width:22px;height:22px;border-radius:50%;background:var(--grn);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
+
+/* ── THEME TOGGLE ───────────────────────────────── */
+.theme-btn{
+  position:fixed;top:18px;right:18px;
+  background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);
+  color:#fff;padding:7px 13px;border-radius:20px;cursor:pointer;
+  font-size:12px;font-weight:600;backdrop-filter:blur(8px);z-index:1000;
+}
+
+/* ════════════════════════════════════
+   LOGIN
+════════════════════════════════════ */
+#scr-login{background:var(--grn-d)}
+.login-wrap{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 22px}
+.login-logo .mark{font-family:Georgia,serif;font-size:34px;font-weight:700;color:#fff;letter-spacing:-1px;text-align:center}
+.login-logo .mark span{color:#6EE0A0}
+.login-logo .sub{font-size:11px;color:rgba(255,255,255,.4);letter-spacing:1.8px;text-transform:uppercase;margin-top:4px;text-align:center}
+.login-logo .form-tag{
+  display:inline-block;margin-top:10px;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);
+  border-radius:20px;padding:4px 14px;font-size:11px;color:rgba(255,255,255,.6);
+}
+.l-card{
+  width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);
+  border-radius:20px;padding:22px;backdrop-filter:blur(20px);margin-top:28px;
+}
+.l-card h2{font-family:Georgia,serif;font-size:20px;color:#fff;margin-bottom:3px}
+.l-card .sub{font-size:12px;color:rgba(255,255,255,.4);margin-bottom:20px}
+.l-inp{
+  width:100%;padding:13px 15px;border-radius:10px;
+  border:1.5px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);
+  font-size:15px;color:#fff;outline:none;margin-bottom:10px;
+  font-family:inherit;transition:border-color .15s;
+}
+.l-inp::placeholder{color:rgba(255,255,255,.28)}
+.l-inp:focus{border-color:#6EE0A0}
+.l-prefix{position:relative}
+.l-prefix .pfx{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:rgba(255,255,255,.35);font-size:14px}
+.l-prefix .l-inp{padding-left:44px}
+.l-btn{width:100%;padding:14px;border-radius:10px;background:var(--grn);border:none;color:#fff;font-size:15px;font-weight:700;cursor:pointer;margin-top:4px;letter-spacing:.2px}
+.l-otp-hint{font-size:11px;color:rgba(255,255,255,.3);text-align:center;margin-top:10px;cursor:pointer}
+.l-footer{margin-top:20px;font-size:10px;color:rgba(255,255,255,.2);text-align:center}
+
+/* ════════════════════════════════════
+   FORM SCREEN
+════════════════════════════════════ */
+.form-hdr{
+  background:linear-gradient(160deg,var(--grn-d),var(--grn));
+  padding:12px 18px 14px;flex-shrink:0;
+}
+.fh-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.fh-title{font-family:Georgia,serif;font-size:16px;font-weight:700;color:#fff}
+.fh-sub{font-size:10px;color:rgba(255,255,255,.55);margin-top:1px}
+.fh-back{width:32px;height:32px;border-radius:50%;border:none;cursor:pointer;background:rgba(255,255,255,.12);color:#fff;font-size:15px;display:flex;align-items:center;justify-content:center}
+.fh-save{padding:6px 14px;border-radius:16px;border:none;cursor:pointer;background:rgba(255,255,255,.15);color:#fff;font-size:12px;font-weight:600}
+
+/* Progress strip */
+.prog-strip{display:flex;gap:3px;padding:0 18px 0;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.prog-strip::-webkit-scrollbar{display:none}
+.prog-pill{
+  flex-shrink:0;height:4px;border-radius:2px;
+  background:rgba(255,255,255,.22);transition:background .2s,width .2s;
+  min-width:18px;
+}
+.prog-pill.done{background:rgba(255,255,255,.75)}
+.prog-pill.active{background:#6EE0A0;flex:2}
+
+/* Section anchor pills */
+.sec-nav{
+  display:flex;gap:6px;padding:10px 14px;overflow-x:auto;scrollbar-width:none;
+  background:var(--surf);border-bottom:1px solid var(--brd);flex-shrink:0;
+}
+.sec-nav::-webkit-scrollbar{display:none}
+.sn-pill{
+  flex-shrink:0;padding:5px 11px;border-radius:20px;
+  background:var(--surf2);border:1.5px solid var(--brd);
+  font-size:10px;font-weight:700;color:var(--txt3);cursor:pointer;white-space:nowrap;
+  transition:all .15s;
+}
+.sn-pill.active{background:var(--grn-l);border-color:rgba(26,107,69,.35);color:var(--grn)}
+
+/* ── FORM ELEMENTS ──────────────────────────────── */
+.sec{padding:0 14px;margin-bottom:6px}
+.sec-hdr{
+  display:flex;align-items:center;gap:9px;padding:14px 0 10px;
+}
+.sec-num{
+  width:24px;height:24px;border-radius:50%;background:var(--grn);
+  color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.sec-title{font-family:Georgia,serif;font-size:14px;font-weight:700;color:var(--txt)}
+.sec-divider{height:1px;background:var(--brd);margin-bottom:12px}
+.card{background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);overflow:hidden;margin-bottom:10px}
+.cp{padding:13px 14px}
+
+.fl{font-size:11px;font-weight:700;color:var(--txt2);letter-spacing:.3px;display:block;margin-bottom:5px}
+.fl .req{color:var(--red)}
+.fg{margin-bottom:12px}
+.fg:last-child{margin-bottom:0}
+
+/* Input */
+.inp{
+  width:100%;padding:10px 13px;border-radius:var(--r-sm);
+  border:1.5px solid var(--brd);background:var(--surf2);
+  font-size:14px;color:var(--txt);outline:none;transition:border-color .15s;font-family:inherit;
+}
+.inp:focus{border-color:var(--grn)}
+.inp::placeholder{color:var(--txt3)}
+.inp-sel{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%237A9A85' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center;padding-right:30px;cursor:pointer}
+
+/* Auto field */
+.inp-auto{
+  background:var(--auto-bg);border-color:var(--auto-brd);color:var(--grn);
+  font-weight:600;cursor:not-allowed;
+}
+.auto-tag{
+  display:inline-flex;align-items:center;gap:3px;
+  background:var(--grn);color:#fff;border-radius:4px;
+  font-size:9px;font-weight:700;padding:1px 6px;letter-spacing:.3px;vertical-align:middle;margin-left:5px;
+}
+
+/* Grid rows */
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+
+/* Radio/chip groups */
+.chip-group{display:flex;flex-wrap:wrap;gap:7px}
+.chip{
+  padding:7px 13px;border-radius:20px;border:1.5px solid var(--brd);
+  background:var(--surf2);font-size:12px;color:var(--txt2);cursor:pointer;
+  font-weight:500;transition:all .15s;-webkit-tap-highlight-color:transparent;white-space:nowrap;
+}
+.chip:active{transform:scale(.96)}
+.chip.on-grn{border-color:var(--grn);background:var(--grn-l);color:var(--grn);font-weight:700}
+.chip.on-red{border-color:var(--red);background:var(--red-l);color:var(--red);font-weight:700}
+.chip.on-amb{border-color:var(--amb);background:var(--amb-l);color:var(--amb);font-weight:700}
+.chip.on-blue{border-color:var(--blue);background:var(--blue-l);color:var(--blue);font-weight:700}
+.chip.on-pur{border-color:var(--pur);background:var(--pur-l);color:var(--pur);font-weight:700}
+.chip.on-slt{border-color:var(--slt);background:var(--slt-l);color:var(--slt);font-weight:700}
+
+/* Interest grid */
+.int-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.int-chip{
+  padding:9px 12px;border-radius:var(--r-sm);border:1.5px solid var(--brd);
+  background:var(--surf2);font-size:12px;color:var(--txt2);cursor:pointer;
+  font-weight:500;display:flex;align-items:center;gap:7px;
+  transition:all .15s;-webkit-tap-highlight-color:transparent;
+}
+.int-chip .cb{
+  width:16px;height:16px;border-radius:4px;border:1.5px solid var(--brd);
+  background:var(--surf);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;
+}
+.int-chip.on .cb{background:var(--grn);border-color:var(--grn);color:#fff}
+.int-chip.on{border-color:rgba(26,107,69,.3);background:var(--grn-l)}
+
+/* Lead status */
+.lead-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.lead-chip{
+  padding:11px 10px;border-radius:var(--r-sm);border:2px solid var(--brd);
+  background:var(--surf2);cursor:pointer;text-align:center;
+  transition:all .15s;-webkit-tap-highlight-color:transparent;
+}
+.lead-chip .lico{font-size:18px;display:block;margin-bottom:4px}
+.lead-chip .ltxt{font-size:11px;font-weight:700;color:var(--txt2)}
+.lead-chip .lsub{font-size:9px;color:var(--txt3);margin-top:2px}
+.lead-chip.sel-grn{border-color:var(--grn);background:var(--grn-l)}
+.lead-chip.sel-grn .ltxt{color:var(--grn)}
+.lead-chip.sel-amb{border-color:var(--amb);background:var(--amb-l)}
+.lead-chip.sel-amb .ltxt{color:var(--amb)}
+.lead-chip.sel-red{border-color:var(--red);background:var(--red-l)}
+.lead-chip.sel-red .ltxt{color:var(--red)}
+.lead-chip.sel-slt{border-color:var(--slt);background:var(--slt-l)}
+.lead-chip.sel-slt .ltxt{color:var(--slt)}
+.lead-chip.sel-pur{border-color:var(--pur);background:var(--pur-l)}
+.lead-chip.sel-pur .ltxt{color:var(--pur)}
+.lead-chip.sel-blue{border-color:var(--blue);background:var(--blue-l)}
+.lead-chip.sel-blue .ltxt{color:var(--blue)}
+
+/* Follow-up section */
+#sec-followup{transition:opacity .3s;display:none}
+#sec-followup.visible{display:block}
+
+/* Photo blocks */
+.photo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.photo-block{
+  aspect-ratio:1;border:2px dashed var(--brd);border-radius:var(--r-sm);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:4px;cursor:pointer;transition:border-color .15s;background:var(--surf2);
+}
+.photo-block:hover{border-color:var(--grn)}
+.photo-block .pico{font-size:22px}
+.photo-block .plbl{font-size:9px;font-weight:700;color:var(--txt3);text-align:center;line-height:1.3}
+.photo-block.taken{border-color:var(--grn);background:var(--grn-l)}
+.photo-block.taken .pico::after{content:'✓';font-size:10px;color:var(--grn)}
+
+/* Status workflow info */
+.workflow-pill{
+  display:flex;align-items:flex-start;gap:9px;padding:9px 12px;
+  border-radius:var(--r-sm);margin-bottom:6px;
+}
+.wp-ico{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;margin-top:1px}
+.wp-txt strong{font-size:11px;font-weight:700;display:block}
+.wp-txt span{font-size:10px;opacity:.8;line-height:1.4;display:block}
+
+/* ── BOTTOM ACTION BAR ──────────────────────────── */
+.action-bar{
+  background:var(--surf);border-top:1px solid var(--brd);
+  padding:12px 14px;flex-shrink:0;display:flex;gap:8px;
+}
+.btn{
+  flex:1;padding:12px 8px;border-radius:var(--r-sm);border:none;cursor:pointer;
+  font-size:13px;font-weight:700;transition:opacity .15s,transform .1s;
+}
+.btn:active{opacity:.85;transform:scale(.98)}
+.btn-grn{background:var(--grn);color:#fff}
+.btn-navy{background:var(--navy);color:#fff}
+.btn-out{background:transparent;border:1.5px solid var(--brd);color:var(--txt2);flex:.6}
+
+/* Char counter */
+.char-counter{font-size:10px;color:var(--txt3);text-align:right;margin-top:4px}
+.char-counter.warn{color:var(--amb)}
+.char-counter.over{color:var(--red)}
+
+/* GPS capture bar */
+.gps-bar{
+  display:flex;align-items:center;gap:9px;padding:9px 11px;
+  border-radius:var(--r-sm);background:var(--auto-bg);border:1.5px solid var(--auto-brd);
+}
+.gps-dot{width:9px;height:9px;border-radius:50%;background:var(--grn);flex-shrink:0;animation:gp 1.8s infinite}
+@keyframes gp{0%,100%{box-shadow:0 0 0 0 rgba(26,107,69,.5)}50%{box-shadow:0 0 0 6px rgba(26,107,69,0)}}
+.gps-bar strong{font-size:12px;font-weight:700;color:var(--grn);display:block}
+.gps-bar span{font-size:10px;color:var(--txt3)}
+
+/* Conditional expand */
+.cond-block{overflow:hidden;max-height:0;transition:max-height .35s ease}
+.cond-block.open{max-height:600px}
+
+/* hint */
+.hint{font-size:10px;color:var(--txt3);margin-top:4px}
+
+/* ── SUCCESS SCREEN ─────────────────────────────── */
+#scr-success{background:var(--grn-d)}
+.success-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center}
+.success-ico{font-size:64px;margin-bottom:16px}
+.success-title{font-family:Georgia,serif;font-size:24px;font-weight:700;color:#fff;margin-bottom:8px}
+.success-msg{font-size:13px;color:rgba(255,255,255,.65);line-height:1.6;margin-bottom:28px}
+.suc-detail{background:rgba(255,255,255,.08);border-radius:var(--r);padding:14px 16px;width:100%;margin-bottom:24px;text-align:left}
+.suc-detail .row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:12px}
+.suc-detail .row:last-child{margin-bottom:0}
+.suc-detail .k{color:rgba(255,255,255,.5)}
+.suc-detail .v{color:#fff;font-weight:600}
+.suc-btn{width:100%;padding:14px;border-radius:var(--r-sm);border:none;cursor:pointer;font-size:15px;font-weight:700;margin-bottom:10px}
+.suc-grn{background:rgba(255,255,255,.15);color:#fff;border:1.5px solid rgba(255,255,255,.2)}
+.suc-wht{background:#fff;color:var(--grn-d)}
+</style>
+</head>
+<body>
+
+<button class="theme-btn" onclick="toggleTheme()">🌙</button>
+
+<div class="phone">
+  <div class="sbar">
+    <span class="t" id="sTime">9:30 AM</span>
+    <div class="ic"><span>▲▲▲</span><span>GPS ●</span><span>🔋78%</span></div>
+  </div>
+
+  <div class="toast" id="toast"><div class="tk">✓</div><span id="toastMsg"></span></div>
+
+  <!-- ══════════════════ LOGIN ══════════════════ -->
+  <div class="screen active" id="scr-login">
+    <div style="height:44px;background:var(--grn-d);flex-shrink:0"></div>
+    <div class="login-wrap">
+      <div class="login-logo">
+        <div class="mark">P<span>atrika</span></div>
+        <div class="sub">Survey Field App</div>
+        <div class="form-tag">📋 Lead Generation Form</div>
+      </div>
+      <div class="l-card">
+        <h2>Surveyor Login</h2>
+        <div class="sub">Enter your credentials to begin survey</div>
+        <div class="l-prefix">
+          <span class="pfx">+91</span>
+          <input type="tel" class="l-inp" placeholder="Registered mobile number" value="97142 44321" maxlength="10">
+        </div>
+        <input type="password" class="l-inp" placeholder="Password / OTP" value="••••••">
+        <button class="l-btn" onclick="doLogin()">Start Surveying →</button>
+        <div class="l-otp-hint" onclick="showToast('OTP sent to +91 97142 44321')">Get OTP instead ↓</div>
+      </div>
+      <div class="l-footer">Patrika AI · Survey v2.4 · Location Services Active</div>
+    </div>
+  </div>
+
+  <!-- ══════════════════ SURVEY FORM ══════════════════ -->
+  <div class="screen" id="scr-form">
+    <div class="form-hdr">
+      <div class="fh-top">
+        <div class="hdr-l" style="display:flex;align-items:center;gap:9px">
+          <button class="fh-back" onclick="goScreen('scr-login')">←</button>
+          <div>
+            <div class="fh-title">Lead Survey</div>
+            <div class="fh-sub" id="formSubLbl">Malviya Nagar · Survey #SRV-2847</div>
+          </div>
+        </div>
+        <button class="fh-save" onclick="saveDraft()">Save Draft</button>
+      </div>
+      <div class="prog-strip" id="progStrip"></div>
+    </div>
+
+    <!-- Section quick-nav -->
+    <div class="sec-nav" id="secNav">
+      <div class="sn-pill active" onclick="scrollSec('s1',this)">1 Info</div>
+      <div class="sn-pill" onclick="scrollSec('s2',this)">2 Reader</div>
+      <div class="sn-pill" onclick="scrollSec('s3',this)">3 Newspaper</div>
+      <div class="sn-pill" onclick="scrollSec('s4',this)">4 Patrika</div>
+      <div class="sn-pill" onclick="scrollSec('s5',this)">5 Reasons</div>
+      <div class="sn-pill" onclick="scrollSec('s6',this)">6 Interests</div>
+      <div class="sn-pill" onclick="scrollSec('s7',this)">7 Status</div>
+      <div class="sn-pill" onclick="scrollSec('s8',this)">8 Follow-up</div>
+      <div class="sn-pill" onclick="scrollSec('s9',this)">9 Remarks</div>
+      <div class="sn-pill" onclick="scrollSec('s10',this)">10 Photos</div>
+    </div>
+
+    <div class="scr-body" id="formBody">
+
+      <!-- ─── SECTION 1: SURVEY INFORMATION ─── -->
+      <div class="sec" id="s1">
+        <div class="sec-hdr">
+          <div class="sec-num">1</div>
+          <div class="sec-title">Survey Information</div>
+        </div>
+        <div class="sec-divider"></div>
+        <div class="card cp">
+          <div class="row2">
+            <div class="fg">
+              <label class="fl">Survey Date <span class="auto-tag">AUTO</span></label>
+              <input class="inp inp-auto" value="10 Jul 2026" readonly>
+            </div>
+            <div class="fg">
+              <label class="fl">Survey Time <span class="auto-tag">AUTO</span></label>
+              <input class="inp inp-auto" id="surveyTime" value="9:31 AM" readonly>
+            </div>
+          </div>
+          <div class="row2">
+            <div class="fg">
+              <label class="fl">Surveyor Name <span class="auto-tag">AUTO</span></label>
+              <input class="inp inp-auto" value="Priya Sharma" readonly>
+            </div>
+            <div class="fg">
+              <label class="fl">Surveyor Code <span class="auto-tag">AUTO</span></label>
+              <input class="inp inp-auto" value="SRV-4421" readonly>
+            </div>
+          </div>
+          <div class="fg">
+            <label class="fl">Team Leader Name</label>
+            <input type="text" class="inp inp-sel" id="teamLeader" value="Anita Verma">
+          </div>
+          <div class="row2">
+            <div class="fg">
+              <label class="fl">Branch <span class="auto-tag">AUTO</span></label>
+              <input class="inp inp-auto" value="Jaipur South" readonly>
+            </div>
+            <div class="fg">
+              <label class="fl">Area / Colony</label>
+              <input type="text" class="inp" placeholder="Area assigned" value="Malviya Nagar">
+            </div>
+          </div>
+          <div class="fg" style="margin-bottom:0">
+            <label class="fl">GPS Location <span class="auto-tag">AUTO</span></label>
+            <div class="gps-bar">
+              <div class="gps-dot"></div>
+              <div>
+                <strong>26.8621° N, 75.7781° E</strong>
+                <span>Accuracy ±4m · Malviya Nagar, Jaipur</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── SECTION 2: READER INFORMATION ─── -->
+      <div class="sec" id="s2">
+        <div class="sec-hdr">
+          <div class="sec-num">2</div>
+          <div class="sec-title">Reader Information</div>
+        </div>
+        <div class="sec-divider"></div>
+        <div class="card cp">
+          <div style="font-size:10px;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:10px">Personal Details</div>
+          <div class="fg">
+            <label class="fl">Customer Name <span class="req">*</span></label>
+            <input type="text" class="inp" placeholder="Full name" id="custName">
+          </div>
+          <div class="row2">
+            <div class="fg">
+              <label class="fl">Mobile Number <span class="req">*</span></label>
+              <input type="tel" class="inp" placeholder="10-digit" maxlength="10" id="custMobile">
+            </div>
+            <div class="fg">
+              <label class="fl">Alternate Mobile</label>
+              <input type="tel" class="inp" placeholder="Optional" maxlength="10">
+            </div>
+          </div>
+          <div class="row2">
+            <div class="fg">
+              <label class="fl">House / Flat No.</label>
+              <input type="text" class="inp" placeholder="H-24, B-12…">
+            </div>
+            <div class="fg">
+              <label class="fl">Society / Apartment</label>
+              <input type="text" class="inp" placeholder="Society name">
+            </div>
+          </div>
+          <div class="fg">
+            <label class="fl">Street / Area</label>
+            <input type="text" class="inp" placeholder="Street or locality">
+          </div>
+          <div class="row2">
+            <div class="fg" style="margin-bottom:0">
+              <label class="fl">City</label>
+              <input type="text" class="inp" placeholder="City" value="Jaipur">
+            </div>
+            <div class="fg" style="margin-bottom:0">
+              <label class="fl">PIN Code</label>
+              <input type="tel" class="inp" placeholder="302017" maxlength="6">
+            </div>
+          </div>
+        </div>
+        <div class="card cp">
+          <div style="font-size:10px;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:10px">Family Information</div>
+          <div class="row2">
+            <div class="fg">
+              <label class="fl">Family Members</label>
+              <select class="inp inp-sel">
+                <option>-- Select --</option>
+                <option>1–2</option><option>3–4</option><option>5–6</option><option>7+</option>
+              </select>
+            </div>
+            <div class="fg">
+              <label class="fl">Occupation</label>
+              <select class="inp inp-sel">
+                <option>-- Select --</option>
+                <option>Service / Job</option><option>Business</option><option>Agriculture</option>
+                <option>Student</option><option>Homemaker</option><option>Retired</option><option>Other</option>
+              </select>
+            </div>
+          </div>
+          <div class="row2">
+            <div class="fg" style="margin-bottom:0">
+              <label class="fl">Preferred Language</label>
+              <select class="inp inp-sel">
+                <option>-- Select --</option>
+                <option>Hindi</option><option>English</option><option>Both</option><option>Rajasthani</option>
+              </select>
+            </div>
+            <div class="fg" style="margin-bottom:0">
+              <label class="fl">Age Group</label>
+              <select class="inp inp-sel">
+                <option>-- Select --</option>
+                <option>18–25</option><option>26–35</option><option>36–45</option><option>46–60</option><option>60+</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── SECTION 3: NEWSPAPER READING ─── -->
+      <div class="sec" id="s3">
+        <div class="sec-hdr">
+          <div class="sec-num">3</div>
+          <div class="sec-title">Newspaper Reading Details</div>
+        </div>
+        <div class="sec-divider"></div>
+        <div class="card cp">
+          <div class="fg">
+            <label class="fl">Do you currently read a newspaper?</label>
+            <div class="chip-group" id="readsNpChips">
+              <span class="chip" onclick="selChip(this,'readsNpChips','single','on-grn');toggleReads(true)">Yes</span>
+              <span class="chip" onclick="selChip(this,'readsNpChips','single','on-red');toggleReads(false)">No</span>
+            </div>
+          </div>
+          <div class="cond-block" id="readsYesBlock">
+            <div class="fg">
+              <label class="fl">Current Newspaper(s)</label>
+              <div class="chip-group" id="currNpChips">
+                <span class="chip" onclick="selChip(this,'currNpChips','multi','on-grn')">Rajasthan Patrika</span>
+                <span class="chip" onclick="selChip(this,'currNpChips','multi','on-grn')">Dainik Bhaskar</span>
+                <span class="chip" onclick="selChip(this,'currNpChips','multi','on-grn')">Times of India</span>
+                <span class="chip" onclick="selChip(this,'currNpChips','multi','on-grn')">Navbharat Times</span>
+                <span class="chip" onclick="selChip(this,'currNpChips','multi','on-grn')">Amar Ujala</span>
+                <span class="chip" onclick="selChip(this,'currNpChips','multi','on-grn')">Other</span>
+              </div>
+            </div>
+            <div class="row2">
+              <div class="fg">
+                <label class="fl">No. of Newspapers</label>
+                <select class="inp inp-sel">
+                  <option>1</option><option>2</option><option>3</option><option>3+</option>
+                </select>
+              </div>
+              <div class="fg">
+                <label class="fl">Reading Since (Yrs)</label>
+                <select class="inp inp-sel">
+                  <option>Less than 1</option><option>1–3</option><option>3–5</option><option>5–10</option><option>10+</option>
+                </select>
+              </div>
+            </div>
+            <div class="row2">
+              <div class="fg" style="margin-bottom:0">
+                <label class="fl">Preferred Reading Time</label>
+                <select class="inp inp-sel">
+                  <option>Early Morning (before 7)</option>
+                  <option>Morning (7–9 AM)</option>
+                  <option>Afternoon</option><option>Evening</option><option>Any time</option>
+                </select>
+              </div>
+              <div class="fg" style="margin-bottom:0">
+                <label class="fl">Delivery Mode</label>
+                <select class="inp inp-sel">
+                  <option>Home Delivery</option>
+                  <option>Purchase from Vendor</option>
+                  <option>Both</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── SECTION 4: INTEREST IN PATRIKA ─── -->
+      <div class="sec" id="s4">
+        <div class="sec-hdr">
+          <div class="sec-num">4</div>
+          <div class="sec-title">Interest in Rajasthan Patrika</div>
+        </div>
+        <div class="sec-divider"></div>
+        <div class="card cp">
+          <div class="fg">
+            <label class="fl">Interested in Subscription?</label>
+            <div class="chip-group" id="intChips">
+              <span class="chip" onclick="selChip(this,'intChips','single','on-grn');toggleSubPlan(true)">✅ Yes</span>
+              <span class="chip" onclick="selChip(this,'intChips','single','on-amb');toggleSubPlan(true)">🤔 Maybe</span>
+              <span class="chip" onclick="selChip(this,'intChips','single','on-red');toggleSubPlan(false)">❌ No</span>
+            </div>
+          </div>
+          <div class="cond-block" id="subPlanBlock">
+            <div class="fg">
+              <label class="fl">Preferred Subscription Plan</label>
+              <div class="chip-group" id="planChips">
+                <span class="chip" onclick="selChip(this,'planChips','single','on-grn')">3 Months</span>
+                <span class="chip" onclick="selChip(this,'planChips','single','on-grn')">6 Months</span>
+                <span class="chip" onclick="selChip(this,'planChips','single','on-grn')">12 Months</span>
+                <span class="chip" onclick="selChip(this,'planChips','single','on-grn')">Annual Offer</span>
+                <span class="chip" onclick="selChip(this,'planChips','single','on-grn')">E-Paper Only</span>
+              </div>
+            </div>
+            <div class="fg" style="margin-bottom:0">
+              <label class="fl">Preferred Start Date</label>
+              <input type="date" class="inp">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── SECTION 5: REASONS ─── -->
+      <div class="sec" id="s5">
+        <div class="sec-hdr">
+          <div class="sec-num">5</div>
+          <div class="sec-title">Reason for Not Subscribing</div>
+        </div>
+        <div class="sec-divider"></div>
+        <div class="card cp">
+          <div class="fg">
+            <label class="fl">Select applicable reason(s)</label>
+            <div class="chip-group" id="reasonChips">
+              <span class="chip" onclick="selChip(this,'reasonChips','multi','on-slt')">Already Reading Another</span>
+              <span class="chip" onclick="selChip(this,'reasonChips','multi','on-slt')">Cost Concern</span>
+              <span class="chip" onclick="selChip(this,'reasonChips','multi','on-slt')">Not Interested</span>
+              <span class="chip" onclick="selChip(this,'reasonChips','multi','on-slt')">Reads E-paper Only</span>
+              <span class="chip" onclick="selChip(this,'reasonChips','multi','on-slt')">Time Constraints</span>
+              <span class="chip" onclick="selChip(this,'reasonChips','multi','on-slt')">Delivery Issues</span>
+              <span class="chip" onclick="selChip(this,'reasonChips','multi','on-slt')">Other</span>
+            </div>
+          </div>
+          <div class="fg" style="margin-bottom:0">
+            <label class="fl">Other Remarks</label>
+            <input type="text" class="inp" placeholder="Specify other reason…">
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── SECTION 6: INTERESTS ─── -->
+      <div class="sec" id="s6">
+        <div class="sec-hdr">
+          <div class="sec-num">6</div>
+          <div class="sec-title">Customer Interests</div>
+        </div>
+        <div class="sec-divider"></div>
+        <div class="card cp">
+          <label class="fl" style="margin-bottom:10px">Select all that apply</label>
+          <div class="int-grid" id="intGrid">
+            <div class="int-chip" onclick="toggleInt(this)"><span class="cb"></span>🗞️ Local News</div>
+            <div class="int-chip" onclick="toggleInt(this)"><span class="cb"></span>🌐 National News</div>
+            <div class="int-chip" onclick="toggleInt(this)"><span class="cb"></span>🏏 Sports</div>
+            <div class="int-chip" onclick="toggleInt(this)"><span class="cb"></span>💼 Business</div>
+            <div class="int-chip" onclick="toggleInt(this)"><span class="cb"></span>📚 Education</div>
+            <div class="int-chip" onclick="toggleInt(this)"><span class="cb"></span>💼 Jobs</div>
+            <div class="int-chip" onclick="toggleInt(this)"><span class="cb"></span>🌾 Agriculture</div>
+            <div class="int-chip" onclick="toggleInt(this)"><span class="cb"></span>🎭 Entertainment</div>
+            <div class="int-chip" onclick="toggleInt(this)"><span class="cb"></span>📖 Sunday Magazine</div>
+            <div class="int-chip" onclick="toggleInt(this)"><span class="cb"></span>📱 E-paper</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── SECTION 7: LEAD STATUS ─── -->
+      <div class="sec" id="s7">
+        <div class="sec-hdr">
+          <div class="sec-num">7</div>
+          <div class="sec-title">Lead Status</div>
+        </div>
+        <div class="sec-divider"></div>
+        <div class="card cp">
+          <label class="fl" style="margin-bottom:10px">Select one outcome</label>
+          <div class="lead-grid" id="leadGrid">
+            <div class="lead-chip" onclick="selLead(this,'sel-grn','converted')">
+              <span class="lico">✅</span>
+              <div class="ltxt">Converted</div>
+              <div class="lsub">Ready to subscribe</div>
+            </div>
+            <div class="lead-chip" onclick="selLead(this,'sel-amb','followup')">
+              <span class="lico">🔶</span>
+              <div class="ltxt">Follow-up Required</div>
+              <div class="lsub">Needs more persuasion</div>
+            </div>
+            <div class="lead-chip" onclick="selLead(this,'sel-red','not-int')">
+              <span class="lico">❌</span>
+              <div class="ltxt">Not Interested</div>
+              <div class="lsub">Close lead</div>
+            </div>
+            <div class="lead-chip" onclick="selLead(this,'sel-slt','no-reply')">
+              <span class="lico">📞</span>
+              <div class="ltxt">No Reply / Locked</div>
+              <div class="lsub">Mark for revisit</div>
+            </div>
+            <div class="lead-chip" onclick="selLead(this,'sel-pur','call-later')">
+              <span class="lico">⏳</span>
+              <div class="ltxt">Call Later</div>
+              <div class="lsub">Set reminder</div>
+            </div>
+            <div class="lead-chip" onclick="selLead(this,'sel-blue','existing')">
+              <span class="lico">🔄</span>
+              <div class="ltxt">Existing Subscriber</div>
+              <div class="lsub">Already with Patrika</div>
+            </div>
+          </div>
+          <div style="margin-top:8px">
+            <div class="lead-chip" onclick="selLead(this,'sel-slt','duplicate')" style="display:flex;align-items:center;gap:10px;text-align:left;padding:9px 12px">
+              <span class="lico" style="font-size:16px;margin-bottom:0">🚫</span>
+              <div><div class="ltxt">Duplicate Lead</div><div class="lsub">Already in system</div></div>
+            </div>
+          </div>
+        </div>
+        <!-- Status workflow info -->
+        <div class="card cp" id="workflowInfo" style="display:none"></div>
+      </div>
+
+      <!-- ─── SECTION 8: FOLLOW-UP ─── -->
+      <div class="sec" id="s8">
+        <div class="sec-hdr">
+          <div class="sec-num">8</div>
+          <div class="sec-title">Follow-up Details</div>
+        </div>
+        <div class="sec-divider"></div>
+        <div id="sec-followup">
+          <div class="card cp">
+            <div class="row2">
+              <div class="fg">
+                <label class="fl">Follow-up Date</label>
+                <input type="date" class="inp" id="fuDate">
+              </div>
+              <div class="fg">
+                <label class="fl">Follow-up Time</label>
+                <input type="time" class="inp" id="fuTime">
+              </div>
+            </div>
+            <div class="fg" style="margin-bottom:0">
+              <label class="fl">Preferred Contact Method</label>
+              <div class="chip-group" id="contactChips">
+                <span class="chip" onclick="selChip(this,'contactChips','multi','on-grn')">📞 Phone Call</span>
+                <span class="chip" onclick="selChip(this,'contactChips','multi','on-grn')">💬 WhatsApp</span>
+                <span class="chip" onclick="selChip(this,'contactChips','multi','on-grn')">🚶 Visit Again</span>
+              </div>
+            </div>
+          </div>
+          <div class="card cp">
+            <div class="fg" style="margin-bottom:0">
+              <label class="fl">Follow-up Remarks</label>
+              <textarea class="inp" rows="3" style="resize:none" placeholder="What was discussed, what to follow up on…"></textarea>
+            </div>
+          </div>
+        </div>
+        <div id="followup-hidden" class="card cp" style="background:var(--surf2);border:1.5px dashed var(--brd)">
+          <div style="font-size:12px;color:var(--txt3);text-align:center;padding:6px 0">Select <strong style="color:var(--amb)">Follow-up Required</strong> in Lead Status to enable this section</div>
+        </div>
+      </div>
+
+      <!-- ─── SECTION 9: REMARKS ─── -->
+      <div class="sec" id="s9">
+        <div class="sec-hdr">
+          <div class="sec-num">9</div>
+          <div class="sec-title">Executive Remarks</div>
+        </div>
+        <div class="sec-divider"></div>
+        <div class="card cp">
+          <label class="fl">Free text remarks (max 250 characters)</label>
+          <textarea class="inp" rows="4" style="resize:none" id="remarksArea" maxlength="250" oninput="updateCharCount()" placeholder="Enter any additional observations, context, or notes about this lead…"></textarea>
+          <div class="char-counter" id="charCount">0 / 250</div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button style="padding:7px 13px;border-radius:7px;border:1.5px solid var(--brd);background:var(--surf2);font-size:11px;font-weight:700;color:var(--txt2);cursor:pointer" onclick="insertHindi()">अ Hindi Mode</button>
+            <button style="padding:7px 13px;border-radius:7px;border:1.5px solid var(--brd);background:var(--surf2);font-size:11px;font-weight:700;color:var(--txt2);cursor:pointer" onclick="clearRemarks()">Clear</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── SECTION 10: ATTACHMENTS ─── -->
+      <div class="sec" id="s10">
+        <div class="sec-hdr">
+          <div class="sec-num">10</div>
+          <div class="sec-title">Attachments <span style="font-size:11px;font-weight:400;color:var(--txt3)">(Optional)</span></div>
+        </div>
+        <div class="sec-divider"></div>
+        <div class="card cp">
+          <div class="photo-grid">
+            <div class="photo-block" id="ph1" onclick="takePhoto(this,'ph1','Customer Photo')">
+              <span class="pico">🤳</span>
+              <span class="plbl">Customer<br>Photo</span>
+            </div>
+            <div class="photo-block" id="ph2" onclick="takePhoto(this,'ph2','House Photo')">
+              <span class="pico">🏠</span>
+              <span class="plbl">House<br>Photo</span>
+            </div>
+            <div class="photo-block" id="ph3" onclick="takePhoto(this,'ph3','Form Photo')">
+              <span class="pico">📄</span>
+              <span class="plbl">Subscription<br>Form</span>
+            </div>
+          </div>
+          <div class="hint" style="margin-top:10px;text-align:center">Tap any block to capture or upload a photo</div>
+        </div>
+        <div style="height:100px"></div>
+      </div>
+
+    </div><!-- /formBody -->
+
+    <!-- BOTTOM ACTION BAR -->
+    <div class="action-bar">
+      <button class="btn btn-out" onclick="goScreen('scr-login')">Cancel</button>
+      <button class="btn btn-navy" onclick="saveDraft()">💾 Save</button>
+      <button class="btn btn-grn" onclick="submitForm()">Submit &amp; New ✓</button>
+    </div>
+  </div><!-- /scr-form -->
+
+  <!-- ══════════════════ SUCCESS ══════════════════ -->
+  <div class="screen" id="scr-success">
+    <div style="height:44px;background:var(--grn-d);flex-shrink:0"></div>
+    <div class="success-body">
+      <div class="success-ico">✅</div>
+      <div class="success-title">Lead Submitted!</div>
+      <div class="success-msg">Survey record saved and forwarded to the relevant team based on the lead status selected.</div>
+      <div class="suc-detail">
+        <div class="row"><span class="k">Survey ID</span><span class="v">#SRV-2847</span></div>
+        <div class="row"><span class="k">Surveyor</span><span class="v">Priya Sharma</span></div>
+        <div class="row"><span class="k">Customer</span><span class="v" id="sucCustName">—</span></div>
+        <div class="row"><span class="k">Lead Status</span><span class="v" id="sucStatus">—</span></div>
+        <div class="row"><span class="k">Time</span><span class="v" id="sucTime">—</span></div>
+        <div class="row"><span class="k">GPS</span><span class="v">26.8621°N, 75.7781°E</span></div>
+      </div>
+      <button class="suc-btn suc-wht" onclick="startNewSurvey()">+ Start New Survey</button>
+      <button class="suc-btn suc-grn" onclick="goScreen('scr-login')">Back to Home</button>
+    </div>
+  </div>
+
+</div><!-- /phone -->
+
+<script>
+/* ── CLOCK ─────────────────────────────────────── */
+function updateClock(){
+  const d=new Date(),h=d.getHours(),m=d.getMinutes();
+  const ap=h>=12?'PM':'AM',h12=h%12||12;
+  const t=h12+':'+(m<10?'0':'')+m+' '+ap;
+  const el=document.getElementById('sTime');if(el)el.textContent=t;
+  const st=document.getElementById('surveyTime');if(st)st.value=t;
+}
+setInterval(updateClock,30000);updateClock();
+
+/* ── THEME ─────────────────────────────────────── */
+function toggleTheme(){
+  const r=document.documentElement;
+  const n=r.getAttribute('data-theme')==='dark'?'light':'dark';
+  r.setAttribute('data-theme',n);
+  document.querySelector('.theme-btn').textContent=n==='dark'?'☀️':'🌙';
+}
+
+/* ── TOAST ─────────────────────────────────────── */
+function showToast(msg,dur=2400){
+  const t=document.getElementById('toast');
+  document.getElementById('toastMsg').textContent=msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),dur);
+}
+
+/* ── SCREEN ROUTER ──────────────────────────────── */
+function goScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+/* ── LOGIN ─────────────────────────────────────── */
+function doLogin(){goScreen('scr-form');initProgStrip();}
+
+/* ── PROGRESS STRIP ─────────────────────────────── */
+const SECTIONS=['s1','s2','s3','s4','s5','s6','s7','s8','s9','s10'];
+function initProgStrip(){
+  const strip=document.getElementById('progStrip');
+  strip.innerHTML=SECTIONS.map((_,i)=>`<div class="prog-pill ${i===0?'active':''}" id="pp${i}"></div>`).join('');
+}
+function updateProgStrip(activeIdx){
+  SECTIONS.forEach((_,i)=>{
+    const p=document.getElementById('pp'+i);
+    if(!p)return;
+    p.className='prog-pill '+(i<activeIdx?'done':i===activeIdx?'active':'');
+  });
+}
+
+/* ── SECTION NAV ────────────────────────────────── */
+function scrollSec(secId,pill){
+  const el=document.getElementById(secId);if(!el)return;
+  el.scrollIntoView({behavior:'smooth',block:'start'});
+  document.querySelectorAll('.sn-pill').forEach(p=>p.classList.remove('active'));
+  if(pill)pill.classList.add('active');
+  const idx=SECTIONS.indexOf(secId);
+  if(idx>=0)updateProgStrip(idx);
+}
+
+/* Scroll-spy */
+function initScrollSpy(){
+  const body=document.getElementById('formBody');
+  body.addEventListener('scroll',()=>{
+    let active=0;
+    SECTIONS.forEach((id,i)=>{
+      const el=document.getElementById(id);
+      if(!el)return;
+      const rect=el.getBoundingClientRect();
+      const bodyRect=body.getBoundingClientRect();
+      if(rect.top-bodyRect.top<100)active=i;
+    });
+    updateProgStrip(active);
+    document.querySelectorAll('.sn-pill').forEach((p,i)=>p.classList.toggle('active',i===active));
+  },{passive:true});
+}
+window.addEventListener('load',()=>{setTimeout(initScrollSpy,200);initProgStrip();});
+
+/* ── CHIP HELPERS ───────────────────────────────── */
+function selChip(chip,groupId,mode,cls){
+  const group=document.getElementById(groupId);
+  if(!group)return;
+  const allCls=['on-grn','on-red','on-amb','on-blue','on-pur','on-slt'];
+  if(mode==='single'){
+    group.querySelectorAll('.chip').forEach(c=>c.classList.remove(...allCls));
+  }
+  chip.classList.toggle(cls);
+}
+
+function toggleInt(chip){
+  chip.classList.toggle('on');
+  const cb=chip.querySelector('.cb');
+  cb.textContent=chip.classList.contains('on')?'✓':'';
+}
+
+/* ── CONDITIONAL BLOCKS ─────────────────────────── */
+function toggleReads(yes){
+  const b=document.getElementById('readsYesBlock');
+  b.classList.toggle('open',yes);
+}
+function toggleSubPlan(yes){
+  const b=document.getElementById('subPlanBlock');
+  b.classList.toggle('open',yes);
+}
+
+/* ── LEAD STATUS ────────────────────────────────── */
+let selectedLeadStatus='';
+const LEAD_CLS=['sel-grn','sel-amb','sel-red','sel-slt','sel-pur','sel-blue'];
+const WORKFLOW_INFO={
+  converted:{bg:'var(--grn-l)',brd:'rgba(26,107,69,.2)',ico:'✅',title:'Forwarding to Subscription Team',msg:'This lead will be automatically sent to the subscription team for new booking and contract.'},
+  followup:{bg:'var(--amb-l)',brd:'rgba(217,119,6,.2)',ico:'🔶',title:'Added to Follow-up List',msg:'This lead will appear in your follow-up queue with a reminder on the date selected below.'},
+  'not-int':{bg:'var(--red-l)',brd:'rgba(192,57,43,.15)',ico:'❌',title:'Lead Closed for Analysis',msg:'Stored for future campaign analysis. No further action required.'},
+  'no-reply':{bg:'var(--slt-l)',brd:'rgba(71,85,105,.2)',ico:'📞',title:'Marked for Revisit',msg:'Scheduled for revisit as per campaign policy.'},
+  'call-later':{bg:'var(--pur-l)',brd:'rgba(109,40,217,.2)',ico:'⏳',title:'Reminder Set',msg:'A reminder will be sent to you at the follow-up time specified.'},
+  existing:{bg:'var(--blue-l)',brd:'rgba(21,101,192,.2)',ico:'🔄',title:'Existing Subscriber Record',msg:'Marked as existing subscriber. Details updated in subscriber database.'},
+  duplicate:{bg:'var(--slt-l)',brd:'rgba(71,85,105,.2)',ico:'🚫',title:'Duplicate Lead Flagged',msg:'This lead already exists in the system. Merged with the existing record.'},
+};
+function selLead(chip,cls,status){
+  const grid=document.getElementById('leadGrid');
+  grid.querySelectorAll('.lead-chip').forEach(c=>c.classList.remove(...LEAD_CLS));
+  // also get the 7th chip outside grid
+  document.querySelectorAll('#s7 .lead-chip').forEach(c=>c.classList.remove(...LEAD_CLS));
+  chip.classList.add(cls);
+  selectedLeadStatus=status;
+  // show follow-up section
+  const fu=document.getElementById('sec-followup');
+  const fuh=document.getElementById('followup-hidden');
+  if(status==='followup'||status==='call-later'||status==='no-reply'){
+    fu.style.display='block';
+    fuh.style.display='none';
+  } else {
+    fu.style.display='none';
+    fuh.style.display='block';
+  }
+  // show workflow info
+  const info=WORKFLOW_INFO[status];
+  const wi=document.getElementById('workflowInfo');
+  if(info){
+    wi.style.display='block';
+    wi.style.background=info.bg;
+    wi.style.border='1px solid '+info.brd;
+    wi.innerHTML=`<div style="display:flex;align-items:flex-start;gap:9px">
+      <span style="font-size:20px;flex-shrink:0">${info.ico}</span>
+      <div>
+        <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:3px">${info.title}</div>
+        <div style="font-size:11px;color:var(--txt2);line-height:1.5">${info.msg}</div>
+      </div>
+    </div>`;
+  }
+}
+
+/* ── CHAR COUNT ─────────────────────────────────── */
+function updateCharCount(){
+  const area=document.getElementById('remarksArea');
+  const ct=document.getElementById('charCount');
+  const n=area.value.length;
+  ct.textContent=n+' / 250';
+  ct.className='char-counter'+(n>225?' warn':'')+(n>=245?' over':'');
+}
+
+/* ── HINDI MODE ─────────────────────────────────── */
+function insertHindi(){
+  const area=document.getElementById('remarksArea');
+  area.placeholder='हिंदी में टाइप करें – ग्राहक की जानकारी, अवलोकन, अगले कदम…';
+  showToast('Hindi mode enabled');
+}
+function clearRemarks(){
+  document.getElementById('remarksArea').value='';
+  updateCharCount();
+}
+
+/* ── PHOTO CAPTURE ──────────────────────────────── */
+const photoState={};
+function takePhoto(block,id,label){
+  photoState[id]=!photoState[id];
+  if(photoState[id]){
+    block.classList.add('taken');
+    block.querySelector('.plbl').textContent='✓ Captured';
+    showToast('📸 '+label+' saved');
+  } else {
+    block.classList.remove('taken');
+    const labels={ph1:'Customer\nPhoto',ph2:'House\nPhoto',ph3:'Subscription\nForm'};
+    block.querySelector('.plbl').innerHTML=labels[id]?.replace('\n','<br>')||label;
+  }
+}
+
+/* ── SAVE DRAFT ─────────────────────────────────── */
+function saveDraft(){showToast('💾 Draft saved locally');}
+
+/* ── SUBMIT ─────────────────────────────────────── */
+function submitForm(){
+  const name=document.getElementById('custName')?.value?.trim();
+  const mobile=document.getElementById('custMobile')?.value?.trim();
+  if(!name){showToast('⚠ Customer name is required');return;}
+  if(!mobile||mobile.length<10){showToast('⚠ Valid 10-digit mobile required');return;}
+  // success
+  const d=new Date(),h=d.getHours(),m=d.getMinutes();
+  const ap=h>=12?'PM':'AM',h12=h%12||12;
+  const timeStr=h12+':'+(m<10?'0':'')+m+' '+ap;
+  document.getElementById('sucCustName').textContent=name||'—';
+  const statusLabels={converted:'✅ Converted',followup:'🔶 Follow-up',
+    'not-int':'❌ Not Interested','no-reply':'📞 No Reply',
+    'call-later':'⏳ Call Later',existing:'🔄 Existing','duplicate':'🚫 Duplicate','':`— Not selected`};
+  document.getElementById('sucStatus').textContent=statusLabels[selectedLeadStatus]||'—';
+  document.getElementById('sucTime').textContent=timeStr+' · 10 Jul 2026';
+  goScreen('scr-success');
+}
+
+function startNewSurvey(){
+  // reset key fields
+  const el=document.getElementById('custName');if(el)el.value='';
+  const m=document.getElementById('custMobile');if(m)m.value='';
+  selectedLeadStatus='';
+  document.querySelectorAll('.lead-chip').forEach(c=>c.classList.remove(...LEAD_CLS));
+  document.querySelectorAll('.int-chip').forEach(c=>{c.classList.remove('on');const cb=c.querySelector('.cb');if(cb)cb.textContent='';});
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on-grn','on-red','on-amb','on-blue','on-pur','on-slt'));
+  const ra=document.getElementById('remarksArea');if(ra){ra.value='';updateCharCount();}
+  Object.keys(photoState).forEach(k=>delete photoState[k]);
+  document.querySelectorAll('.photo-block').forEach(b=>b.classList.remove('taken'));
+  document.getElementById('sec-followup').style.display='none';
+  document.getElementById('followup-hidden').style.display='block';
+  document.getElementById('workflowInfo').style.display='none';
+  document.getElementById('readsYesBlock').classList.remove('open');
+  document.getElementById('subPlanBlock').classList.remove('open');
+  goScreen('scr-form');
+  setTimeout(()=>{
+    document.getElementById('formBody').scrollTo({top:0,behavior:'smooth'});
+    updateProgStrip(0);
+  },100);
+}
+</script>
+
+<!-- ══════════ Patrika SSO bootstrap (injected) ══════════ -->
+<script>
+(function(){
+  function hasSession(){
+    try { return !!(sessionStorage.getItem('patrika_profile')||localStorage.getItem('patrika_profile')||sessionStorage.getItem('patrika_token')||localStorage.getItem('patrika_token')); }
+    catch(e){ return false; }
+  }
+  function enter(){ try { goScreen('scr-form'); if(typeof initProgStrip==='function') initProgStrip(); } catch(e){ console.warn('[sso] enter failed', e); } }
+  function boot(){
+    // Only auto-skip the app's own login when launched inside the authenticated suite session.
+    if(!hasSession()) return;
+    enter();
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(boot,0); });
+  else setTimeout(boot,0);
+})();
+</script>
+
+</body>
+</html>

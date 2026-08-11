@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Hawker App · Patrika</title>
+<style>
+/* ── TOKENS ── */
+:root{
+  --teal:#0A7373;--teal-d:#064D4D;--teal-m:#0D8F8F;--teal-l:rgba(10,115,115,.10);--teal-ll:#F0F7F7;
+  --amber:#E8A427;--amber-l:rgba(232,164,39,.12);
+  --coral:#E05252;--coral-l:rgba(224,82,82,.10);
+  --grn:#1B7A3E;--grn-l:rgba(27,122,62,.10);
+  --slate:#1E2D3D;
+  --bg:#F0F7F7;--surf:#FFFFFF;--surf2:#E8F4F4;
+  --brd:rgba(10,115,115,.14);
+  --txt:#1E2D3D;--txt2:#2D4D4D;--txt3:#7A9999;
+  --shd:0 2px 10px rgba(10,115,115,.09);--shd-lg:0 8px 28px rgba(10,115,115,.14);
+  --r:12px;--r-sm:8px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#071818;--surf:#0C2020;--surf2:#102828;
+  --brd:rgba(10,115,115,.22);--txt:#C8EDED;--txt2:#8ABABA;--txt3:#4A7A7A;
+  --shd:0 2px 10px rgba(0,0,0,.3);--shd-lg:0 8px 28px rgba(0,0,0,.4);
+  --teal-l:rgba(10,115,115,.20);--teal-ll:rgba(10,115,115,.12);
+  --grn-l:rgba(27,122,62,.18);--amber-l:rgba(232,164,39,.15);--coral-l:rgba(224,82,82,.15);
+}}
+:root[data-theme=dark]{
+  --bg:#071818;--surf:#0C2020;--surf2:#102828;
+  --brd:rgba(10,115,115,.22);--txt:#C8EDED;--txt2:#8ABABA;--txt3:#4A7A7A;
+  --shd:0 2px 10px rgba(0,0,0,.3);--shd-lg:0 8px 28px rgba(0,0,0,.4);
+  --teal-l:rgba(10,115,115,.20);--teal-ll:rgba(10,115,115,.12);
+  --grn-l:rgba(27,122,62,.18);--amber-l:rgba(232,164,39,.15);--coral-l:rgba(224,82,82,.15);
+}
+:root[data-theme=light]{
+  --bg:#F0F7F7;--surf:#FFFFFF;--surf2:#E8F4F4;
+  --brd:rgba(10,115,115,.14);--txt:#1E2D3D;--txt2:#2D4D4D;--txt3:#7A9999;
+  --shd:0 2px 10px rgba(10,115,115,.09);--shd-lg:0 8px 28px rgba(10,115,115,.14);
+  --teal-l:rgba(10,115,115,.10);--teal-ll:#F0F7F7;
+  --grn-l:rgba(27,122,62,.10);--amber-l:rgba(232,164,39,.12);--coral-l:rgba(224,82,82,.10);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:system-ui,-apple-system,'Segoe UI',sans-serif;
+  background:#061818;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+  background-image:radial-gradient(ellipse at 25% 25%,rgba(10,115,115,.4) 0%,transparent 55%),
+                   radial-gradient(ellipse at 85% 75%,rgba(232,164,39,.15) 0%,transparent 50%);
+}
+.phone{width:390px;height:844px;background:var(--bg);border-radius:44px;overflow:hidden;position:relative;display:flex;flex-direction:column;box-shadow:0 0 0 10px #030C0C,0 30px 80px rgba(0,0,0,.6),inset 0 0 0 2px #0D3333;}
+.sbar{height:44px;background:var(--teal-d);flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 22px}
+.sbar .t{color:#fff;font-size:15px;font-weight:600}
+.sbar .ic{color:rgba(255,255,255,.65);font-size:11px;display:flex;gap:6px}
+.screen{display:none;flex-direction:column;flex:1;overflow:hidden}
+.screen.active{display:flex}
+.scr-body{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.scr-body::-webkit-scrollbar{display:none}
+/* Header */
+.hdr{padding:13px 18px 11px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;background:var(--teal-d)}
+.hdr-l{display:flex;align-items:center;gap:10px}
+.back{width:34px;height:34px;border-radius:50%;border:none;cursor:pointer;background:rgba(255,255,255,.15);color:#fff;font-size:16px;display:flex;align-items:center;justify-content:center}
+.hdr h1{font-family:Georgia,serif;font-size:17px;font-weight:700;color:#fff;letter-spacing:-.2px}
+.hdr .sub{font-size:10px;color:rgba(255,255,255,.5);margin-top:1px}
+.hdr-btn{height:30px;padding:0 14px;border-radius:15px;border:none;cursor:pointer;background:rgba(255,255,255,.12);color:#fff;font-size:12px;font-weight:600}
+/* Toast */
+.toast{position:absolute;bottom:80px;left:14px;right:14px;background:var(--slate);color:#fff;border-radius:var(--r-sm);padding:12px 16px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;z-index:200;box-shadow:var(--shd-lg);transform:translateY(120%);opacity:0;transition:transform .3s,opacity .3s;pointer-events:none}
+.toast.show{transform:translateY(0);opacity:1}
+.toast .tk{width:22px;height:22px;border-radius:50%;background:var(--grn);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
+/* Theme */
+.theme-btn{position:fixed;top:18px;right:18px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);color:#fff;padding:7px 13px;border-radius:20px;cursor:pointer;font-size:12px;font-weight:600;backdrop-filter:blur(8px);z-index:1000}
+/* Badges */
+.badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700}
+.b-teal{background:var(--teal-l);color:var(--teal)}
+.b-grn{background:var(--grn-l);color:var(--grn)}
+.b-amber{background:var(--amber-l);color:var(--amber)}
+.b-coral{background:var(--coral-l);color:var(--coral)}
+.b-grey{background:var(--surf2);color:var(--txt3)}
+/* Form */
+.card{background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);margin:0 14px 12px;overflow:hidden}
+.cp{padding:13px 14px}
+.fl{font-size:11px;font-weight:700;color:var(--txt2);letter-spacing:.3px;display:block;margin-bottom:5px}
+.fg{margin-bottom:12px}
+.inp{width:100%;padding:10px 13px;border-radius:var(--r-sm);border:1.5px solid var(--brd);background:var(--surf2);font-size:14px;color:var(--txt);outline:none;transition:border-color .15s;font-family:inherit}
+.inp:focus{border-color:var(--teal)}
+.inp::placeholder{color:var(--txt3)}
+.inp-sel{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%237A9999' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center;padding-right:30px;cursor:pointer}
+.slbl{font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--txt3);padding:14px 18px 7px;display:block}
+.btn{width:100%;padding:13px;border-radius:var(--r-sm);border:none;cursor:pointer;font-size:15px;font-weight:700;transition:opacity .15s,transform .1s}
+.btn:active{opacity:.85;transform:scale(.99)}
+.btn-teal{background:var(--teal);color:#fff}
+.btn-amber{background:var(--amber);color:#fff}
+.btn-grn{background:var(--grn);color:#fff}
+.btn-coral{background:var(--coral);color:#fff}
+.btn-out{background:transparent;border:1.5px solid var(--brd);color:var(--txt)}
+.btn-row{display:flex;gap:8px;padding:0 14px 16px}
+.btn-row .btn{flex:1}
+/* Table */
+.tbl{width:100%;border-collapse:collapse}
+.tbl th{font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt3);padding:8px 10px;text-align:left;border-bottom:1px solid var(--brd);background:var(--surf2)}
+.tbl td{padding:9px 10px;border-bottom:1px solid var(--brd);font-size:12px;color:var(--txt);font-variant-numeric:tabular-nums}
+.tbl tr:last-child td{border-bottom:none}
+.tbl .num{text-align:right;font-weight:700}
+/* Filter pills */
+.filter-strip{display:flex;gap:7px;padding:0 14px 12px;overflow-x:auto;scrollbar-width:none}
+.filter-strip::-webkit-scrollbar{display:none}
+.f-pill{flex-shrink:0;padding:6px 13px;border-radius:20px;border:1.5px solid var(--brd);background:var(--surf);font-size:11px;font-weight:600;color:var(--txt3);cursor:pointer}
+.f-pill.on{background:var(--teal-l);border-color:rgba(10,115,115,.3);color:var(--teal)}
+/* Progress bar */
+.prog-track{height:8px;background:var(--surf2);border-radius:4px;overflow:hidden}
+.prog-fill{height:100%;border-radius:4px;transition:width .5s ease}
+
+/* ── LOGIN ── */
+#scr-login{background:var(--teal-d)}
+.login-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 22px}
+.logo .mark{font-family:Georgia,serif;font-size:34px;font-weight:700;color:#fff;letter-spacing:-1px;text-align:center}
+.logo .mark span{color:#7FD8D8}
+.logo .sub{font-size:11px;color:rgba(255,255,255,.35);letter-spacing:1.8px;text-transform:uppercase;margin-top:4px;text-align:center;margin-bottom:8px}
+.role-pill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:20px;padding:5px 14px;font-size:12px;color:rgba(255,255,255,.6);margin-bottom:24px}
+.l-card{width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:22px;backdrop-filter:blur(20px)}
+.l-card h2{font-family:Georgia,serif;font-size:20px;color:#fff;margin-bottom:3px}
+.l-card .sub{font-size:12px;color:rgba(255,255,255,.38);margin-bottom:20px}
+.l-inp{width:100%;padding:13px 15px;border-radius:10px;border:1.5px solid rgba(255,255,255,.12);background:rgba(255,255,255,.07);font-size:15px;color:#fff;outline:none;margin-bottom:10px;font-family:inherit;transition:border-color .15s}
+.l-inp::placeholder{color:rgba(255,255,255,.25)}
+.l-inp:focus{border-color:#7FD8D8}
+.l-pfx{position:relative}
+.l-pfx .pfx{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:rgba(255,255,255,.3);font-size:14px}
+.l-pfx .l-inp{padding-left:44px}
+.l-btn{width:100%;padding:14px;border-radius:10px;background:var(--teal);border:none;color:#fff;font-size:15px;font-weight:700;cursor:pointer;margin-top:4px}
+.l-hint{font-size:11px;color:rgba(255,255,255,.28);text-align:center;margin-top:10px}
+.l-footer{margin-top:20px;font-size:10px;color:rgba(255,255,255,.18);text-align:center}
+.otp-boxes{display:flex;gap:8px;justify-content:center;margin-bottom:14px}
+.otp-box{width:44px;height:52px;border-radius:10px;border:2px solid rgba(255,255,255,.15);background:rgba(255,255,255,.07);font-size:22px;font-weight:700;color:#fff;text-align:center;outline:none;caret-color:transparent}
+.otp-box:focus{border-color:#7FD8D8}
+.otp-timer{font-size:12px;color:rgba(255,255,255,.35);text-align:center;margin-bottom:16px}
+.resend{color:#7FD8D8;cursor:pointer;font-weight:600}
+
+/* ── DASHBOARD ── */
+.dash-hero{background:linear-gradient(160deg,var(--teal-d),var(--teal));padding:14px 18px 18px;flex-shrink:0}
+.dh-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+.dh-greet{font-size:12px;color:rgba(255,255,255,.5);margin-bottom:2px}
+.dh-name{font-family:Georgia,serif;font-size:20px;font-weight:700;color:#fff}
+.dh-meta{font-size:11px;color:rgba(255,255,255,.55);margin-top:1px}
+.checkin-btn{padding:8px 14px;border-radius:20px;border:none;cursor:pointer;font-size:12px;font-weight:700;background:var(--amber);color:#fff;white-space:nowrap}
+.checkin-btn.out{background:rgba(255,255,255,.15);color:rgba(255,255,255,.7)}
+/* Route progress */
+.route-prog{background:rgba(255,255,255,.08);border-radius:12px;padding:12px 14px;margin-bottom:0}
+.rp-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.rp-label{font-size:12px;font-weight:700;color:rgba(255,255,255,.7)}
+.rp-count{font-family:Georgia,serif;font-size:18px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
+.rp-sub{font-size:9px;color:rgba(255,255,255,.4);margin-top:1px}
+.prog-track-hero{height:6px;background:rgba(255,255,255,.15);border-radius:3px;overflow:hidden;margin-bottom:8px}
+.prog-fill-hero{height:100%;border-radius:3px;background:var(--amber);transition:width .6s ease}
+.rp-pills{display:flex;gap:8px}
+.rp-pill{font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px}
+.rp-pill.done{background:rgba(27,122,62,.25);color:#6DDDAA}
+.rp-pill.skip{background:rgba(224,82,82,.2);color:#F9A8A8}
+.rp-pill.left{background:rgba(255,255,255,.1);color:rgba(255,255,255,.6)}
+/* KPI strip */
+.kpi-strip{display:flex;gap:0;margin:14px 14px 0;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);overflow:hidden}
+.kpi{flex:1;padding:11px 6px;text-align:center;border-right:1px solid var(--brd)}
+.kpi:last-child{border-right:none}
+.kpi .kv{font-family:Georgia,serif;font-size:18px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.kpi .kl{font-size:9px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
+/* Action grid */
+.act-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:0;padding:0}
+.act-item{display:flex;flex-direction:column;align-items:center;padding:13px 6px 10px;cursor:pointer;position:relative;-webkit-tap-highlight-color:transparent;transition:background .1s}
+.act-item:active{background:var(--surf2)}
+.act-icon{width:50px;height:50px;border-radius:15px;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:7px;position:relative}
+.act-label{font-size:10px;font-weight:600;color:var(--txt2);text-align:center;line-height:1.3}
+.act-notif{position:absolute;top:-4px;right:-4px;background:var(--coral);color:#fff;border-radius:10px;font-size:9px;font-weight:700;padding:1px 5px;border:2px solid var(--surf)}
+.ai-teal{background:var(--teal-l)}
+.ai-amber{background:var(--amber-l)}
+.ai-grn{background:var(--grn-l)}
+.ai-coral{background:var(--coral-l)}
+.ai-slate{background:rgba(30,45,61,.06)}
+.ai-pur{background:rgba(109,40,217,.08)}
+.ai-blue{background:rgba(21,101,192,.08)}
+.ai-pink{background:rgba(219,39,119,.08)}
+.act-divider{height:1px;background:var(--brd);margin:0 14px 4px}
+/* Announcement banner */
+.announce{margin:14px 14px 0;background:var(--amber-l);border:1px solid rgba(232,164,39,.25);border-radius:var(--r);padding:11px 13px;display:flex;gap:10px;align-items:flex-start}
+.an-ico{font-size:18px;margin-top:1px}
+.an-txt strong{font-size:12px;font-weight:700;color:var(--amber);display:block}
+.an-txt span{font-size:11px;color:var(--txt2);line-height:1.4}
+
+/* ── BUNDLE RECEIPT ── */
+.bundle-hero{background:linear-gradient(160deg,var(--teal-d),var(--teal));padding:14px 18px 18px}
+.bh-time{font-size:11px;color:rgba(255,255,255,.5);margin-bottom:3px}
+.bh-title{font-family:Georgia,serif;font-size:20px;font-weight:700;color:#fff;margin-bottom:2px}
+.bh-meta{font-size:12px;color:rgba(255,255,255,.55)}
+.bundle-count-card{margin:0 14px 12px;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);overflow:hidden}
+.bcc-head{background:var(--teal-l);padding:11px 14px;display:flex;justify-content:space-between;align-items:center}
+.bcc-head .pub{font-size:13px;font-weight:700;color:var(--teal)}
+.bcc-head .editions{font-size:11px;color:var(--txt3)}
+.bundle-row{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-bottom:1px solid var(--brd)}
+.bundle-row:last-child{border-bottom:none}
+.br-pub{font-size:13px;font-weight:600;color:var(--txt)}
+.br-count{display:flex;align-items:center;gap:10px}
+.count-ctrl{display:flex;align-items:center;gap:0;border:1.5px solid var(--brd);border-radius:8px;overflow:hidden}
+.cc-btn{width:32px;height:32px;border:none;background:var(--surf2);cursor:pointer;font-size:18px;color:var(--txt);display:flex;align-items:center;justify-content:center}
+.cc-val{min-width:40px;text-align:center;font-family:Georgia,serif;font-size:16px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.br-expected{font-size:11px;color:var(--txt3)}
+/* Signature pad area */
+.sig-area{margin:0 14px 12px;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);padding:14px}
+.sig-label{font-size:11px;font-weight:700;color:var(--txt2);margin-bottom:8px}
+.sig-pad{height:80px;border-radius:var(--r-sm);border:2px dashed var(--brd);background:var(--surf2);display:flex;align-items:center;justify-content:center;cursor:pointer;position:relative;overflow:hidden}
+.sig-pad-txt{font-size:12px;color:var(--txt3)}
+.sig-pad.signed{border-color:var(--grn);border-style:solid}
+.sig-pad.signed .sig-pad-txt{color:var(--grn);font-weight:600}
+
+/* ── DELIVERY ROUTE ── */
+.route-header{background:var(--teal-d);padding:10px 14px 12px;flex-shrink:0}
+.route-meta{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.route-meta .rtitle{font-family:Georgia,serif;font-size:16px;font-weight:700;color:#fff}
+.route-meta .rcounts{display:flex;gap:8px}
+.rc{font-size:11px;font-weight:700;padding:3px 9px;border-radius:10px}
+.rc-d{background:rgba(27,122,62,.25);color:#6DDDAA}
+.rc-s{background:rgba(224,82,82,.2);color:#F9A8A8}
+.rc-l{background:rgba(255,255,255,.12);color:rgba(255,255,255,.7)}
+/* Delivery item */
+.del-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--brd);cursor:pointer;-webkit-tap-highlight-color:transparent;position:relative;transition:background .1s}
+.del-item:active{background:var(--surf2)}
+.del-item:last-child{border-bottom:none}
+.del-num{width:24px;height:24px;border-radius:50%;background:var(--surf2);font-size:11px;font-weight:700;color:var(--txt3);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-variant-numeric:tabular-nums}
+.del-info{flex:1}
+.del-name{font-size:13px;font-weight:700;color:var(--txt)}
+.del-addr{font-size:11px;color:var(--txt3);margin-top:1px}
+.del-pubs{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}
+.del-pub{font-size:9px;font-weight:700;padding:2px 7px;border-radius:6px;background:var(--teal-l);color:var(--teal)}
+.del-status{flex-shrink:0}
+.del-btn{width:36px;height:36px;border-radius:10px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px}
+.del-btn.state-pending{background:var(--surf2);color:var(--txt3)}
+.del-btn.state-done{background:var(--grn-l);color:var(--grn)}
+.del-btn.state-skip{background:var(--coral-l);color:var(--coral)}
+.del-item.state-done .del-name{color:var(--txt3);text-decoration:line-through;text-decoration-color:var(--grn)}
+.del-item.state-done .del-num{background:var(--grn-l);color:var(--grn)}
+.del-item.state-skip .del-num{background:var(--coral-l);color:var(--coral)}
+/* Long-press action strip */
+.del-actions{display:none;position:absolute;right:14px;top:50%;transform:translateY(-50%);gap:6px}
+.del-actions.open{display:flex}
+.da-btn{padding:6px 12px;border-radius:8px;border:none;cursor:pointer;font-size:11px;font-weight:700}
+.da-done{background:var(--grn-l);color:var(--grn)}
+.da-skip{background:var(--coral-l);color:var(--coral)}
+.da-call{background:var(--teal-l);color:var(--teal)}
+/* Floating action */
+.fab{position:absolute;bottom:20px;right:20px;width:56px;height:56px;border-radius:50%;background:var(--teal);border:none;cursor:pointer;font-size:24px;color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(10,115,115,.35);z-index:10}
+
+/* ── COMPLAINT LOG ── */
+.comp-severity{display:flex;gap:8px;padding:0 14px 12px}
+.sev-btn{flex:1;padding:9px 6px;border-radius:var(--r-sm);border:1.5px solid var(--brd);background:var(--surf2);font-size:11px;font-weight:700;color:var(--txt3);cursor:pointer;text-align:center;transition:all .15s}
+.sev-btn.sel-low{border-color:var(--teal);background:var(--teal-l);color:var(--teal)}
+.sev-btn.sel-med{border-color:var(--amber);background:var(--amber-l);color:var(--amber)}
+.sev-btn.sel-high{border-color:var(--coral);background:var(--coral-l);color:var(--coral)}
+/* Photo upload */
+.photo-upload{border:2px dashed var(--brd);border-radius:var(--r-sm);height:90px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:var(--surf2);gap:10px;transition:border-color .15s}
+.photo-upload:hover{border-color:var(--teal)}
+.photo-upload .pico{font-size:24px}
+.photo-upload .ptxt{font-size:12px;color:var(--txt3)}
+
+/* ── EARNINGS ── */
+.earn-hero{background:linear-gradient(160deg,var(--teal-d),var(--teal));padding:16px 18px 20px;flex-shrink:0}
+.earn-period{font-size:11px;color:rgba(255,255,255,.5);margin-bottom:4px}
+.earn-amount{font-family:Georgia,serif;font-size:36px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;margin-bottom:4px}
+.earn-sub{font-size:12px;color:rgba(255,255,255,.5)}
+.earn-cards{display:flex;gap:10px;margin-top:14px}
+.earn-card{flex:1;background:rgba(255,255,255,.08);border-radius:10px;padding:11px 10px;text-align:center}
+.earn-card .ev{font-family:Georgia,serif;font-size:17px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
+.earn-card .el{font-size:9px;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
+.earn-card.hi .ev{color:#7FD8D8}
+.earn-card.pos .ev{color:#86EFAC}
+/* Earn breakdown */
+.earn-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--brd)}
+.earn-row:last-child{border-bottom:none}
+.er-lbl{font-size:12px;color:var(--txt2)}
+.er-val{font-size:13px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.er-val.pos{color:var(--grn)}
+.er-val.neg{color:var(--coral)}
+
+/* ── ATTENDANCE ── */
+.att-cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;padding:12px}
+.att-day{height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+.att-day.hdr{font-size:9px;color:var(--txt3);font-weight:700;letter-spacing:.4px;height:24px;background:none}
+.att-day.present{background:var(--grn-l);color:var(--grn)}
+.att-day.absent{background:var(--coral-l);color:var(--coral)}
+.att-day.holiday{background:var(--amber-l);color:var(--amber)}
+.att-day.today{background:var(--teal);color:#fff}
+.att-day.future{background:var(--surf2);color:var(--txt3);opacity:.5}
+.att-day.empty{background:transparent}
+/* Punch card */
+.punch-card{margin:0 14px 12px;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);overflow:hidden}
+.punch-row{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--brd)}
+.punch-row:last-child{border-bottom:none}
+.pr-lbl{font-size:12px;color:var(--txt2)}
+.pr-val{font-family:Georgia,serif;font-size:16px;font-weight:700;color:var(--txt)}
+.pr-val.ok{color:var(--grn)}
+
+/* ── LEAVE ── */
+.leave-balance{display:flex;gap:0;margin:0 14px 12px;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);overflow:hidden}
+.lb{flex:1;padding:13px 8px;text-align:center;border-right:1px solid var(--brd)}
+.lb:last-child{border-right:none}
+.lb .lv{font-family:Georgia,serif;font-size:22px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.lb .ll{font-size:9px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
+
+/* ── PERFORMANCE ── */
+.perf-rank{margin:0 14px 12px;background:linear-gradient(135deg,var(--teal-d),var(--teal));border-radius:var(--r);padding:16px;text-align:center}
+.pr-badge{font-size:40px;margin-bottom:8px}
+.pr-title{font-family:Georgia,serif;font-size:20px;font-weight:700;color:#fff;margin-bottom:3px}
+.pr-sub{font-size:12px;color:rgba(255,255,255,.55)}
+.pr-rank{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.12);border-radius:20px;padding:5px 14px;font-size:12px;font-weight:700;color:#fff;margin-top:10px}
+.perf-stat{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-bottom:1px solid var(--brd)}
+.perf-stat:last-child{border-bottom:none}
+.ps-lbl{font-size:12px;color:var(--txt2)}
+.ps-right{text-align:right}
+.ps-val{font-family:Georgia,serif;font-size:16px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.ps-bar{height:4px;border-radius:2px;background:var(--surf2);margin-top:4px;width:80px;overflow:hidden}
+.ps-bar-fill{height:100%;border-radius:2px;background:var(--teal)}
+/* Metric cards */
+.metric-row{display:flex;gap:10px;margin:0 14px 12px}
+.metric-card{flex:1;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);padding:13px 12px;text-align:center}
+.mc-val{font-family:Georgia,serif;font-size:22px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.mc-lbl{font-size:10px;color:var(--txt3);margin-top:3px;text-transform:uppercase;letter-spacing:.4px}
+.mc-delta{font-size:10px;margin-top:2px;font-weight:700}
+.mc-delta.up{color:var(--grn)}
+.mc-delta.dn{color:var(--coral)}
+
+/* ── PROFILE ── */
+.prof-hero{background:linear-gradient(160deg,var(--teal-d),var(--teal));padding:20px 18px 24px;text-align:center}
+.pav{width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.15);margin:0 auto 10px;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;color:#fff;border:3px solid rgba(255,255,255,.22)}
+.pname{font-family:Georgia,serif;font-size:19px;font-weight:700;color:#fff;margin-bottom:3px}
+.pid{font-size:12px;color:rgba(255,255,255,.5)}
+.pbadges{display:flex;justify-content:center;gap:7px;margin-top:10px}
+.prow{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--brd)}
+.prow:last-child{border-bottom:none}
+.pr-ico{width:30px;font-size:15px;flex-shrink:0;color:var(--txt3)}
+.pr-inf{flex:1}
+.pr-inf .k{font-size:10px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px}
+.pr-inf .v{font-size:13px;font-weight:600;color:var(--txt);margin-top:2px}
+
+/* ── READER DATABASE ── */
+.srch-wrap{padding:10px 14px;flex-shrink:0;position:relative}
+.srch-inp{width:100%;padding:9px 12px 9px 36px;border-radius:20px;border:1.5px solid var(--brd);background:var(--surf2);font-size:13px;color:var(--txt);outline:none;font-family:inherit}
+.srch-inp:focus{border-color:var(--teal)}
+.srch-ico{position:absolute;left:26px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:14px;pointer-events:none}
+.reader-item{display:flex;align-items:center;gap:11px;padding:11px 14px;border-bottom:1px solid var(--brd);cursor:pointer;transition:background .1s;-webkit-tap-highlight-color:transparent}
+.reader-item:active{background:var(--surf2)}
+.reader-av{width:38px;height:38px;border-radius:50%;background:var(--teal-l);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--teal);flex-shrink:0}
+.reader-name{font-size:13px;font-weight:700;color:var(--txt)}
+.reader-meta{font-size:10px;color:var(--txt3);margin-top:1px}
+.r-amt{font-family:Georgia,serif;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;text-align:right}
+.r-amt.paid{color:var(--grn)}.r-amt.partial{color:var(--amber)}.r-amt.overdue{color:var(--coral)}
+.r-stat{font-size:9px;font-weight:700;padding:2px 7px;border-radius:8px;margin-top:3px;display:inline-block}
+.r-stat.paid{background:var(--grn-l);color:var(--grn)}.r-stat.partial{background:var(--amber-l);color:var(--amber)}.r-stat.overdue{background:var(--coral-l);color:var(--coral)}
+/* Reader Detail */
+.rd-hero{background:linear-gradient(160deg,var(--teal-d),var(--teal));padding:0 18px 14px;flex-shrink:0}
+.rd-toprow{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+.rd-av{width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:#fff;flex-shrink:0}
+.rd-name{font-family:Georgia,serif;font-size:17px;font-weight:700;color:#fff;margin-bottom:2px}
+.rd-sub{font-size:11px;color:rgba(255,255,255,.55)}
+.rd-bals{display:flex;gap:8px}
+.rd-bal{flex:1;background:rgba(255,255,255,.1);border-radius:9px;padding:9px 8px;text-align:center}
+.rd-bal .rv{font-family:Georgia,serif;font-size:16px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
+.rd-bal .rl{font-size:9px;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.3px;margin-top:2px}
+.rd-bal.due .rv{color:#F9A8A8}
+/* Collection Tracker */
+.coll-summary{display:flex;gap:0;background:var(--surf);border-radius:var(--r);margin:12px 14px 0;box-shadow:var(--shd);overflow:hidden}
+.cs-cell{flex:1;padding:11px 8px;text-align:center;border-right:1px solid var(--brd)}
+.cs-cell:last-child{border-right:none}
+.cs-val{font-family:Georgia,serif;font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
+.cs-lbl{font-size:9px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
+.coll-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--brd)}
+.coll-item:last-child{border-bottom:none}
+.ci-btn{padding:5px 12px;border-radius:8px;border:none;cursor:pointer;font-size:11px;font-weight:700;flex-shrink:0}
+.ci-btn.paid{background:var(--grn-l);color:var(--grn)}
+.ci-btn.collect{background:var(--teal);color:#fff}
+.ci-btn.partial{background:var(--amber-l);color:var(--amber)}
+/* Bill Generation */
+.bill-month{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;background:var(--surf);border-bottom:1px solid var(--brd);flex-shrink:0}
+.bm-arrow{width:30px;height:30px;border-radius:50%;border:1.5px solid var(--brd);background:transparent;cursor:pointer;font-size:14px;color:var(--txt);display:flex;align-items:center;justify-content:center}
+.bm-name{font-family:Georgia,serif;font-size:16px;font-weight:700;color:var(--teal)}
+.bill-summary{display:flex;background:var(--teal-l);border-bottom:1px solid rgba(10,115,115,.12);flex-shrink:0}
+.bs-cell{flex:1;padding:10px 8px;text-align:center;border-right:1px solid rgba(10,115,115,.1)}
+.bs-cell:last-child{border-right:none}
+.bs-val{font-family:Georgia,serif;font-size:17px;font-weight:700;color:var(--teal);font-variant-numeric:tabular-nums}
+.bs-lbl{font-size:9px;color:var(--txt3);text-transform:uppercase;letter-spacing:.3px;margin-top:2px}
+.bill-row{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--brd)}
+.bill-row:last-child{border-bottom:none}
+.b-chk{width:18px;height:18px;border-radius:4px;border:2px solid var(--brd);flex-shrink:0;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:10px;background:var(--surf2);transition:all .1s}
+.b-chk.on{background:var(--teal);border-color:var(--teal);color:#fff}
+.b-amt{font-family:Georgia,serif;font-size:13px;font-weight:700;color:var(--txt);flex-shrink:0;font-variant-numeric:tabular-nums}
+/* Geo Route */
+.geo-stop{display:flex;gap:12px;padding:11px 14px;position:relative;border-bottom:1px solid var(--brd)}
+.geo-stop:last-child{border-bottom:none}
+.geo-line{position:absolute;left:27px;top:0;bottom:0;width:2px;background:var(--brd);z-index:0}
+.geo-stop:first-child .geo-line{top:50%}
+.geo-stop:last-child .geo-line{bottom:50%}
+.geo-num{width:26px;height:26px;border-radius:50%;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;z-index:1;font-variant-numeric:tabular-nums}
+.geo-num.gn-marked{background:var(--grn);color:#fff}
+.geo-num.gn-pending{background:var(--surf2);color:var(--txt3);border:2px solid var(--brd)}
+.geo-name{font-size:13px;font-weight:700;color:var(--txt)}
+.geo-addr{font-size:10px;color:var(--txt3);margin-top:1px}
+.geo-mark{padding:5px 10px;border-radius:8px;border:1.5px solid var(--brd);background:var(--surf2);cursor:pointer;font-size:10px;font-weight:700;color:var(--txt3);flex-shrink:0}
+.geo-mark.done{background:var(--grn-l);border-color:rgba(27,122,62,.2);color:var(--grn)}
+/* Notifications */
+.notif-preview{background:var(--surf2);border-radius:var(--r-sm);padding:11px 13px;margin:0 14px 12px;border-left:3px solid var(--teal)}
+.np-lbl{font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt3);margin-bottom:5px}
+.np-txt{font-size:12px;color:var(--txt);line-height:1.5}
+.send-row{display:flex;gap:8px;padding:0 14px 12px}
+.send-wa{flex:1;padding:12px;border-radius:var(--r-sm);border:none;cursor:pointer;font-size:13px;font-weight:700;background:#25D366;color:#fff}
+.send-sms{flex:1;padding:12px;border-radius:var(--r-sm);border:none;cursor:pointer;font-size:13px;font-weight:700;background:var(--teal);color:#fff}
+.nh-item{display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-bottom:1px solid var(--brd)}
+.nh-item:last-child{border-bottom:none}
+.nh-ico{width:32px;height:32px;border-radius:8px;background:var(--teal-l);display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.nh-text{font-size:12px;color:var(--txt);line-height:1.4}
+.nh-meta{font-size:10px;color:var(--txt3);margin-top:3px}
+/* UPI Modal */
+.upi-modal{position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:100;align-items:flex-end;display:none}
+.upi-modal.open{display:flex}
+.upi-sheet{background:var(--surf);border-radius:22px 22px 0 0;width:100%;animation:slideUp .28s ease}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.upi-handle{width:36px;height:4px;border-radius:2px;background:var(--brd);margin:12px auto 14px}
+.upi-reader{text-align:center;font-size:11px;color:var(--txt3);margin-bottom:3px}
+.upi-amount{text-align:center;font-family:Georgia,serif;font-size:28px;font-weight:700;color:var(--txt);margin-bottom:14px}
+.upi-qr-wrap{width:148px;height:148px;margin:0 auto 14px;border-radius:var(--r);border:2px dashed var(--brd);display:flex;align-items:center;justify-content:center;overflow:hidden;background:var(--surf2)}
+.upi-qr-grid{width:128px;height:128px;background-image:repeating-conic-gradient(var(--txt) 0% 25%,transparent 0% 50%);background-size:8px 8px;opacity:.75}
+.upi-id-row{display:flex;align-items:center;justify-content:space-between;background:var(--surf2);border-radius:var(--r-sm);padding:9px 13px;margin:0 16px 12px}
+.upi-id-val{font-size:12px;font-weight:600;color:var(--teal);font-family:monospace}
+.upi-copy-btn{padding:4px 11px;border-radius:6px;border:none;background:var(--teal-l);color:var(--teal);font-size:11px;font-weight:700;cursor:pointer}
+.upi-foot{padding:0 16px 24px;display:flex;gap:8px}
+.upi-close{flex:1;padding:12px;border-radius:var(--r-sm);border:1.5px solid var(--brd);background:transparent;color:var(--txt);font-size:13px;font-weight:700;cursor:pointer}
+.upi-confirm{flex:2;padding:12px;border-radius:var(--r-sm);border:none;background:var(--grn);color:#fff;font-size:13px;font-weight:700;cursor:pointer}
+/* Dashboard collection summary */
+.coll-dash{background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);overflow:hidden;margin:0 14px}
+.coll-dash-hd{display:flex;justify-content:space-between;align-items:center;padding:9px 13px;background:var(--teal-l);border-bottom:1px solid rgba(10,115,115,.12)}
+.coll-dash-hd .t{font-size:12px;font-weight:700;color:var(--teal)}
+.coll-dash-hd .a{font-size:11px;color:var(--teal);cursor:pointer}
+.cdr-row{display:flex;align-items:center;justify-content:space-between;padding:9px 13px;border-bottom:1px solid var(--brd)}
+.cdr-row:last-child{border-bottom:none}
+.cdr-lbl{font-size:12px;color:var(--txt2)}
+.cdr-val{font-family:Georgia,serif;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<button class="theme-btn" onclick="toggleTheme()">🌙</button>
+
+<div class="phone">
+  <div class="sbar"><span class="t" id="sTime">5:28 AM</span><div class="ic"><span>▲▲▲</span><span>4G</span><span>🔋62%</span></div></div>
+
+  <div class="toast" id="toast"><div class="tk">✓</div><span id="toastMsg"></span></div>
+
+  <!-- ════ LOGIN ════ -->
+  <div class="screen active" id="scr-login">
+    <div style="height:44px;background:var(--teal-d);flex-shrink:0"></div>
+    <div class="login-body">
+      <div class="logo">
+        <div class="mark">P<span>atrika</span></div>
+        <div class="sub">Hawker Portal</div>
+      </div>
+      <div class="role-pill">🛵 Delivery Staff Login</div>
+      <div class="l-card" id="loginCard">
+        <h2>Good Morning!</h2>
+        <div class="sub">Enter your registered mobile number</div>
+        <div class="l-pfx">
+          <span class="pfx">+91</span>
+          <input type="tel" class="l-inp" id="mobileInp" placeholder="Mobile number" maxlength="10" value="97140 22891">
+        </div>
+        <button class="l-btn" onclick="sendOTP()">Get OTP →</button>
+        <div class="l-hint">OTP will be sent to your registered number</div>
+      </div>
+      <div class="l-card" id="otpCard" style="display:none">
+        <h2>Verify OTP</h2>
+        <div class="sub">Sent to +91 97140 22891 &nbsp;<span class="resend" onclick="backToMobile()">Change</span></div>
+        <div class="otp-boxes">
+          <input type="tel" class="otp-box" maxlength="1" id="o0" oninput="otpInput(this,0)">
+          <input type="tel" class="otp-box" maxlength="1" id="o1" oninput="otpInput(this,1)">
+          <input type="tel" class="otp-box" maxlength="1" id="o2" oninput="otpInput(this,2)">
+          <input type="tel" class="otp-box" maxlength="1" id="o3" oninput="otpInput(this,3)">
+          <input type="tel" class="otp-box" maxlength="1" id="o4" oninput="otpInput(this,4)">
+          <input type="tel" class="otp-box" maxlength="1" id="o5" oninput="otpInput(this,5)">
+        </div>
+        <div class="otp-timer" id="otpTimer">Resend OTP in <strong id="otpCountdown">30s</strong></div>
+        <button class="l-btn" onclick="verifyOTP()">Verify & Start →</button>
+      </div>
+      <div class="l-footer">Patrika AI · Hawker App v2.4 · Field Edition</div>
+    </div>
+  </div>
+
+  <!-- ════ DASHBOARD ════ -->
+  <div class="screen" id="scr-dash">
+    <div class="dash-hero">
+      <div class="dh-top">
+        <div>
+          <div class="dh-greet">Good morning,</div>
+          <div class="dh-name">Suresh Kumar</div>
+          <div class="dh-meta">HWK-8821 · Route 3A · Civil Lines</div>
+        </div>
+        <button class="checkin-btn" id="checkinBtn" onclick="toggleCheckin()">Check In</button>
+      </div>
+      <div class="route-prog">
+        <div class="rp-top">
+          <div><div class="rp-label">Today's Route</div><div style="font-size:9px;color:rgba(255,255,255,.35);margin-top:2px">Thu 10 Jul · Started 5:28 AM</div></div>
+          <div style="text-align:right"><div class="rp-count" id="dashDone">24<span style="font-size:12px;color:rgba(255,255,255,.4)">/82</span></div><div class="rp-sub">Delivered</div></div>
+        </div>
+        <div class="prog-track-hero"><div class="prog-fill-hero" id="heroProgress" style="width:29%"></div></div>
+        <div class="rp-pills">
+          <div class="rp-pill done" id="pillDone">✓ 24 Done</div>
+          <div class="rp-pill skip" id="pillSkip">✗ 2 Skipped</div>
+          <div class="rp-pill left" id="pillLeft">◯ 56 Remaining</div>
+        </div>
+      </div>
+    </div>
+    <div class="scr-body">
+      <div class="announce">
+        <div class="an-ico">📢</div>
+        <div class="an-txt"><strong>New Incentive · July</strong><span>₹2 bonus per extra copy delivered above target. Check Earnings for details.</span></div>
+      </div>
+      <div class="kpi-strip" style="margin-top:12px">
+        <div class="kpi"><div class="kv">₹342</div><div class="kl">Today's Earn</div></div>
+        <div class="kpi"><div class="kv">8</div><div class="kl">Days Active</div></div>
+        <div class="kpi"><div class="kv">99.1%</div><div class="kl">Accuracy</div></div>
+      </div>
+      <span class="slbl">Quick Actions</span>
+      <div class="act-grid">
+        <div class="act-item" onclick="goScreen('scr-route')"><div class="act-icon ai-teal">🗺️</div><div class="act-label">Delivery Route</div></div>
+        <div class="act-item" onclick="goScreen('scr-bundle')"><div class="act-icon ai-grn">📦</div><div class="act-label">Bundle Receipt</div></div>
+        <div class="act-item" onclick="goScreen('scr-complaint')"><div class="act-icon ai-coral">🚨<span class="act-notif">1</span></div><div class="act-label">Complaints</div></div>
+        <div class="act-item" onclick="goScreen('scr-earnings')"><div class="act-icon ai-amber">💰</div><div class="act-label">My Earnings</div></div>
+        <div class="act-item" onclick="goScreen('scr-attendance')"><div class="act-icon ai-blue">📅</div><div class="act-label">Attendance</div></div>
+        <div class="act-item" onclick="goScreen('scr-leave')"><div class="act-icon ai-pur">🏖️</div><div class="act-label">Leave Request</div></div>
+        <div class="act-item" onclick="goScreen('scr-perf')"><div class="act-icon ai-pink">📈</div><div class="act-label">Performance</div></div>
+        <div class="act-item" onclick="goScreen('scr-profile')"><div class="act-icon ai-slate">👤</div><div class="act-label">My Profile</div></div>
+      </div>
+      <div class="act-divider" style="margin-top:6px"></div>
+      <span class="slbl">Subscriber Management</span>
+      <div class="act-grid">
+        <div class="act-item" onclick="goScreen('scr-readers')"><div class="act-icon ai-teal">👥</div><div class="act-label">Readers</div></div>
+        <div class="act-item" onclick="goScreen('scr-collection')"><div class="act-icon ai-grn">💳<span class="act-notif">4</span></div><div class="act-label">Collections</div></div>
+        <div class="act-item" onclick="goScreen('scr-bills')"><div class="act-icon ai-amber">📄</div><div class="act-label">Bills</div></div>
+        <div class="act-item" onclick="goScreen('scr-notifications')"><div class="act-icon ai-pur">📢</div><div class="act-label">Notify</div></div>
+        <div class="act-item" onclick="goScreen('scr-geo')"><div class="act-icon ai-blue">📍</div><div class="act-label">Geo Route</div></div>
+      </div>
+      <div style="height:8px"></div>
+      <div class="coll-dash" onclick="goScreen('scr-collection')" style="cursor:pointer">
+        <div class="coll-dash-hd"><span class="t">📊 July Collection</span><span class="a">View All →</span></div>
+        <div id="collDashInfo"></div>
+      </div>
+      <div style="height:14px"></div>
+    </div>
+  </div>
+
+  <!-- ════ BUNDLE RECEIPT ════ -->
+  <div class="screen" id="scr-bundle">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Bundle Receipt</h1><div class="sub">Thu, 10 Jul 2026 · 5:18 AM</div></div></div><button class="hdr-btn" onclick="showToast('Receipt shared')">Share</button></div>
+    <div class="scr-body">
+      <div class="bundle-hero" style="background:var(--teal-l);margin:0;padding:12px 18px 14px;border-bottom:1px solid var(--brd)">
+        <div class="bh-time">Delivered by: Route Van · RJ14-CA-4821</div>
+        <div class="bh-title" style="color:var(--teal);font-size:16px">Verify your bundle counts below</div>
+        <div class="bh-meta" style="color:var(--txt3)">Tap + / − to adjust if counts differ from expected</div>
+      </div>
+      <div style="height:12px"></div>
+      <div class="bundle-count-card">
+        <div class="bcc-head"><span class="pub">Rajasthan Patrika (Hindi)</span><span class="editions">Main + City Supplement</span></div>
+        <div class="bundle-row"><span class="br-pub">Main Edition</span><div class="br-count"><span class="br-expected">Exp: 72</span><div class="count-ctrl"><button class="cc-btn" onclick="adjCount('h-main',-1)">−</button><span class="cc-val" id="h-main">72</span><button class="cc-btn" onclick="adjCount('h-main',1)">+</button></div></div></div>
+        <div class="bundle-row"><span class="br-pub">City Edition</span><div class="br-count"><span class="br-expected">Exp: 72</span><div class="count-ctrl"><button class="cc-btn" onclick="adjCount('h-city',-1)">−</button><span class="cc-val" id="h-city">72</span><button class="cc-btn" onclick="adjCount('h-city',1)">+</button></div></div></div>
+      </div>
+      <div class="bundle-count-card">
+        <div class="bcc-head"><span class="pub">Patrika (English)</span><span class="editions">Single edition</span></div>
+        <div class="bundle-row"><span class="br-pub">English Edition</span><div class="br-count"><span class="br-expected">Exp: 10</span><div class="count-ctrl"><button class="cc-btn" onclick="adjCount('e-main',-1)">−</button><span class="cc-val" id="e-main">10</span><button class="cc-btn" onclick="adjCount('e-main',1)">+</button></div></div></div>
+      </div>
+      <span class="slbl">Acknowledgement</span>
+      <div class="sig-area">
+        <div class="sig-label">Your digital signature confirms receipt</div>
+        <div class="sig-pad" id="sigPad" onclick="signBundle()"><span class="sig-pad-txt" id="sigPadTxt">Tap to sign &amp; confirm</span></div>
+      </div>
+      <div class="card cp" style="background:var(--grn-l);border:1px solid rgba(27,122,62,.2)">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><div style="font-size:13px;font-weight:700;color:var(--grn)">Total Bundle</div><div style="font-size:11px;color:var(--txt3);margin-top:2px">2 publications · 3 editions</div></div>
+          <div style="font-family:Georgia,serif;font-size:26px;font-weight:700;color:var(--grn);font-variant-numeric:tabular-nums" id="bundleTotal">154</div>
+        </div>
+      </div>
+      <div class="btn-row"><button class="btn btn-teal" onclick="confirmBundle()">Confirm Receipt →</button></div>
+      <div style="height:10px"></div>
+    </div>
+  </div>
+
+  <!-- ════ DELIVERY ROUTE ════ -->
+  <div class="screen" id="scr-route">
+    <div class="route-header">
+      <div class="hdr-l" style="margin-bottom:8px"><button class="back" onclick="goScreen('scr-dash')" style="width:34px;height:34px;border-radius:50%;border:none;cursor:pointer;background:rgba(255,255,255,.15);color:#fff;font-size:16px;display:flex;align-items:center;justify-content:center">←</button><div style="margin-left:10px"><div style="font-family:Georgia,serif;font-size:17px;font-weight:700;color:#fff">Delivery Route</div><div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:1px">Route 3A · Civil Lines</div></div></div>
+      <div class="route-meta">
+        <div style="font-size:12px;color:rgba(255,255,255,.6)">82 subscribers total</div>
+        <div class="rcounts"><span class="rc rc-d" id="rc-done">✓ 24</span><span class="rc rc-s" id="rc-skip">✗ 2</span><span class="rc rc-l" id="rc-left">◯ 56</span></div>
+      </div>
+      <div class="prog-track-hero"><div class="prog-fill-hero" id="routeProgress" style="width:29%"></div></div>
+    </div>
+    <div class="filter-strip" style="margin-top:8px">
+      <div class="f-pill on" onclick="filterRoute(this,'all')">All (82)</div>
+      <div class="f-pill" onclick="filterRoute(this,'pending')">Remaining (56)</div>
+      <div class="f-pill" onclick="filterRoute(this,'done')">Done (24)</div>
+      <div class="f-pill" onclick="filterRoute(this,'skip')">Skipped (2)</div>
+    </div>
+    <div class="scr-body" id="routeList"></div>
+    <button class="fab" onclick="showToast('Location & route updated')">📍</button>
+  </div>
+
+  <!-- ════ COMPLAINTS ════ -->
+  <div class="screen" id="scr-complaint">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Complaint Log</h1><div class="sub">Report delivery issues</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:12px"></div>
+      <div class="card cp">
+        <div class="fg"><label class="fl">Complaint Type</label>
+          <select class="inp inp-sel">
+            <option>-- Select Type --</option>
+            <option>Missing copy at door</option>
+            <option>Wrong edition delivered</option>
+            <option>Wet / damaged newspaper</option>
+            <option>Subscriber not at home</option>
+            <option>Gate locked / no access</option>
+            <option>Dog / safety issue</option>
+            <option>Bundle shortage</option>
+            <option>Route map error</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="fg"><label class="fl">Subscriber Address</label><input type="text" class="inp" placeholder="House / flat number" value="D-42, Civil Lines"></div>
+        <div class="fg"><label class="fl">Subscriber Name (if known)</label><input type="text" class="inp" placeholder="Optional"></div>
+      </div>
+      <span class="slbl">Severity</span>
+      <div class="comp-severity">
+        <div class="sev-btn" id="sev-low" onclick="setSeverity('low')">🟢 Low</div>
+        <div class="sev-btn sel-med" id="sev-med" onclick="setSeverity('med')">🟡 Medium</div>
+        <div class="sev-btn" id="sev-high" onclick="setSeverity('high')">🔴 High</div>
+      </div>
+      <div class="card cp">
+        <div class="fg"><label class="fl">Description</label><textarea class="inp" rows="3" style="resize:none" placeholder="Describe what happened…"></textarea></div>
+        <div class="fg" style="margin-bottom:0">
+          <label class="fl">Photo Evidence (optional)</label>
+          <div class="photo-upload" id="photoUpload" onclick="addPhoto()"><div class="pico">📷</div><div class="ptxt" id="photoTxt">Tap to add photo</div></div>
+        </div>
+      </div>
+      <span class="slbl">Recent Complaints</span>
+      <div class="card" style="padding:0" id="compHistory"></div>
+      <div class="btn-row"><button class="btn btn-out">Clear</button><button class="btn btn-coral" onclick="submitComplaint()">Submit Complaint</button></div>
+      <div style="height:10px"></div>
+    </div>
+  </div>
+
+  <!-- ════ EARNINGS ════ -->
+  <div class="screen" id="scr-earnings">
+    <div class="earn-hero">
+      <div class="earn-period">July 2026 · 1–10 Jul (10 days)</div>
+      <div class="earn-amount">₹3,420</div>
+      <div class="earn-sub">Estimated earnings · Final settle on 1 Aug</div>
+      <div class="earn-cards">
+        <div class="earn-card hi"><div class="ev">₹12,800</div><div class="el">June Final</div></div>
+        <div class="earn-card"><div class="ev">820</div><div class="el">Copies/Day</div></div>
+        <div class="earn-card pos"><div class="ev">₹680</div><div class="el">Incentive</div></div>
+      </div>
+    </div>
+    <div class="scr-body">
+      <div style="height:12px"></div>
+      <span class="slbl">This Month Breakdown</span>
+      <div class="card" style="padding:0">
+        <div class="earn-row"><span class="er-lbl">Base Delivery · 820 copies × ₹0.30 × 10 days</span><span class="er-val pos">₹2,460</span></div>
+        <div class="earn-row"><span class="er-lbl">Incentive · Above-target copies</span><span class="er-val pos">+ ₹680</span></div>
+        <div class="earn-row"><span class="er-lbl">Sunday Bonus · 4 Sundays</span><span class="er-val pos">+ ₹320</span></div>
+        <div class="earn-row"><span class="er-lbl">Complaint Deduction · 1 valid</span><span class="er-val neg">– ₹40</span></div>
+        <div style="background:var(--surf2);padding:12px 14px;display:flex;justify-content:space-between;align-items:center"><span style="font-size:13px;font-weight:700;color:var(--txt)">Net Estimated</span><span style="font-family:Georgia,serif;font-size:22px;font-weight:700;color:var(--teal);font-variant-numeric:tabular-nums">₹3,420</span></div>
+      </div>
+      <span class="slbl">Payment History</span>
+      <div class="card" style="padding:0" id="earnHistory"></div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- ════ ATTENDANCE ════ -->
+  <div class="screen" id="scr-attendance">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Attendance</h1><div class="sub">July 2026</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:12px"></div>
+      <div class="kpi-strip">
+        <div class="kpi"><div class="kv" style="color:var(--grn)">8</div><div class="kl">Present</div></div>
+        <div class="kpi"><div class="kv" style="color:var(--coral)">1</div><div class="kl">Absent</div></div>
+        <div class="kpi"><div class="kv" style="color:var(--amber)">1</div><div class="kl">Holiday</div></div>
+        <div class="kpi"><div class="kv">90%</div><div class="kl">Rate</div></div>
+      </div>
+      <span class="slbl">July 2026</span>
+      <div class="card" style="padding:0">
+        <div class="att-cal" id="attCalendar"></div>
+      </div>
+      <span class="slbl">Today's Punch</span>
+      <div class="punch-card">
+        <div class="punch-row"><span class="pr-lbl">Check In</span><span class="pr-val ok">5:28 AM ✓</span></div>
+        <div class="punch-row"><span class="pr-lbl">Route Started</span><span class="pr-val ok">5:34 AM ✓</span></div>
+        <div class="punch-row"><span class="pr-lbl">Expected Finish</span><span class="pr-val">8:15 AM</span></div>
+        <div class="punch-row"><span class="pr-lbl">Check Out</span><span class="pr-val" style="color:var(--txt3)">Pending</span></div>
+      </div>
+      <div class="btn-row"><button class="btn btn-teal" onclick="showToast('Checked out successfully · 8:22 AM')">Check Out Now</button></div>
+      <div style="height:10px"></div>
+    </div>
+  </div>
+
+  <!-- ════ LEAVE REQUEST ════ -->
+  <div class="screen" id="scr-leave">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Leave Request</h1><div class="sub">Apply for time off</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:12px"></div>
+      <span class="slbl">Leave Balance</span>
+      <div class="leave-balance">
+        <div class="lb"><div class="lv" style="color:var(--grn)">12</div><div class="ll">Casual</div></div>
+        <div class="lb"><div class="lv" style="color:var(--teal)">7</div><div class="ll">Earned</div></div>
+        <div class="lb"><div class="lv" style="color:var(--amber)">4</div><div class="ll">Sick</div></div>
+        <div class="lb"><div class="lv" style="color:var(--coral)">0</div><div class="ll">LOP Taken</div></div>
+      </div>
+      <span class="slbl">Apply Leave</span>
+      <div class="card cp">
+        <div class="fg"><label class="fl">Leave Type</label><select class="inp inp-sel"><option>Casual Leave</option><option>Earned Leave</option><option>Sick Leave</option><option>Loss of Pay</option></select></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px" class="fg"><div><label class="fl">From Date</label><input type="date" class="inp" value="2026-07-15"></div><div><label class="fl">To Date</label><input type="date" class="inp" value="2026-07-15"></div></div>
+        <div class="fg"><label class="fl">Reason</label><textarea class="inp" rows="3" style="resize:none" placeholder="Brief reason for leave…"></textarea></div>
+        <div class="fg" style="margin-bottom:0"><label class="fl">Substitute Arrangement (optional)</label><input type="text" class="inp" placeholder="Name of covering hawker"></div>
+      </div>
+      <span class="slbl">Previous Requests</span>
+      <div class="card" style="padding:0" id="leaveHistory"></div>
+      <div class="btn-row"><button class="btn btn-teal" onclick="submitLeave()">Submit Request</button></div>
+      <div style="height:10px"></div>
+    </div>
+  </div>
+
+  <!-- ════ PERFORMANCE ════ -->
+  <div class="screen" id="scr-perf">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Performance</h1><div class="sub">Your stats · July 2026</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:12px"></div>
+      <div class="perf-rank">
+        <div class="pr-badge">🏆</div>
+        <div class="pr-title">Star Hawker</div>
+        <div class="pr-sub">Top 5% in Civil Lines Zone</div>
+        <div class="pr-rank">🥇 Rank #3 of 48 hawkers</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-card"><div class="mc-val">99.1%</div><div class="mc-lbl">Accuracy</div><div class="mc-delta up">↑ 0.3% vs Jun</div></div>
+        <div class="metric-card"><div class="mc-val">8,200</div><div class="mc-lbl">Copies/Month</div><div class="mc-delta up">↑ 120 vs Jun</div></div>
+      </div>
+      <span class="slbl">Key Metrics</span>
+      <div class="card" style="padding:0">
+        <div class="perf-stat"><span class="ps-lbl">Delivery Accuracy</span><div class="ps-right"><div class="ps-val">99.1%</div><div class="ps-bar"><div class="ps-bar-fill" style="width:99%"></div></div></div></div>
+        <div class="perf-stat"><span class="ps-lbl">On-Time Rate</span><div class="ps-right"><div class="ps-val">97.4%</div><div class="ps-bar"><div class="ps-bar-fill" style="width:97%"></div></div></div></div>
+        <div class="perf-stat"><span class="ps-lbl">Zero-Complaint Days</span><div class="ps-right"><div class="ps-val">7 / 10</div><div class="ps-bar"><div class="ps-bar-fill" style="width:70%"></div></div></div></div>
+        <div class="perf-stat"><span class="ps-lbl">Subscriber Retention</span><div class="ps-right"><div class="ps-val">100%</div><div class="ps-bar"><div class="ps-bar-fill" style="width:100%"></div></div></div></div>
+        <div class="perf-stat"><span class="ps-lbl">Attendance Rate</span><div class="ps-right"><div class="ps-val">90%</div><div class="ps-bar"><div class="ps-bar-fill" style="width:90%;background:var(--amber)"></div></div></div></div>
+      </div>
+      <span class="slbl">Incentive Progress · July</span>
+      <div class="card cp">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span style="font-size:12px;color:var(--txt2)">Extra copies above target</span><span style="font-size:13px;font-weight:700;color:var(--teal)">340 copies</span></div>
+        <div class="prog-track"><div class="prog-fill" style="width:68%;background:var(--teal)"></div></div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px"><span style="font-size:10px;color:var(--txt3)">Target: 500 extra copies</span><span style="font-size:10px;font-weight:700;color:var(--amber)">₹680 earned so far</span></div>
+      </div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- ════ PROFILE ════ -->
+  <div class="screen" id="scr-profile">
+    <div style="height:44px;background:var(--teal-d);flex-shrink:0"></div>
+    <div class="scr-body">
+      <div class="prof-hero">
+        <div class="pav">SK</div>
+        <div class="pname">Suresh Kumar</div>
+        <div class="pid">Hawker ID: HWK-8821 · Since Jan 2022</div>
+        <div class="pbadges">
+          <span class="badge b-grn">Active</span>
+          <span class="badge b-amber">Star Hawker</span>
+          <span class="badge b-teal">Route 3A</span>
+        </div>
+      </div>
+      <div style="padding:8px 14px 0;display:flex;justify-content:space-between;align-items:center">
+        <span class="slbl" style="padding:0">Personal Details</span>
+        <button class="hdr-btn" style="background:var(--teal-l);color:var(--teal);border-radius:8px;height:28px;font-size:11px" onclick="showToast('Edit request sent')">✏️ Request Edit</button>
+      </div>
+      <div class="card" style="padding:0">
+        <div class="prow"><span class="pr-ico">📞</span><div class="pr-inf"><div class="k">Mobile</div><div class="v">+91 97140 22891</div></div></div>
+        <div class="prow"><span class="pr-ico">📍</span><div class="pr-inf"><div class="k">Home Address</div><div class="v">E-12, Indira Colony, Jaipur</div></div></div>
+        <div class="prow"><span class="pr-ico">🛵</span><div class="pr-inf"><div class="k">Vehicle</div><div class="v">Activa 6G · RJ14-MK-2210</div></div></div>
+        <div class="prow"><span class="pr-ico">🏦</span><div class="pr-inf"><div class="k">Bank Account</div><div class="v">UCO Bank ••••9812</div></div></div>
+        <div class="prow"><span class="pr-ico">📦</span><div class="pr-inf"><div class="k">Route</div><div class="v">Route 3A · Civil Lines · 82 subscribers</div></div></div>
+        <div class="prow"><span class="pr-ico">🧑‍💼</span><div class="pr-inf"><div class="k">Reporting Agent</div><div class="v">Raj General Store (AGT-24891)</div></div></div>
+        <div class="prow"><span class="pr-ico">📅</span><div class="pr-inf"><div class="k">Working Days</div><div class="v">Monday – Sunday (all days)</div></div></div>
+      </div>
+      <div class="btn-row" style="padding-top:4px">
+        <button class="btn btn-out" onclick="goScreen('scr-dash')">← Dashboard</button>
+        <button class="btn btn-coral" onclick="showToast('Logged out');goScreen('scr-login')">Logout</button>
+      </div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- ════ READER DATABASE ════ -->
+  <div class="screen" id="scr-readers">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Reader Database</h1><div class="sub" id="rd-count">82 subscribers</div></div></div><button class="hdr-btn" onclick="showAddReader()">+ Add</button></div>
+    <div class="srch-wrap"><span class="srch-ico">🔍</span><input type="text" class="srch-inp" id="readerSearch" placeholder="Search by name or address…" oninput="renderReaders()"></div>
+    <div class="filter-strip">
+      <div class="f-pill on" onclick="setRF(this,'all')">All</div>
+      <div class="f-pill" onclick="setRF(this,'paid')">Paid</div>
+      <div class="f-pill" onclick="setRF(this,'partial')">Partial</div>
+      <div class="f-pill" onclick="setRF(this,'overdue')">Overdue</div>
+    </div>
+    <div class="scr-body" id="readerList"></div>
+  </div>
+
+  <!-- ════ READER DETAIL ════ -->
+  <div class="screen" id="scr-reader-detail">
+    <div class="rd-hero">
+      <div class="hdr" style="background:transparent;padding:11px 0 12px"><div class="hdr-l"><button class="back" onclick="goScreen('scr-readers')">←</button><div><div id="rdHdrName" style="font-family:Georgia,serif;font-size:17px;font-weight:700;color:#fff"></div><div id="rdHdrSub" class="sub"></div></div></div><button class="hdr-btn" id="rdCallBtn">📞 Call</button></div>
+      <div class="rd-bals" id="rdBals"></div>
+    </div>
+    <div class="scr-body" id="readerDetailBody"></div>
+  </div>
+
+  <!-- ════ COLLECTION TRACKER ════ -->
+  <div class="screen" id="scr-collection">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Collection Tracker</h1><div class="sub">July 2026</div></div></div><button class="hdr-btn" onclick="showToast('Exported to WhatsApp')">Export</button></div>
+    <div class="scr-body">
+      <div class="coll-summary" id="collSummary"></div>
+      <div style="height:4px"></div>
+      <div class="filter-strip">
+        <div class="f-pill on" onclick="filterColl(this,'all')">All</div>
+        <div class="f-pill" onclick="filterColl(this,'paid')">Paid</div>
+        <div class="f-pill" onclick="filterColl(this,'partial')">Partial</div>
+        <div class="f-pill" onclick="filterColl(this,'overdue')">Overdue</div>
+      </div>
+      <div class="card" style="padding:0;margin-top:0" id="collList"></div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- ════ BILL GENERATION ════ -->
+  <div class="screen" id="scr-bills">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Bill Generation</h1><div class="sub">Generate &amp; send monthly bills</div></div></div></div>
+    <div class="bill-month"><button class="bm-arrow" onclick="prevMonth()">◁</button><div class="bm-name" id="billMonthName">July 2026</div><button class="bm-arrow" onclick="nextMonth()">▷</button></div>
+    <div class="bill-summary" id="billSummary"></div>
+    <div class="scr-body">
+      <div style="height:8px"></div>
+      <div style="padding:0 14px;display:flex;justify-content:space-between;align-items:center">
+        <span class="slbl" style="padding:0">Subscribers</span>
+        <span style="font-size:11px;color:var(--teal);cursor:pointer;font-weight:600" onclick="toggleSelectAll()">Select All</span>
+      </div>
+      <div class="card" style="padding:0;margin-top:8px" id="billList"></div>
+      <div class="btn-row">
+        <button class="btn btn-out" onclick="showToast('Bill preview ready')">Preview</button>
+        <button class="btn btn-teal" onclick="sendBills()">Send Selected →</button>
+      </div>
+      <div style="height:10px"></div>
+    </div>
+  </div>
+
+  <!-- ════ GEO ROUTE ════ -->
+  <div class="screen" id="scr-geo">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Geo Route</h1><div class="sub">Route 3A · Mark delivery locations</div></div></div><button class="hdr-btn" onclick="shareRoute()">Share</button></div>
+    <div style="background:var(--teal-l);padding:10px 14px;display:flex;gap:8px;align-items:center;border-bottom:1px solid rgba(10,115,115,.12);flex-shrink:0">
+      <div style="flex:1;background:var(--surf);border-radius:var(--r-sm);padding:8px 10px;text-align:center"><div style="font-family:Georgia,serif;font-size:16px;font-weight:700;color:var(--grn)" id="geoMarkedCt">0</div><div style="font-size:9px;color:var(--txt3);text-transform:uppercase;letter-spacing:.3px;margin-top:2px">Marked</div></div>
+      <div style="flex:1;background:var(--surf);border-radius:var(--r-sm);padding:8px 10px;text-align:center"><div style="font-family:Georgia,serif;font-size:16px;font-weight:700;color:var(--amber)" id="geoUnmarkedCt">0</div><div style="font-size:9px;color:var(--txt3);text-transform:uppercase;letter-spacing:.3px;margin-top:2px">Unmarked</div></div>
+      <button style="padding:8px 14px;border-radius:var(--r-sm);border:none;background:var(--teal);color:#fff;font-size:12px;font-weight:700;cursor:pointer" onclick="markAllGeo()">Mark All</button>
+    </div>
+    <div class="scr-body" id="geoList"></div>
+  </div>
+
+  <!-- ════ NOTIFICATIONS ════ -->
+  <div class="screen" id="scr-notifications">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Notifications</h1><div class="sub">Bulk message to readers</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:8px"></div>
+      <span class="slbl">Send To</span>
+      <div class="filter-strip">
+        <div class="f-pill on" onclick="filterPill(this)">All Readers (82)</div>
+        <div class="f-pill" onclick="filterPill(this)">Overdue (4)</div>
+        <div class="f-pill" onclick="filterPill(this)">Patrika Hindi</div>
+        <div class="f-pill" onclick="filterPill(this)">Patrika English</div>
+      </div>
+      <span class="slbl">Quick Templates</span>
+      <div class="filter-strip" style="padding-bottom:0">
+        <div class="f-pill" onclick="setTemplate('bill')">📄 Monthly Bill</div>
+        <div class="f-pill" onclick="setTemplate('payment')">💰 Payment Due</div>
+        <div class="f-pill" onclick="setTemplate('delay')">⏰ Delay Notice</div>
+        <div class="f-pill" onclick="setTemplate('holiday')">🎉 Holiday</div>
+      </div>
+      <div style="height:10px"></div>
+      <div class="card cp" style="margin-bottom:10px">
+        <div class="fg" style="margin-bottom:0"><label class="fl">Message</label><textarea class="inp" rows="4" id="notifMsg" style="resize:none" oninput="updatePreview()">नमस्ते {नाम} जी, जुलाई 2026 का बिल ₹{राशि} है। कृपया समय पर भुगतान करें। – सुरेश कुमार</textarea></div>
+      </div>
+      <div class="notif-preview"><div class="np-lbl">Preview (sample)</div><div class="np-txt" id="notifPreviewTxt">नमस्ते राजेश जी, जुलाई 2026 का बिल ₹150 है। कृपया समय पर भुगतान करें। – सुरेश कुमार</div></div>
+      <div style="height:10px"></div>
+      <div class="send-row">
+        <button class="send-wa" onclick="sendNotif('whatsapp')">💬 WhatsApp (82)</button>
+        <button class="send-sms" onclick="sendNotif('sms')">📱 SMS (82)</button>
+      </div>
+      <span class="slbl">Recently Sent</span>
+      <div class="card" style="padding:0" id="notifHist"></div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- ════ UPI PAYMENT MODAL ════ -->
+  <div class="upi-modal" id="upiModal" onclick="closeUPI(event)">
+    <div class="upi-sheet">
+      <div class="upi-handle"></div>
+      <div class="upi-reader" id="upiReaderName">Collecting from —</div>
+      <div class="upi-amount" id="upiAmt">₹0</div>
+      <div class="upi-qr-wrap"><div class="upi-qr-grid"></div></div>
+      <div class="upi-id-row"><span class="upi-id-val">sureshkumar@upi</span><button class="upi-copy-btn" onclick="showToast('UPI ID copied')">Copy</button></div>
+      <div class="upi-foot">
+        <button class="upi-close" onclick="closeUPIModal()">Cancel</button>
+        <button class="upi-confirm" onclick="confirmPayment()">✓ Mark as Paid</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const qs=s=>document.querySelector(s);
+function showToast(msg,dur=2400){const t=qs('#toast');qs('#toastMsg').textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),dur);}
+function goScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');if(id==='scr-route')initRoute();if(id==='scr-complaint')initCompHistory();if(id==='scr-earnings')initEarnHistory();if(id==='scr-attendance')initCalendar();if(id==='scr-leave')initLeaveHistory();if(id==='scr-dash')updateCollDash();if(id==='scr-readers')initReaders();if(id==='scr-collection')initCollection();if(id==='scr-bills')initBills();if(id==='scr-geo')initGeo();if(id==='scr-notifications')initNotifHist();}
+function toggleTheme(){const r=document.documentElement;const n=r.getAttribute('data-theme')==='dark'?'light':'dark';r.setAttribute('data-theme',n);qs('.theme-btn').textContent=n==='dark'?'☀️':'🌙';}
+function updateClock(){const d=new Date(),h=d.getHours(),m=d.getMinutes();const ap=h>=12?'PM':'AM',h12=h%12||12;const el=qs('#sTime');if(el)el.textContent=h12+':'+(m<10?'0':'')+m+' '+ap;}
+setInterval(updateClock,30000);updateClock();
+
+/* ── LOGIN / OTP ── */
+let otpTimer,otpSec=30;
+function sendOTP(){qs('#loginCard').style.display='none';qs('#otpCard').style.display='block';startOtpTimer();setTimeout(()=>qs('#o0').focus(),100);}
+function startOtpTimer(){otpSec=30;clearInterval(otpTimer);otpTimer=setInterval(()=>{otpSec--;qs('#otpCountdown').textContent=otpSec+'s';if(otpSec<=0){clearInterval(otpTimer);qs('#otpTimer').innerHTML='<span class="resend" onclick="resendOTP()">Resend OTP</span>';}},1000);}
+function resendOTP(){showToast('OTP resent');startOtpTimer();}
+function backToMobile(){qs('#loginCard').style.display='block';qs('#otpCard').style.display='none';clearInterval(otpTimer);}
+function otpInput(el,idx){if(el.value.length===1&&idx<5)document.getElementById('o'+(idx+1)).focus();if(el.value.length===0&&idx>0)document.getElementById('o'+(idx-1)).focus();const all=[0,1,2,3,4,5].map(i=>document.getElementById('o'+i).value).join('');if(all.length===6)setTimeout(verifyOTP,300);}
+function verifyOTP(){const all=[0,1,2,3,4,5].map(i=>document.getElementById('o'+i).value).join('');if(all.length<6){showToast('⚠ Enter complete OTP');return;}clearInterval(otpTimer);goScreen('scr-dash');showToast('✓ Welcome back, Suresh!');}
+
+/* ── CHECK IN ── */
+let checkedIn=false;
+function toggleCheckin(){checkedIn=!checkedIn;const btn=qs('#checkinBtn');btn.textContent=checkedIn?'Checked In ✓':'Check In';btn.className='checkin-btn'+(checkedIn?' out':'');showToast(checkedIn?'✓ Checked in · 5:28 AM':'Checked out');}
+
+/* ── BUNDLE RECEIPT ── */
+function adjCount(id,d){const el=qs('#'+id);let v=parseInt(el.textContent)+d;if(v<0)v=0;el.textContent=v;updateBundleTotal();}
+function updateBundleTotal(){const h=parseInt(qs('#h-main').textContent)+parseInt(qs('#h-city').textContent)+parseInt(qs('#e-main').textContent);const t=qs('#bundleTotal');if(t)t.textContent=h;}
+let bundleSigned=false;
+function signBundle(){bundleSigned=true;const p=qs('#sigPad'),t=qs('#sigPadTxt');p.classList.add('signed');t.textContent='✓ Signed · Suresh Kumar · '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});}
+function confirmBundle(){if(!bundleSigned){showToast('⚠ Please sign before confirming');return;}showToast('✓ Bundle receipt confirmed and saved');setTimeout(()=>goScreen('scr-dash'),1000);}
+
+/* ── DELIVERY ROUTE ── */
+const SUBSCRIBERS=[
+  {name:'Rajesh Sharma',addr:'A-1, Civil Lines',pubs:['Hindi','English'],state:'done'},
+  {name:'Priya Joshi',addr:'A-3, Civil Lines',pubs:['Hindi'],state:'done'},
+  {name:'Vikram Singh',addr:'A-5, Civil Lines',pubs:['Hindi','English'],state:'done'},
+  {name:'Sunita Agarwal',addr:'A-7, Civil Lines',pubs:['Hindi'],state:'skip'},
+  {name:'Mohan Lal',addr:'B-2, Civil Lines',pubs:['Hindi'],state:'done'},
+  {name:'Kavita Meena',addr:'B-4, Civil Lines',pubs:['English'],state:'skip'},
+  {name:'Deepak Gupta',addr:'B-6, Civil Lines',pubs:['Hindi'],state:'done'},
+  {name:'Anita Verma',addr:'C-1, Civil Lines',pubs:['Hindi','English'],state:'pending'},
+  {name:'Rajan Patel',addr:'C-3, Civil Lines',pubs:['Hindi'],state:'pending'},
+  {name:'Seema Sharma',addr:'C-5, Civil Lines',pubs:['Hindi'],state:'pending'},
+  {name:'Atul Mishra',addr:'D-1, Civil Lines',pubs:['Hindi','English'],state:'pending'},
+  {name:'Nisha Pandey',addr:'D-3, Civil Lines',pubs:['Hindi'],state:'pending'},
+  {name:'Rakesh Yadav',addr:'D-5, Civil Lines',pubs:['Hindi'],state:'pending'},
+  {name:'Geeta Sharma',addr:'E-1, Civil Lines',pubs:['Hindi','English'],state:'pending'},
+  {name:'Sunil Kumar',addr:'E-3, Civil Lines',pubs:['Hindi'],state:'pending'},
+];
+// Pre-fill done/skip to match dashboard counts
+let routeStates=SUBSCRIBERS.map(s=>s.state);
+function initRoute(){renderRoute();}
+function renderRoute(){
+  const el=qs('#routeList');if(!el)return;
+  let done=0,skip=0;
+  routeStates.forEach(s=>{if(s==='done')done++;if(s==='skip')skip++;});
+  const left=routeStates.length-done-skip;
+  // Update counts
+  const rd=qs('#rc-done'),rs=qs('#rc-skip'),rl=qs('#rc-left');
+  if(rd)rd.textContent='✓ '+done;if(rs)rs.textContent='✗ '+skip;if(rl)rl.textContent='◯ '+left;
+  const rp=qs('#routeProgress');const pct=Math.round(done/routeStates.length*100);
+  if(rp)rp.style.width=pct+'%';
+  el.innerHTML=SUBSCRIBERS.map((s,i)=>{
+    const st=routeStates[i];
+    const pub=s.pubs.map(p=>`<span class="del-pub">${p}</span>`).join('');
+    const icon=st==='done'?'✓':st==='skip'?'✗':'○';
+    const stClass='state-'+st;
+    return`<div class="del-item ${stClass}" id="di-${i}">
+      <div class="del-num">${i+1}</div>
+      <div class="del-info"><div class="del-name">${s.name}</div><div class="del-addr">${s.addr}</div><div class="del-pubs">${pub}</div></div>
+      <div class="del-status"><button class="del-btn state-${st}" onclick="cycleState(${i})">${icon}</button></div>
+    </div>`;
+  }).join('');
+  // Update dashboard
+  const hprog=qs('#heroProgress');if(hprog)hprog.style.width=pct+'%';
+  const dd=qs('#dashDone');if(dd)dd.innerHTML=done+'<span style="font-size:12px;color:rgba(255,255,255,.4)">/'+(routeStates.length)+'</span>';
+  const pd=qs('#pillDone'),ps=qs('#pillSkip'),pl=qs('#pillLeft');
+  if(pd)pd.textContent='✓ '+done+' Done';if(ps)ps.textContent='✗ '+skip+' Skipped';if(pl)pl.textContent='◯ '+left+' Remaining';
+}
+function cycleState(i){const s=routeStates[i];routeStates[i]=s==='pending'?'done':s==='done'?'skip':'pending';renderRoute();const msgs={done:'✓ Delivered',skip:'Marked as skipped',pending:'Reset to pending'};showToast(msgs[routeStates[i]]);}
+function filterRoute(pill,filter){pill.closest('.filter-strip').querySelectorAll('.f-pill').forEach(p=>p.classList.remove('on'));pill.classList.add('on');const items=document.querySelectorAll('.del-item');items.forEach(item=>{const st=item.className.includes('state-done')?'done':item.className.includes('state-skip')?'skip':'pending';item.style.display=(filter==='all'||filter===st||filter==='pending'&&st==='pending')?'flex':'none';});}
+
+/* ── COMPLAINT HISTORY ── */
+function initCompHistory(){
+  const el=qs('#compHistory');if(!el)return;
+  const items=[{date:'09 Jul',type:'Wet newspaper',addr:'B-6, Civil Lines',sev:'Low',status:'Resolved'},{date:'05 Jul',type:'Gate locked',addr:'D-12, Civil Lines',sev:'Medium',status:'Closed'}];
+  el.innerHTML=items.map(c=>`<div style="display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-bottom:1px solid var(--brd)"><div style="flex:1"><div style="font-size:12px;font-weight:700;color:var(--txt)">${c.type}</div><div style="font-size:11px;color:var(--txt3)">${c.addr} · ${c.date}</div></div><span class="badge ${c.status==='Resolved'?'b-grn':'b-teal'}">${c.status}</span></div>`).join('');}
+let currentSeverity='med';
+function setSeverity(s){currentSeverity=s;['low','med','high'].forEach(k=>{const b=qs('#sev-'+k);if(b){b.className='sev-btn'+(k===s?' sel-'+k:'');}});}
+function addPhoto(){qs('#photoTxt').textContent='📷 1 photo added';qs('#photoUpload').style.borderColor='var(--grn)';}
+function submitComplaint(){showToast('✓ Complaint submitted · Ref: CMP-2847');goScreen('scr-dash');}
+
+/* ── EARNINGS HISTORY ── */
+function initEarnHistory(){
+  const el=qs('#earnHistory');if(!el)return;
+  const data=[{month:'June 2026',amt:12800,status:'Paid',date:'1 Jul'},{month:'May 2026',amt:11950,status:'Paid',date:'1 Jun'},{month:'April 2026',amt:12200,status:'Paid',date:'1 May'}];
+  el.innerHTML=data.map(d=>`<div style="display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--brd)"><div style="flex:1"><div style="font-size:13px;font-weight:700;color:var(--txt)">${d.month}</div><div style="font-size:11px;color:var(--txt3)">Paid on ${d.date}</div></div><div style="text-align:right"><div style="font-family:Georgia,serif;font-size:15px;font-weight:700;color:var(--grn)">₹${d.amt.toLocaleString('en-IN')}</div><span class="badge b-grn">${d.status}</span></div></div>`).join('');}
+
+/* ── ATTENDANCE CALENDAR ── */
+function initCalendar(){
+  const el=qs('#attCalendar');if(!el)return;
+  const days=['S','M','T','W','T','F','S'];
+  let html=days.map(d=>`<div class="att-day hdr">${d}</div>`).join('');
+  const firstDay=new Date(2026,6,1).getDay();
+  for(let i=0;i<firstDay;i++)html+=`<div class="att-day empty"></div>`;
+  const attendance={1:'holiday',2:'present',3:'present',4:'present',5:'present',6:'present',7:'present',8:'absent',9:'present',10:'today'};
+  for(let d=1;d<=31;d++){const cls=attendance[d]||(d>10?'future':'present');html+=`<div class="att-day ${cls}">${d}</div>`;}
+  el.innerHTML=html;
+}
+
+/* ── LEAVE HISTORY ── */
+function initLeaveHistory(){
+  const el=qs('#leaveHistory');if(!el)return;
+  const data=[{date:'5–6 Jun',type:'Casual Leave',days:2,status:'Approved'},{date:'14 Apr',type:'Sick Leave',days:1,status:'Approved'},{date:'20 Mar',type:'Casual Leave',days:1,status:'Rejected'}];
+  el.innerHTML=data.map(l=>`<div style="display:flex;align-items:center;padding:11px 14px;gap:10px;border-bottom:1px solid var(--brd)"><div style="flex:1"><div style="font-size:12px;font-weight:700;color:var(--txt)">${l.type} · ${l.days} day${l.days>1?'s':''}</div><div style="font-size:11px;color:var(--txt3)">${l.date}</div></div><span class="badge ${l.status==='Approved'?'b-grn':'b-coral'}">${l.status}</span></div>`).join('');}
+function submitLeave(){showToast('✓ Leave request submitted · Pending approval');goScreen('scr-dash');}
+
+/* ── FILTER PILLS ── */
+function filterPill(pill){pill.closest('.filter-strip').querySelectorAll('.f-pill').forEach(p=>p.classList.remove('on'));pill.classList.add('on');}
+
+/* ── READER DATA ── */
+const READERS=[
+  {id:1,name:'Rajesh Sharma',mobile:'98765 43210',address:'A-1, Civil Lines',flat:'GF',papers:['Patrika Hindi','Patrika English'],monthlyBill:150,paid:150,status:'paid',geoMarked:true},
+  {id:2,name:'Priya Joshi',mobile:'87654 32109',address:'A-3, Civil Lines',flat:'1F',papers:['Patrika Hindi'],monthlyBill:85,paid:50,status:'partial',geoMarked:true},
+  {id:3,name:'Vikram Singh',mobile:'76543 21098',address:'A-5, Civil Lines',flat:'2F',papers:['Patrika Hindi','Patrika English'],monthlyBill:150,paid:0,status:'overdue',geoMarked:false},
+  {id:4,name:'Sunita Agarwal',mobile:'65432 10987',address:'A-7, Civil Lines',flat:'GF',papers:['Patrika Hindi'],monthlyBill:85,paid:85,status:'paid',geoMarked:true},
+  {id:5,name:'Mohan Lal',mobile:'54321 09876',address:'B-2, Civil Lines',flat:'3F',papers:['Patrika Hindi'],monthlyBill:85,paid:0,status:'overdue',geoMarked:false},
+  {id:6,name:'Kavita Meena',mobile:'43210 98765',address:'B-4, Civil Lines',flat:'GF',papers:['Patrika English'],monthlyBill:65,paid:65,status:'paid',geoMarked:true},
+  {id:7,name:'Deepak Gupta',mobile:'32109 87654',address:'B-6, Civil Lines',flat:'1F',papers:['Patrika Hindi'],monthlyBill:85,paid:40,status:'partial',geoMarked:true},
+  {id:8,name:'Anita Verma',mobile:'21098 76543',address:'C-1, Civil Lines',flat:'GF',papers:['Patrika Hindi','Patrika English'],monthlyBill:150,paid:0,status:'overdue',geoMarked:false},
+  {id:9,name:'Rajan Patel',mobile:'10987 65432',address:'C-3, Civil Lines',flat:'2F',papers:['Patrika Hindi'],monthlyBill:85,paid:85,status:'paid',geoMarked:true},
+  {id:10,name:'Seema Sharma',mobile:'99876 54321',address:'C-5, Civil Lines',flat:'1F',papers:['Patrika Hindi'],monthlyBill:85,paid:85,status:'paid',geoMarked:true},
+  {id:11,name:'Atul Mishra',mobile:'88765 43210',address:'D-1, Civil Lines',flat:'GF',papers:['Patrika Hindi','Patrika English'],monthlyBill:150,paid:75,status:'partial',geoMarked:true},
+  {id:12,name:'Nisha Pandey',mobile:'77654 32109',address:'D-3, Civil Lines',flat:'3F',papers:['Patrika Hindi'],monthlyBill:85,paid:0,status:'overdue',geoMarked:false},
+];
+let currentReaderFilter='all',currentReader=null;
+
+function initReaders(){renderReaders();}
+function setRF(pill,f){currentReaderFilter=f;pill.closest('.filter-strip').querySelectorAll('.f-pill').forEach(p=>p.classList.remove('on'));pill.classList.add('on');renderReaders();}
+function renderReaders(){
+  const el=qs('#readerList');if(!el)return;
+  const q=(qs('#readerSearch')||{}).value||'';
+  const list=READERS.filter(r=>{
+    const mq=!q||r.name.toLowerCase().includes(q.toLowerCase())||r.address.toLowerCase().includes(q.toLowerCase());
+    const mf=currentReaderFilter==='all'||r.status===currentReaderFilter;
+    return mq&&mf;
+  });
+  const ct=qs('#rd-count');if(ct)ct.textContent=READERS.length+' subscribers';
+  el.innerHTML=list.map(r=>{
+    const ini=r.name.split(' ').map(w=>w[0]).join('').slice(0,2);
+    return`<div class="reader-item" onclick="openReader(${r.id})">
+      <div class="reader-av">${ini}</div>
+      <div style="flex:1"><div class="reader-name">${r.name}</div><div class="reader-meta">${r.address} · ${r.papers.length} paper${r.papers.length>1?'s':''}</div></div>
+      <div style="text-align:right;flex-shrink:0"><div class="r-amt ${r.status}">₹${r.paid}<span style="font-size:10px;color:var(--txt3);font-weight:400">/${r.monthlyBill}</span></div><div class="r-stat ${r.status}">${r.status==='paid'?'Paid':r.status==='partial'?'Partial':'Overdue'}</div></div>
+    </div>`;
+  }).join('')+'<div style="height:10px"></div>';
+}
+function showAddReader(){showToast('Add Reader form coming soon');}
+function openReader(id){currentReader=READERS.find(r=>r.id===id);if(!currentReader)return;renderReaderDetail();goScreen('scr-reader-detail');}
+function renderReaderDetail(){
+  const r=currentReader;if(!r)return;
+  const due=r.monthlyBill-r.paid;
+  const n=qs('#rdHdrName'),s=qs('#rdHdrSub');
+  if(n)n.textContent=r.name;if(s)s.textContent=r.mobile;
+  const cb=qs('#rdCallBtn');if(cb)cb.onclick=()=>showToast('Calling '+r.mobile+'…');
+  const bals=qs('#rdBals');
+  if(bals)bals.innerHTML=`
+    <div class="rd-bal"><div class="rv">₹${r.monthlyBill}</div><div class="rl">Monthly Bill</div></div>
+    <div class="rd-bal"><div class="rv" style="color:#86EFAC">₹${r.paid}</div><div class="rl">Collected</div></div>
+    <div class="rd-bal ${due>0?'due':''}"><div class="rv"${due>0?' style="color:#F9A8A8"':''}>₹${due}</div><div class="rl">Balance Due</div></div>`;
+  const body=qs('#readerDetailBody');if(!body)return;
+  const pubs=r.papers.map(p=>`<span class="del-pub">${p}</span>`).join(' ');
+  body.innerHTML=`
+    <div style="height:10px"></div>
+    <div style="display:flex;gap:8px;padding:0 14px 12px">
+      <button class="btn btn-teal" style="flex:2" onclick="openUPI(${r.id})">💰 Collect Payment</button>
+      <button class="btn btn-out" style="flex:1" onclick="showToast('Payment link sent via WhatsApp')">🔗 Send Link</button>
+    </div>
+    <span class="slbl">Subscription</span>
+    <div class="card" style="padding:0">
+      <div class="prow"><span class="pr-ico">📰</span><div class="pr-inf"><div class="k">Publications</div><div class="v" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${pubs}</div></div></div>
+      <div class="prow"><span class="pr-ico">🏠</span><div class="pr-inf"><div class="k">Address</div><div class="v">${r.address}, Flat ${r.flat}</div></div></div>
+      <div class="prow"><span class="pr-ico">📞</span><div class="pr-inf"><div class="k">Mobile</div><div class="v">${r.mobile}</div></div></div>
+      <div class="prow"><span class="pr-ico">📍</span><div class="pr-inf"><div class="k">Geo Location</div><div class="v" style="color:${r.geoMarked?'var(--grn)':'var(--coral)'}">${r.geoMarked?'✓ Location marked':'✗ Not marked'}</div></div></div>
+    </div>
+    <span class="slbl">Payment History</span>
+    <div class="card" style="padding:0">
+      ${r.paid>0?`<div class="earn-row"><span class="er-lbl">July 2026</span><span class="er-val pos">₹${r.paid} received</span></div>`:''}
+      ${due>0?`<div class="earn-row"><span class="er-lbl" style="color:var(--coral)">Balance due</span><span class="er-val neg">– ₹${due}</span></div>`:''}
+      <div class="earn-row"><span class="er-lbl">June 2026</span><span class="er-val pos" style="color:var(--grn)">₹${r.monthlyBill} Paid</span></div>
+      <div class="earn-row"><span class="er-lbl">May 2026</span><span class="er-val pos" style="color:var(--grn)">₹${r.monthlyBill} Paid</span></div>
+    </div>
+    <div style="height:16px"></div>`;
+}
+
+/* ── COLLECTION TRACKER ── */
+let collFilter='all';
+function initCollection(){
+  const s=qs('#collSummary');
+  if(s){
+    const total=READERS.reduce((a,r)=>a+r.monthlyBill,0);
+    const collected=READERS.reduce((a,r)=>a+r.paid,0);
+    s.innerHTML=`
+      <div class="cs-cell"><div class="cs-val" style="color:var(--txt)">₹${(total/1000).toFixed(1)}k</div><div class="cs-lbl">Total Bill</div></div>
+      <div class="cs-cell"><div class="cs-val" style="color:var(--grn)">₹${(collected/1000).toFixed(1)}k</div><div class="cs-lbl">Collected</div></div>
+      <div class="cs-cell"><div class="cs-val" style="color:var(--coral)">₹${((total-collected)/1000).toFixed(1)}k</div><div class="cs-lbl">Pending</div></div>`;
+  }
+  renderCollList(collFilter);
+}
+function filterColl(pill,f){collFilter=f;pill.closest('.filter-strip').querySelectorAll('.f-pill').forEach(p=>p.classList.remove('on'));pill.classList.add('on');renderCollList(f);}
+function renderCollList(f){
+  const el=qs('#collList');if(!el)return;
+  const list=f==='all'?READERS:READERS.filter(r=>r.status===f);
+  el.innerHTML=list.map(r=>{
+    const due=r.monthlyBill-r.paid;
+    const ini=r.name.split(' ').map(w=>w[0]).join('').slice(0,2);
+    const bc=r.status==='paid'?'paid':r.status==='partial'?'partial':'collect';
+    const bt=r.status==='paid'?'✓ Paid':r.status==='partial'?'₹'+due+' due':'Collect';
+    const action=r.status==='paid'?`showToast('Already paid ✓')`:`openUPI(${r.id})`;
+    return`<div class="coll-item">
+      <div class="reader-av" style="width:36px;height:36px;font-size:12px">${ini}</div>
+      <div style="flex:1"><div style="font-size:13px;font-weight:700;color:var(--txt)">${r.name}</div><div style="font-size:10px;color:var(--txt3);margin-top:1px">${r.address} · ₹${r.paid}/₹${r.monthlyBill}</div></div>
+      <button class="ci-btn ${bc}" onclick="${action}">${bt}</button>
+    </div>`;
+  }).join('');
+}
+function updateCollDash(){
+  const el=qs('#collDashInfo');if(!el)return;
+  const total=READERS.reduce((a,r)=>a+r.monthlyBill,0);
+  const collected=READERS.reduce((a,r)=>a+r.paid,0);
+  const pct=Math.round(collected/total*100);
+  const overdue=READERS.filter(r=>r.status==='overdue').length;
+  el.innerHTML=`
+    <div class="cdr-row"><span class="cdr-lbl">July 2026</span><span class="cdr-val" style="color:var(--grn)">₹${(collected/1000).toFixed(1)}k / ₹${(total/1000).toFixed(1)}k</span></div>
+    <div style="padding:0 13px 10px"><div class="prog-track" style="height:5px"><div class="prog-fill" style="width:${pct}%;background:var(--grn)"></div></div><div style="display:flex;justify-content:space-between;margin-top:4px"><span style="font-size:10px;color:var(--txt3)">${pct}% collected</span><span style="font-size:10px;font-weight:700;color:var(--coral)">${overdue} overdue</span></div></div>`;
+}
+
+/* ── BILL GENERATION ── */
+const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+let billMonthIdx=6;
+let billSelected=new Set(READERS.map(r=>r.id));
+function initBills(){renderBills();}
+function prevMonth(){if(billMonthIdx>0){billMonthIdx--;renderBills();}}
+function nextMonth(){if(billMonthIdx<11){billMonthIdx++;renderBills();}}
+function renderBills(){
+  const mn=qs('#billMonthName');if(mn)mn.textContent=MONTHS[billMonthIdx]+' 2026';
+  const bs=qs('#billSummary');
+  if(bs){const tot=READERS.reduce((a,r)=>a+r.monthlyBill,0);bs.innerHTML=`<div class="bs-cell"><div class="bs-val">${READERS.length}</div><div class="bs-lbl">Subscribers</div></div><div class="bs-cell"><div class="bs-val">₹${(tot/1000).toFixed(1)}k</div><div class="bs-lbl">Total</div></div><div class="bs-cell"><div class="bs-val">${billSelected.size}</div><div class="bs-lbl">Selected</div></div>`;}
+  const bl=qs('#billList');if(!bl)return;
+  bl.innerHTML=READERS.map(r=>{
+    const sel=billSelected.has(r.id);
+    return`<div class="bill-row">
+      <div class="b-chk ${sel?'on':''}" id="bc-${r.id}" onclick="toggleBillSel(${r.id})">${sel?'✓':''}</div>
+      <div style="flex:1"><div style="font-size:13px;font-weight:700;color:var(--txt)">${r.name}</div><div style="font-size:10px;color:var(--txt3);margin-top:1px">${r.papers.join(', ')}</div></div>
+      <div style="text-align:right;flex-shrink:0"><div class="b-amt">₹${r.monthlyBill}</div><div class="r-stat ${r.status}">${r.status==='paid'?'Paid':r.status==='partial'?'Partial':'Unpaid'}</div></div>
+    </div>`;
+  }).join('');
+}
+function toggleBillSel(id){const el=qs('#bc-'+id);if(!el)return;if(billSelected.has(id)){billSelected.delete(id);el.classList.remove('on');el.textContent='';}else{billSelected.add(id);el.classList.add('on');el.textContent='✓';}const bs=qs('#billSummary');if(bs){const tot=READERS.reduce((a,r)=>a+r.monthlyBill,0);bs.children[2].querySelector('.bs-val').textContent=billSelected.size;}}
+function toggleSelectAll(){if(billSelected.size===READERS.length)billSelected.clear();else READERS.forEach(r=>billSelected.add(r.id));renderBills();}
+function sendBills(){showToast('✓ Bills sent via WhatsApp to '+billSelected.size+' subscribers');}
+
+/* ── GEO ROUTE ── */
+let geoStates={};
+function initGeo(){READERS.forEach(r=>{if(!(r.id in geoStates))geoStates[r.id]=r.geoMarked;});renderGeo();}
+function renderGeo(){
+  const el=qs('#geoList');if(!el)return;
+  const marked=Object.values(geoStates).filter(Boolean).length;
+  const mc=qs('#geoMarkedCt'),uc=qs('#geoUnmarkedCt');
+  if(mc)mc.textContent=marked;if(uc)uc.textContent=READERS.length-marked;
+  el.innerHTML=READERS.map((r,i)=>{
+    const m=geoStates[r.id];
+    const pubs=r.papers.map(p=>`<span class="del-pub" style="font-size:8px;padding:1px 5px">${p}</span>`).join(' ');
+    return`<div class="geo-stop">
+      <div class="geo-line"></div>
+      <div class="geo-num ${m?'gn-marked':'gn-pending'}">${i+1}</div>
+      <div style="flex:1"><div class="geo-name">${r.name}</div><div class="geo-addr">${r.address}, Flat ${r.flat}</div><div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">${pubs}</div></div>
+      <button class="geo-mark ${m?'done':''}" onclick="toggleGeoMark(${r.id})">${m?'✓ Marked':'📍 Mark'}</button>
+    </div>`;
+  }).join('');
+}
+function toggleGeoMark(id){geoStates[id]=!geoStates[id];renderGeo();showToast(geoStates[id]?'📍 Location marked':'Location cleared');}
+function markAllGeo(){READERS.forEach(r=>geoStates[r.id]=true);renderGeo();showToast('✓ All '+READERS.length+' locations marked');}
+function shareRoute(){showToast('Route link shared with substitute hawker');}
+
+/* ── NOTIFICATIONS ── */
+const NOTIF_TEMPLATES={
+  bill:'नमस्ते {नाम} जी, {माह} 2026 का बिल ₹{राशि} है। कृपया समय पर भुगतान करें। – सुरेश कुमार',
+  payment:'नमस्ते {नाम} जी, आपका {माह} 2026 का भुगतान अभी बाकी है (₹{राशि})। कृपया जल्द भुगतान करें।',
+  delay:'नमस्ते {नाम} जी, आज अखबार की डिलीवरी में देरी होगी। असुविधा के लिए खेद है।',
+  holiday:'नमस्ते {नाम} जी, कल सार्वजनिक अवकाश के कारण अखबार नहीं आएगा। धन्यवाद।'
+};
+function setTemplate(k){const el=qs('#notifMsg');if(el){el.value=NOTIF_TEMPLATES[k];updatePreview();}}
+function updatePreview(){const el=qs('#notifMsg'),p=qs('#notifPreviewTxt');if(!el||!p)return;p.textContent=el.value.replace(/\{नाम\}/g,'राजेश').replace(/\{माह\}/g,'जुलाई').replace(/\{राशि\}/g,'150');}
+function sendNotif(ch){showToast(ch==='whatsapp'?'✓ WhatsApp sent to 82 readers':'✓ SMS sent to 82 readers');initNotifHist();}
+function initNotifHist(){
+  const el=qs('#notifHist');if(!el)return;
+  const items=[{ico:'💬',text:'Monthly bill reminder · July 2026',meta:'Sent to 82 · WhatsApp · Today 7:00 AM'},{ico:'📱',text:'Delivery delay notice – Morning edition',meta:'Sent to 82 · SMS · 8 Jul · 6:30 AM'},{ico:'💬',text:'June 2026 bill generated & sent',meta:'Sent to 82 · WhatsApp · 1 Jul · 7:00 AM'}];
+  el.innerHTML=items.map(i=>`<div class="nh-item"><div class="nh-ico">${i.ico}</div><div style="flex:1"><div class="nh-text">${i.text}</div><div class="nh-meta">${i.meta}</div></div></div>`).join('');
+}
+
+/* ── UPI MODAL ── */
+let upiReader=null;
+function openUPI(id){
+  upiReader=READERS.find(r=>r.id===id);if(!upiReader)return;
+  const due=upiReader.monthlyBill-upiReader.paid;
+  const n=qs('#upiReaderName'),a=qs('#upiAmt');
+  if(n)n.textContent='Collecting from '+upiReader.name;
+  if(a)a.textContent='₹'+due;
+  qs('#upiModal').classList.add('open');
+}
+function closeUPIModal(){qs('#upiModal').classList.remove('open');}
+function closeUPI(e){if(e.target===qs('#upiModal'))closeUPIModal();}
+function confirmPayment(){
+  if(!upiReader)return;
+  const due=upiReader.monthlyBill-upiReader.paid;
+  upiReader.paid=upiReader.monthlyBill;upiReader.status='paid';
+  closeUPIModal();
+  showToast('✓ ₹'+due+' collected from '+upiReader.name);
+  renderReaders();renderCollList(collFilter);updateCollDash();
+  if(currentReader&&currentReader.id===upiReader.id)renderReaderDetail();
+}
+
+/* init dashboard on load */
+updateCollDash();
+</script>
+
+<!-- ══════════ Patrika SSO bootstrap (injected) ══════════ -->
+<script>
+(function(){
+  function hasSession(){
+    try { return !!(sessionStorage.getItem('patrika_profile')||localStorage.getItem('patrika_profile')||sessionStorage.getItem('patrika_token')||localStorage.getItem('patrika_token')); }
+    catch(e){ return false; }
+  }
+  function enter(){ try { goScreen('scr-dash'); } catch(e){ console.warn('[sso] enter failed', e); } }
+  function boot(){
+    // Only auto-skip the app's own login when launched inside the authenticated suite session.
+    if(!hasSession()) return;
+    enter();
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(boot,0); });
+  else setTimeout(boot,0);
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Taxi Fleet App · Patrika</title>
+<style>
+/* ── TOKENS ─────────────────────────────────────── */
+:root {
+  --navy:#1C2B45; --blue:#1260BF; --blue-l:rgba(18,96,191,.1);
+  --amber:#E8930A; --amber-l:rgba(232,147,10,.12);
+  --green:#1E6B47; --green-l:rgba(30,107,71,.1);
+  --red:#C0392B;   --red-l:rgba(192,57,43,.1);
+  --grey-l:rgba(28,43,69,.06);
+  --bg:#F4F6FA; --surf:#fff; --surf2:#EBF0F8;
+  --brd:rgba(18,96,191,.12);
+  --txt:#1C2B45; --txt2:#3D5270; --txt3:#7A8FA8;
+  --shd:0 2px 10px rgba(18,96,191,.10);
+  --shd-lg:0 8px 28px rgba(18,96,191,.18);
+  --r:12px; --r-sm:8px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#0D1520; --surf:#141E2E; --surf2:#1C2A3E;
+  --brd:rgba(18,96,191,.18); --txt:#DCE8F8; --txt2:#8AACD0; --txt3:#4A6380;
+  --shd:0 2px 10px rgba(0,0,0,.35); --shd-lg:0 8px 28px rgba(0,0,0,.45);
+  --green-l:rgba(30,107,71,.18); --red-l:rgba(192,57,43,.18);
+  --blue-l:rgba(18,96,191,.2); --amber-l:rgba(232,147,10,.18); --grey-l:rgba(255,255,255,.04);
+}}
+:root[data-theme=dark]{
+  --bg:#0D1520; --surf:#141E2E; --surf2:#1C2A3E;
+  --brd:rgba(18,96,191,.18); --txt:#DCE8F8; --txt2:#8AACD0; --txt3:#4A6380;
+  --shd:0 2px 10px rgba(0,0,0,.35); --shd-lg:0 8px 28px rgba(0,0,0,.45);
+  --green-l:rgba(30,107,71,.18); --red-l:rgba(192,57,43,.18);
+  --blue-l:rgba(18,96,191,.2); --amber-l:rgba(232,147,10,.18); --grey-l:rgba(255,255,255,.04);
+}
+:root[data-theme=light]{
+  --bg:#F4F6FA; --surf:#fff; --surf2:#EBF0F8;
+  --brd:rgba(18,96,191,.12); --txt:#1C2B45; --txt2:#3D5270; --txt3:#7A8FA8;
+  --shd:0 2px 10px rgba(18,96,191,.10); --shd-lg:0 8px 28px rgba(18,96,191,.18);
+  --green-l:rgba(30,107,71,.1); --red-l:rgba(192,57,43,.1);
+  --blue-l:rgba(18,96,191,.1); --amber-l:rgba(232,147,10,.12); --grey-l:rgba(28,43,69,.06);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:system-ui,-apple-system,'Segoe UI',sans-serif;
+  background:#1A2740;min-height:100vh;display:flex;
+  align-items:center;justify-content:center;padding:24px;
+  background-image:radial-gradient(ellipse at 20% 80%,rgba(18,96,191,.25) 0%,transparent 55%),
+                   radial-gradient(ellipse at 80% 10%,rgba(232,147,10,.12) 0%,transparent 50%);
+}
+
+/* ── PHONE ──────────────────────────────────────── */
+.phone{
+  width:390px;height:844px;background:var(--bg);border-radius:44px;overflow:hidden;
+  position:relative;display:flex;flex-direction:column;
+  box-shadow:0 0 0 10px #0A0F1A,0 30px 80px rgba(0,0,0,.6),inset 0 0 0 2px #1E2B40;
+}
+.sbar{
+  height:44px;background:var(--navy);flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between;padding:0 22px;
+}
+.sbar .t{color:#fff;font-size:15px;font-weight:600}
+.sbar .ic{color:rgba(255,255,255,.75);font-size:11px;display:flex;gap:6px;align-items:center}
+
+/* ── SCREENS ────────────────────────────────────── */
+.screen{display:none;flex-direction:column;flex:1;overflow:hidden}
+.screen.active{display:flex}
+.scr-body{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.scr-body::-webkit-scrollbar{display:none}
+
+/* ── HEADER ─────────────────────────────────────── */
+.hdr{
+  padding:13px 18px 11px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between;
+}
+.hdr-l{display:flex;align-items:center;gap:10px}
+.back{
+  width:34px;height:34px;border-radius:50%;border:none;cursor:pointer;
+  background:rgba(255,255,255,.15);color:#fff;font-size:16px;
+  display:flex;align-items:center;justify-content:center;
+}
+.hdr h1{font-family:Georgia,serif;font-size:17px;font-weight:700;color:#fff;letter-spacing:-.2px}
+.hdr .sub{font-size:10px;color:rgba(255,255,255,.6);margin-top:1px}
+.hdr-btn{
+  height:30px;padding:0 12px;border-radius:15px;border:none;cursor:pointer;
+  background:rgba(255,255,255,.12);color:#fff;font-size:12px;font-weight:600;
+}
+
+/* Blue header variants */
+.hdr-blue{background:var(--blue)}
+.hdr-navy{background:var(--navy)}
+.hdr-green{background:linear-gradient(135deg,#145534,var(--green))}
+.hdr-amber{background:linear-gradient(135deg,#9A6000,var(--amber))}
+.hdr-sup{background:linear-gradient(135deg,#0D1A2E,#1C2B45)}
+
+/* ── BOTTOM TABS ────────────────────────────────── */
+.tabs{
+  height:60px;background:var(--surf);border-top:1px solid var(--brd);
+  display:flex;align-items:stretch;flex-shrink:0;
+}
+.tab{
+  flex:1;border:none;background:none;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;color:var(--txt3);font-size:10px;font-weight:600;
+  border-top:2px solid transparent;transition:color .15s,border-color .15s;
+  -webkit-tap-highlight-color:transparent;
+}
+.tab .i{font-size:19px;line-height:1}
+.tab.on{color:var(--blue);border-top-color:var(--blue)}
+
+/* ── FORM ELEMENTS ──────────────────────────────── */
+.card{background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);margin:0 14px 12px;overflow:hidden}
+.p{padding:14px 16px}
+.lbl{font-size:11px;font-weight:700;color:var(--txt2);letter-spacing:.3px;display:block;margin-bottom:6px}
+.slbl{font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--txt3);padding:14px 18px 7px;display:block}
+.inp{
+  width:100%;padding:11px 14px;border-radius:var(--r-sm);
+  border:1.5px solid var(--brd);background:var(--surf2);
+  font-size:14px;color:var(--txt);outline:none;transition:border-color .15s;font-family:inherit;
+}
+.inp:focus{border-color:var(--blue)}
+.inp::placeholder{color:var(--txt3)}
+.inp-sel{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%237A8FA8' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px;cursor:pointer}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.fg{padding-bottom:13px}
+
+/* ── BUTTONS ────────────────────────────────────── */
+.btn{
+  width:100%;padding:13px;border-radius:var(--r-sm);border:none;cursor:pointer;
+  font-size:15px;font-weight:700;transition:opacity .15s,transform .1s;
+}
+.btn:active{opacity:.85;transform:scale(.99)}
+.btn-blue{background:var(--blue);color:#fff}
+.btn-green{background:var(--green);color:#fff}
+.btn-amber{background:var(--amber);color:#fff}
+.btn-navy{background:var(--navy);color:#fff}
+.btn-red{background:var(--red);color:#fff}
+.btn-out{background:transparent;border:1.5px solid var(--brd);color:var(--txt)}
+.btn-row{display:flex;gap:10px;padding:0 14px 18px}
+.btn-row .btn{flex:1}
+
+/* ── BADGE ──────────────────────────────────────── */
+.badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700}
+.b-green{background:var(--green-l);color:var(--green)}
+.b-red{background:var(--red-l);color:var(--red)}
+.b-blue{background:var(--blue-l);color:var(--blue)}
+.b-amber{background:var(--amber-l);color:var(--amber)}
+.b-grey{background:var(--surf2);color:var(--txt3)}
+
+/* ── TOAST ──────────────────────────────────────── */
+.toast{
+  position:absolute;bottom:72px;left:14px;right:14px;
+  background:var(--navy);color:#fff;border-radius:var(--r-sm);
+  padding:12px 16px;font-size:13px;font-weight:600;
+  display:flex;align-items:center;gap:10px;
+  box-shadow:var(--shd-lg);z-index:200;
+  transform:translateY(120%);opacity:0;transition:transform .3s,opacity .3s;pointer-events:none;
+}
+.toast.show{transform:translateY(0);opacity:1}
+.toast .tk{width:22px;height:22px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
+
+/* ── ALARM MODAL ────────────────────────────────── */
+.alarm-overlay{
+  position:absolute;inset:0;background:rgba(192,57,43,.92);
+  z-index:300;display:none;flex-direction:column;align-items:center;justify-content:center;
+  padding:32px;text-align:center;
+  animation:alarmFlash 1s infinite;
+}
+@keyframes alarmFlash{0%,100%{background:rgba(192,57,43,.92)}50%{background:rgba(192,57,43,.75)}}
+.alarm-overlay.active{display:flex}
+.alarm-icon{font-size:64px;margin-bottom:16px;animation:shake .4s infinite}
+@keyframes shake{0%,100%{transform:rotate(0)}25%{transform:rotate(-8deg)}75%{transform:rotate(8deg)}}
+.alarm-title{font-family:Georgia,serif;font-size:24px;font-weight:700;color:#fff;margin-bottom:8px}
+.alarm-msg{font-size:14px;color:rgba(255,255,255,.85);line-height:1.5;margin-bottom:24px}
+.alarm-dismiss{
+  padding:14px 32px;border-radius:var(--r-sm);border:2px solid #fff;
+  background:rgba(255,255,255,.15);color:#fff;font-size:15px;font-weight:700;cursor:pointer;
+}
+
+/* ── THEME TOGGLE ───────────────────────────────── */
+.theme-btn{
+  position:fixed;top:18px;right:18px;
+  background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);
+  color:#fff;padding:7px 13px;border-radius:20px;cursor:pointer;
+  font-size:12px;font-weight:600;backdrop-filter:blur(8px);z-index:1000;
+}
+
+/* ══════════════════════════════════════════════════
+   SCREEN: LOGIN
+══════════════════════════════════════════════════ */
+#scr-login{background:var(--navy)}
+.login-body{
+  flex:1;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:28px 22px;
+}
+.login-logo{text-align:center;margin-bottom:36px}
+.login-logo .mark{font-family:Georgia,serif;font-size:34px;font-weight:700;color:#fff;letter-spacing:-1px}
+.login-logo .mark span{color:var(--amber)}
+.login-logo .sub{font-size:11px;color:rgba(255,255,255,.4);letter-spacing:1.8px;text-transform:uppercase;margin-top:4px}
+.login-card{
+  width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);
+  border-radius:20px;padding:22px;backdrop-filter:blur(20px);
+}
+.login-card h2{font-family:Georgia,serif;font-size:20px;color:#fff;margin-bottom:4px}
+.login-card .sub{font-size:12px;color:rgba(255,255,255,.45);margin-bottom:22px}
+.l-inp{
+  width:100%;padding:13px 15px;border-radius:10px;
+  border:1.5px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);
+  font-size:15px;color:#fff;outline:none;margin-bottom:11px;font-family:inherit;
+  transition:border-color .15s;
+}
+.l-inp::placeholder{color:rgba(255,255,255,.3)}
+.l-inp:focus{border-color:var(--amber)}
+.l-prefix{position:relative}
+.l-prefix .pfx{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:rgba(255,255,255,.4);font-size:14px}
+.l-prefix .l-inp{padding-left:38px}
+.l-btn{
+  width:100%;padding:14px;border-radius:10px;background:var(--blue);
+  border:none;color:#fff;font-size:15px;font-weight:700;cursor:pointer;
+  margin-top:6px;transition:opacity .15s;
+}
+.l-btn:active{opacity:.85}
+.l-otp-hint{font-size:11px;color:rgba(255,255,255,.35);text-align:center;margin-top:10px}
+.role-selector{
+  display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px;
+}
+.role-chip{
+  padding:10px 8px;border-radius:10px;border:1.5px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.06);color:rgba(255,255,255,.6);
+  font-size:12px;font-weight:600;cursor:pointer;text-align:center;transition:all .15s;
+}
+.role-chip .ricon{display:block;font-size:20px;margin-bottom:5px}
+.role-chip.selected{border-color:var(--amber);background:rgba(232,147,10,.15);color:var(--amber)}
+.login-footer{margin-top:20px;font-size:10px;color:rgba(255,255,255,.2);text-align:center}
+
+/* ══════════════════════════════════════════════════
+   DRIVER DASHBOARD
+══════════════════════════════════════════════════ */
+.driver-hero{
+  background:linear-gradient(160deg,var(--blue),#0A3E8A);
+  padding:16px 18px 22px;
+}
+.dh-name{font-family:Georgia,serif;font-size:22px;font-weight:700;color:#fff;margin-bottom:2px}
+.dh-meta{font-size:12px;color:rgba(255,255,255,.6)}
+.dh-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  background:rgba(255,255,255,.1);border-radius:20px;
+  padding:5px 13px;font-size:12px;color:rgba(255,255,255,.8);margin-top:10px;
+}
+.dh-badge .dot{width:7px;height:7px;border-radius:50%;background:var(--amber)}
+.kpi-strip{
+  display:flex;margin:0 14px;margin-top:-16px;
+  background:var(--surf);border-radius:var(--r);box-shadow:var(--shd-lg);overflow:hidden;
+}
+.kpi{flex:1;padding:14px 8px;text-align:center;border-right:1px solid var(--brd)}
+.kpi:last-child{border-right:none}
+.kpi .val{font-family:Georgia,serif;font-size:20px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.kpi .unit{font-size:9px;color:var(--txt3);display:block;margin-top:1px;text-transform:uppercase;letter-spacing:.5px}
+.action-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:11px;
+  padding:18px 14px 0;
+}
+.action-tile{
+  background:var(--surf);border-radius:16px;padding:18px 14px;
+  box-shadow:var(--shd);cursor:pointer;
+  border:2px solid transparent;transition:border-color .15s,transform .1s;
+  -webkit-tap-highlight-color:transparent;
+}
+.action-tile:active{transform:scale(.97)}
+.action-tile .tico{font-size:28px;display:block;margin-bottom:10px}
+.action-tile h3{font-size:13px;font-weight:700;color:var(--txt);margin-bottom:4px}
+.action-tile p{font-size:10px;color:var(--txt3);line-height:1.4}
+.at-blue{border-left:3px solid var(--blue)}
+.at-green{border-left:3px solid var(--green)}
+.at-amber{border-left:3px solid var(--amber)}
+.at-red{border-left:3px solid var(--red)}
+.route-card{margin:14px 14px 0;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);overflow:hidden}
+.route-card .rc-hdr{
+  background:linear-gradient(90deg,var(--blue),#2A7BE0);
+  padding:11px 14px;display:flex;align-items:center;justify-content:space-between;
+}
+.rc-hdr .rname{font-family:Georgia,serif;font-size:14px;font-weight:700;color:#fff}
+.rc-hdr .rkm{font-size:11px;color:rgba(255,255,255,.7)}
+.route-stops{padding:10px 0}
+.rs-item{display:flex;align-items:center;gap:10px;padding:7px 14px}
+.rs-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.rs-name{font-size:12px;color:var(--txt2)}
+.rs-time{font-size:11px;color:var(--txt3);margin-left:auto}
+
+/* ══════════════════════════════════════════════════
+   ATTENDANCE
+══════════════════════════════════════════════════ */
+.press-card{
+  margin:0 14px 14px;background:var(--surf);border-radius:var(--r);
+  box-shadow:var(--shd);overflow:hidden;
+}
+.press-card .pc-top{
+  background:linear-gradient(135deg,#0D3060,var(--blue));
+  padding:20px;text-align:center;
+}
+.pc-top .t{font-size:13px;color:rgba(255,255,255,.6);margin-bottom:4px}
+.pc-top .taxi{font-family:Georgia,serif;font-size:20px;font-weight:700;color:#fff}
+.pc-top .route-lbl{font-size:12px;color:rgba(255,255,255,.5);margin-top:3px}
+.geo-att{padding:14px 16px}
+.geo-bar{
+  display:flex;align-items:center;gap:10px;padding:11px 13px;
+  border-radius:var(--r-sm);border:1.5px solid var(--brd);background:var(--surf2);
+  margin-bottom:12px;
+}
+.geo-bar.ok{background:var(--green-l);border-color:rgba(30,107,71,.25)}
+.geo-bar.err{background:var(--red-l);border-color:rgba(192,57,43,.2)}
+.geo-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.gpulse{animation:gpulse 1.6s infinite}
+@keyframes gpulse{0%,100%{box-shadow:0 0 0 0 rgba(30,107,71,.5)}50%{box-shadow:0 0 0 7px rgba(30,107,71,0)}}
+.geo-txt strong{font-size:13px;font-weight:700;display:block;color:var(--txt)}
+.geo-txt span{font-size:10px;color:var(--txt3)}
+.att-stamp{
+  background:var(--surf2);border-radius:var(--r-sm);padding:12px 14px;
+  display:flex;align-items:center;gap:12px;margin-bottom:12px;
+}
+.att-stamp .ico{font-size:22px}
+.att-stamp .info strong{font-size:13px;font-weight:700;color:var(--txt)}
+.att-stamp .info small{font-size:11px;color:var(--txt3)}
+
+/* ══════════════════════════════════════════════════
+   DROP POINT REGISTRATION
+══════════════════════════════════════════════════ */
+.dp-item{
+  display:flex;align-items:center;gap:11px;
+  padding:11px 16px;border-bottom:1px solid var(--brd);
+}
+.dp-item:last-child{border-bottom:none}
+.dp-num{
+  width:28px;height:28px;border-radius:50%;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;
+  background:var(--surf2);color:var(--txt3);border:1.5px solid var(--brd);
+}
+.dp-num.done{background:var(--green);color:#fff;border-color:var(--green)}
+.dp-info{flex:1}
+.dp-info .dname{font-size:13px;font-weight:600;color:var(--txt)}
+.dp-info .dcoord{font-size:10px;color:var(--txt3);font-variant-numeric:tabular-nums}
+.dp-action{flex-shrink:0}
+.mark-btn{
+  padding:6px 13px;border-radius:7px;border:none;cursor:pointer;
+  font-size:11px;font-weight:700;
+}
+.mark-btn.todo{background:var(--blue-l);color:var(--blue)}
+.mark-btn.done{background:var(--green-l);color:var(--green)}
+.reg-progress{
+  margin:0 14px 12px;background:var(--surf);border-radius:var(--r);
+  padding:14px 16px;box-shadow:var(--shd);
+}
+.prog-track{height:8px;background:var(--surf2);border-radius:4px;margin-top:8px;overflow:hidden}
+.prog-fill{height:100%;border-radius:4px;background:var(--green);transition:width .4s}
+.prog-lbl{display:flex;justify-content:space-between;font-size:11px;color:var(--txt3);margin-top:5px}
+
+/* ══════════════════════════════════════════════════
+   LIVE TRIP
+══════════════════════════════════════════════════ */
+.trip-hero{
+  background:linear-gradient(160deg,var(--blue),#0A3E8A);
+  padding:14px 18px 16px;
+}
+.th-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.th-route{font-family:Georgia,serif;font-size:16px;font-weight:700;color:#fff}
+.th-status{font-size:10px;color:rgba(255,255,255,.6)}
+.th-stats{display:flex;gap:20px}
+.th-stat .v{font-size:16px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
+.th-stat .l{font-size:9px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.5px}
+.start-zone{
+  margin:0 14px 14px;background:var(--surf);border-radius:var(--r);
+  box-shadow:var(--shd);padding:16px;text-align:center;
+}
+.sz-time{font-size:12px;color:var(--txt3);margin-bottom:6px}
+.sz-sched{font-family:Georgia,serif;font-size:28px;font-weight:700;color:var(--txt);margin-bottom:14px}
+.sz-note{font-size:11px;color:var(--txt3);margin-bottom:16px}
+.start-btn-big{
+  width:100%;padding:16px;border-radius:var(--r-sm);border:none;cursor:pointer;
+  font-size:17px;font-weight:700;background:var(--green);color:#fff;
+  box-shadow:0 4px 20px rgba(30,107,71,.35);transition:transform .1s;
+}
+.start-btn-big:active{transform:scale(.98)}
+.trip-active-hdr{
+  margin:0 14px 0;background:var(--surf);border-radius:var(--r) var(--r) 0 0;
+  padding:12px 16px;border-bottom:1px solid var(--brd);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.ta-prog{display:flex;align-items:center;gap:8px}
+.ta-prog .frac{font-family:Georgia,serif;font-size:20px;font-weight:700;color:var(--txt)}
+.ta-prog .label{font-size:11px;color:var(--txt3)}
+.ta-km{text-align:right}
+.ta-km .kv{font-size:16px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.ta-km .kl{font-size:10px;color:var(--txt3)}
+
+/* Drop point table */
+.drop-table{
+  margin:0 14px;background:var(--surf);border-radius:0 0 var(--r) var(--r);
+  box-shadow:var(--shd);overflow:hidden;
+}
+.dt-head{
+  display:grid;grid-template-columns:32px 1fr 58px 58px 26px;
+  padding:8px 12px;background:var(--surf2);border-bottom:1px solid var(--brd);
+  font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt3);
+  gap:6px;
+}
+.dp-row{
+  display:grid;grid-template-columns:32px 1fr 58px 58px 26px;
+  padding:9px 12px;border-bottom:1px solid var(--brd);gap:6px;
+  align-items:center;transition:background .2s;
+}
+.dp-row:last-child{border-bottom:none}
+.dp-row.done{background:rgba(30,107,71,.06)}
+.dp-row.next{background:rgba(232,147,10,.1)}
+.dp-row.missed{background:rgba(192,57,43,.07)}
+.dp-row .seq{
+  width:24px;height:24px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;
+  background:var(--surf2);color:var(--txt3);
+}
+.dp-row.done .seq{background:var(--green);color:#fff}
+.dp-row.missed .seq{background:var(--red);color:#fff}
+.dp-row.next .seq{background:var(--amber);color:#fff;animation:nextPulse 1.2s infinite}
+@keyframes nextPulse{0%,100%{box-shadow:0 0 0 0 rgba(232,147,10,.5)}50%{box-shadow:0 0 0 5px rgba(232,147,10,0)}}
+.dp-row .dpt-name{font-size:12px;font-weight:600;color:var(--txt)}
+.dp-row.next .dpt-name{color:var(--amber)}
+.dp-row .dpt-s{font-size:11px;color:var(--txt3);font-variant-numeric:tabular-nums}
+.dp-row .dpt-a{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}
+.dp-row.done .dpt-a{color:var(--green)}
+.dp-row.missed .dpt-a{color:var(--red)}
+.dp-row.next .dpt-a{color:var(--amber)}
+.dp-row .dpt-ico{font-size:14px;text-align:center}
+
+/* Simulate controls */
+.sim-bar{
+  margin:10px 14px 0;background:var(--surf2);border-radius:var(--r);
+  padding:12px 14px;display:flex;gap:8px;align-items:center;
+}
+.sim-bar .sim-lbl{font-size:11px;font-weight:700;color:var(--txt2);flex:1}
+.sim-reach{padding:7px 13px;border-radius:7px;border:none;cursor:pointer;background:var(--green);color:#fff;font-size:11px;font-weight:700}
+.sim-miss{padding:7px 13px;border-radius:7px;border:none;cursor:pointer;background:var(--red-l);color:var(--red);font-size:11px;font-weight:700;border:1px solid rgba(192,57,43,.2)}
+.trip-close-wrap{padding:12px 14px 18px}
+
+/* ══════════════════════════════════════════════════
+   NIGHT SUPERVISOR DASHBOARD
+══════════════════════════════════════════════════ */
+.sup-hero{
+  background:var(--hdr-sup,linear-gradient(160deg,#0D1A2E,#1C2B45));
+  background:linear-gradient(160deg,#0D1A2E,#1C2B45);
+  padding:14px 18px 18px;
+}
+.sup-time{font-size:12px;color:rgba(255,255,255,.5);margin-bottom:4px}
+.sup-title{font-family:Georgia,serif;font-size:20px;font-weight:700;color:#fff;margin-bottom:12px}
+.sup-kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.sk{background:rgba(255,255,255,.07);border-radius:10px;padding:10px 8px;text-align:center}
+.sk .sv{font-family:Georgia,serif;font-size:20px;font-weight:700;color:#fff}
+.sk .sl{font-size:9px;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+.taxi-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px}
+.taxi-card{
+  background:var(--surf);border-radius:var(--r-sm);box-shadow:var(--shd);
+  padding:12px;position:relative;overflow:hidden;
+}
+.tc-border{position:absolute;left:0;top:0;bottom:0;width:3px}
+.tc-rn{font-size:11px;font-weight:700;color:var(--txt);margin-bottom:2px}
+.tc-driver{font-size:10px;color:var(--txt3)}
+.tc-route{font-size:10px;color:var(--txt2);margin-top:4px}
+.tc-status{display:flex;align-items:center;gap:5px;margin-top:7px}
+.tcs-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.tc-status span{font-size:10px;font-weight:700}
+.tc-time{font-size:9px;color:var(--txt3);margin-top:3px}
+.absent-alert{
+  margin:0 14px 12px;background:var(--red-l);border:1px solid rgba(192,57,43,.2);
+  border-radius:var(--r);padding:14px 16px;
+}
+.aa-title{font-size:13px;font-weight:700;color:var(--red);margin-bottom:8px}
+.aa-item{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.aa-item:last-child{margin-bottom:0}
+.aa-item .rdot{width:8px;height:8px;border-radius:50%;background:var(--red);flex-shrink:0}
+.aa-item .rname{font-size:12px;font-weight:600;color:var(--txt)}
+.aa-item .rroute{font-size:10px;color:var(--txt3)}
+.aa-act{
+  margin-left:auto;padding:4px 11px;border-radius:6px;border:none;cursor:pointer;
+  background:var(--red);color:#fff;font-size:10px;font-weight:700;
+}
+
+/* ══════════════════════════════════════════════════
+   NOTIFICATION PANEL
+══════════════════════════════════════════════════ */
+.notif-item{display:flex;align-items:flex-start;gap:11px;padding:11px 16px;border-bottom:1px solid var(--brd)}
+.notif-item:last-child{border-bottom:none}
+.ni-ico{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0}
+.ni-green{background:var(--green-l)}
+.ni-red{background:var(--red-l)}
+.ni-amber{background:var(--amber-l)}
+.ni-blue{background:var(--blue-l)}
+.ni-t{font-size:12px;font-weight:700;color:var(--txt)}
+.ni-b{font-size:11px;color:var(--txt2);margin-top:2px;line-height:1.4}
+.ni-ts{font-size:9px;color:var(--txt3);margin-top:4px}
+</style>
+</head>
+<body>
+
+<button class="theme-btn" onclick="toggleTheme()">🌙</button>
+
+<div class="phone">
+  <div class="sbar">
+    <span class="t" id="sTime">4:30 AM</span>
+    <div class="ic"><span>▲▲▲</span><span>WiFi</span><span>🔋92%</span></div>
+  </div>
+
+  <!-- Global alarm -->
+  <div class="alarm-overlay" id="alarmOverlay">
+    <div class="alarm-icon">🚨</div>
+    <div class="alarm-title">Drop Point Missed!</div>
+    <div class="alarm-msg" id="alarmMsg">You have passed a drop point without delivering the bundle. Supervisor &amp; Incharge have been notified.</div>
+    <button class="alarm-dismiss" onclick="dismissAlarm()">Acknowledged</button>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"><div class="tk">✓</div><span id="toastMsg"></span></div>
+
+  <!-- ══ LOGIN ══ -->
+  <div class="screen active" id="scr-login">
+    <div style="height:44px;background:var(--navy);flex-shrink:0"></div>
+    <div class="login-body">
+      <div class="login-logo">
+        <div class="mark">P<span>atrika</span></div>
+        <div class="sub">Taxi Fleet System</div>
+      </div>
+      <div class="login-card">
+        <h2>Sign In</h2>
+        <div class="sub">Select your role to continue</div>
+        <div class="role-selector" id="roleSelector">
+          <div class="role-chip selected" onclick="selRole(this,'driver')"><span class="ricon">🚐</span>Driver</div>
+          <div class="role-chip" onclick="selRole(this,'supervisor')"><span class="ricon">🌙</span>Night Supervisor</div>
+          <div class="role-chip" onclick="selRole(this,'owner')"><span class="ricon">🔑</span>Taxi Owner</div>
+          <div class="role-chip" onclick="selRole(this,'incharge')"><span class="ricon">📊</span>Circulation Incharge</div>
+        </div>
+        <div class="l-prefix" style="margin-bottom:11px">
+          <span class="pfx">+91</span>
+          <input type="tel" class="l-inp" id="loginMobile" placeholder="Mobile number" maxlength="10" style="padding-left:44px" value="98290 11234">
+        </div>
+        <div id="passWrap">
+          <input type="password" class="l-inp" placeholder="Password" value="••••••••" id="loginPass">
+        </div>
+        <div id="otpWrap" style="display:none">
+          <input type="text" class="l-inp" placeholder="Enter 6-digit OTP" maxlength="6" id="loginOtp">
+        </div>
+        <button class="l-btn" onclick="doLogin()">Sign In →</button>
+        <div class="l-otp-hint" id="otpToggle" onclick="toggleOtp()" style="cursor:pointer">Use OTP instead ↓</div>
+      </div>
+      <div class="login-footer">Patrika AI · Fleet v2.4 · Secure Login</div>
+    </div>
+  </div>
+
+  <!-- ══ DRIVER DASHBOARD ══ -->
+  <div class="screen" id="scr-driver">
+    <div class="driver-hero">
+      <div class="dh-name">Ramesh Saini</div>
+      <div class="dh-meta">+91 98290 11234 &nbsp;·&nbsp; Jaipur Branch</div>
+      <div class="dh-badge"><div class="dot"></div> On Duty – Route 3A Active</div>
+    </div>
+    <div class="kpi-strip">
+      <div class="kpi"><div class="val">52.3</div><span class="unit">Total KM</span></div>
+      <div class="kpi"><div class="val">12</div><span class="unit">Drop Points</span></div>
+      <div class="kpi"><div class="val">4:30</div><span class="unit">Sched. Start</span></div>
+      <div class="kpi"><div class="val" id="driverAttStatus" style="font-size:14px;color:var(--green)">✓ In</div><span class="unit">Press Att.</span></div>
+    </div>
+    <div class="scr-body">
+      <div style="height:18px"></div>
+      <div class="action-grid">
+        <div class="action-tile at-green" onclick="goScreen('scr-attendance')">
+          <span class="tico">📍</span>
+          <h3>Press Attendance</h3>
+          <p>Mark your arrival at the press</p>
+        </div>
+        <div class="action-tile at-blue" onclick="goScreen('scr-register')">
+          <span class="tico">🗺️</span>
+          <h3>Register Drop Points</h3>
+          <p>One-time GPS marking exercise</p>
+        </div>
+        <div class="action-tile at-amber" onclick="startTripFlow()">
+          <span class="tico">▶ Trip</span>
+          <h3>Start Trip</h3>
+          <p>Begin newspaper distribution run</p>
+        </div>
+        <div class="action-tile" style="border-left:3px solid var(--txt3);" onclick="goScreen('scr-notifs')">
+          <span class="tico">🔔</span>
+          <h3>Notifications</h3>
+          <p>Alerts from supervisor</p>
+        </div>
+      </div>
+      <div class="route-card">
+        <div class="rc-hdr">
+          <div>
+            <div class="rname">Route 3A – Jaipur Press → Sanganer</div>
+            <div class="rkm">Taxi: RJ14-CA-4821 &nbsp;·&nbsp; 52.3 km &nbsp;·&nbsp; 12 stops</div>
+          </div>
+          <span class="badge b-green">Active</span>
+        </div>
+        <div class="route-stops">
+          <div class="rs-item"><div class="rs-dot" style="background:var(--blue)"></div><div class="rs-name">Jaipur Press (Start)</div><div class="rs-time">4:30 AM</div></div>
+          <div class="rs-item"><div class="rs-dot" style="background:var(--green)"></div><div class="rs-name">Sindhi Camp</div><div class="rs-time">4:45 AM</div></div>
+          <div class="rs-item"><div class="rs-dot" style="background:var(--green)"></div><div class="rs-name">MI Road Junction</div><div class="rs-time">4:52 AM</div></div>
+          <div class="rs-item"><div class="rs-dot" style="background:var(--txt3)"></div><div class="rs-name">Tonk Road Cross</div><div class="rs-time">5:00 AM</div></div>
+          <div class="rs-item"><div class="rs-dot" style="background:var(--txt3)"></div><div class="rs-name">Durgapura</div><div class="rs-time">5:10 AM</div></div>
+          <div class="rs-item"><div class="rs-dot" style="background:var(--txt3);opacity:.5"></div><div class="rs-name" style="color:var(--txt3)">… 7 more stops</div><div class="rs-time" style="color:var(--txt3)">till 6:10 AM</div></div>
+        </div>
+      </div>
+      <div style="height:18px"></div>
+    </div>
+  </div>
+
+  <!-- ══ PRESS ATTENDANCE ══ -->
+  <div class="screen" id="scr-attendance">
+    <div class="hdr hdr-green">
+      <div class="hdr-l">
+        <button class="back" onclick="goScreen('scr-driver')">←</button>
+        <div><h1>Press Attendance</h1><div class="sub">Mark your arrival at press</div></div>
+      </div>
+    </div>
+    <div class="scr-body">
+      <div style="height:14px"></div>
+      <div class="press-card">
+        <div class="pc-top">
+          <div class="t">Your Assigned Taxi</div>
+          <div class="taxi">RJ14-CA-4821</div>
+          <div class="route-lbl">Route 3A &nbsp;·&nbsp; Jaipur Press → Sanganer</div>
+        </div>
+        <div class="geo-att">
+          <div class="att-stamp">
+            <span class="ico">📅</span>
+            <div class="info">
+              <strong>Thu, 10 Jul 2026 &nbsp;·&nbsp; <span id="attClock">4:30 AM</span></strong>
+              <small>Scheduled start: 4:30 AM</small>
+            </div>
+          </div>
+          <div class="geo-bar" id="attGeoBar">
+            <div class="geo-dot" id="attGeoDot" style="background:var(--txt3)"></div>
+            <div class="geo-txt">
+              <strong id="attGeoStatus">Checking your location…</strong>
+              <span id="attGeoSub">Verifying against Jaipur Press</span>
+            </div>
+            <span style="font-size:18px;cursor:pointer" onclick="refreshGeo()">🔄</span>
+          </div>
+          <canvas id="attMapCanvas" style="width:100%;height:130px;border-radius:var(--r-sm);display:block;margin-bottom:12px"></canvas>
+          <button class="btn btn-green" id="attMarkBtn" onclick="markPressAttendance()">📍 Mark Attendance at Press</button>
+          <div id="attConfirmed" style="display:none;margin-top:12px">
+            <div class="geo-bar ok">
+              <div class="geo-dot gpulse" style="background:var(--green)"></div>
+              <div class="geo-txt"><strong>✓ Attendance Marked</strong><span>4:31 AM · Jaipur Press · GPS confirmed</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <span class="slbl">Important</span>
+      <div class="card p" style="background:var(--amber-l);border:1px solid rgba(232,147,10,.2)">
+        <div style="font-size:13px;font-weight:700;color:var(--amber);margin-bottom:5px">⚠ Timing Alert</div>
+        <div style="font-size:12px;color:var(--txt2);line-height:1.5">Mark attendance within 15 minutes of scheduled arrival. Late or absent taxis are flagged automatically to Night Supervisor for casual taxi arrangement.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ REGISTER DROP POINTS ══ -->
+  <div class="screen" id="scr-register">
+    <div class="hdr hdr-blue">
+      <div class="hdr-l">
+        <button class="back" onclick="goScreen('scr-driver')">←</button>
+        <div><h1>Register Drop Points</h1><div class="sub">One-time GPS marking · Route 3A</div></div>
+      </div>
+      <button class="hdr-btn" onclick="showToast('All coordinates synced to ERP')">Sync ↑</button>
+    </div>
+    <div class="scr-body">
+      <div style="height:12px"></div>
+      <div class="reg-progress">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:13px;font-weight:700;color:var(--txt)">Registration Progress</div>
+          <span class="badge b-blue" id="regProgressBadge">8 / 12</span>
+        </div>
+        <div class="prog-track"><div class="prog-fill" id="regProgFill" style="width:66%"></div></div>
+        <div class="prog-lbl"><span>8 of 12 drop points registered</span><span>4 remaining</span></div>
+      </div>
+      <span class="slbl">Route 3A Drop Points</span>
+      <div class="card" style="padding:0">
+        <div id="dpRegList"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-blue" onclick="markCurrentLocation()">📍 Mark My Current Location</button>
+      </div>
+      <div style="height:10px"></div>
+    </div>
+  </div>
+
+  <!-- ══ LIVE TRIP ══ -->
+  <div class="screen" id="scr-trip">
+    <div class="trip-hero">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <button class="back" onclick="goScreen('scr-driver')" style="background:rgba(255,255,255,.15);border:none;cursor:pointer;width:34px;height:34px;border-radius:50%;color:#fff;font-size:16px;display:flex;align-items:center;justify-content:center;">←</button>
+        <span id="tripStatusBadge" class="badge b-amber">● PRE-TRIP</span>
+      </div>
+      <div class="th-row">
+        <div>
+          <div class="th-route">Route 3A · RJ14-CA-4821</div>
+          <div class="th-status" id="tripSubStatus">Ready to depart from Jaipur Press</div>
+        </div>
+      </div>
+      <div class="th-stats">
+        <div class="th-stat"><div class="v" id="thDropsDone">0/12</div><div class="l">Drops Done</div></div>
+        <div class="th-stat"><div class="v" id="thKmDone">0.0</div><div class="l">KM Covered</div></div>
+        <div class="th-stat"><div class="v" id="thElapsed">—</div><div class="l">Elapsed</div></div>
+        <div class="th-stat"><div class="v" id="thMissed" style="color:#F87171">0</div><div class="l">Missed</div></div>
+      </div>
+    </div>
+    <div class="scr-body" id="tripBody">
+      <!-- pre-trip state -->
+    </div>
+  </div>
+
+  <!-- ══ NIGHT SUPERVISOR ══ -->
+  <div class="screen" id="scr-supervisor">
+    <div class="sup-hero">
+      <div class="sup-time">Thu, 10 Jul 2026 · Night Shift</div>
+      <div class="sup-title">Supervisor Dashboard</div>
+      <div class="sup-kpi">
+        <div class="sk"><div class="sv" style="color:#86EFAC">12</div><div class="sl">On Duty</div></div>
+        <div class="sk"><div class="sv" style="color:#F87171">2</div><div class="sl">Absent</div></div>
+        <div class="sk"><div class="sv" style="color:#FCD34D">1</div><div class="sl">Late</div></div>
+        <div class="sk"><div class="sv">15</div><div class="sl">Total Taxis</div></div>
+      </div>
+    </div>
+    <div class="scr-body">
+      <div class="absent-alert">
+        <div class="aa-title">🚨 Absent Taxis – Arrange Casual Now</div>
+        <div class="aa-item">
+          <div class="rdot"></div>
+          <div>
+            <div class="rname">RJ14-CC-9901 – Suresh Patel</div>
+            <div class="rroute">Route 2C · Jaipur → Amer Road (9 drops)</div>
+          </div>
+          <button class="aa-act">Arrange</button>
+        </div>
+        <div class="aa-item">
+          <div class="rdot"></div>
+          <div>
+            <div class="rname">RJ14-CF-4421 – Kishan Lal</div>
+            <div class="rroute">Route 7B · Jaipur → Sikar Road (11 drops)</div>
+          </div>
+          <button class="aa-act">Arrange</button>
+        </div>
+      </div>
+      <span class="slbl">All Taxis Tonight</span>
+      <div class="taxi-grid" id="taxiGrid"></div>
+      <div style="height:16px"></div>
+    </div>
+    <div class="tabs">
+      <button class="tab on"><span class="i">📋</span>Overview</button>
+      <button class="tab" onclick="goScreen('scr-driver');showToast('Switching to driver view')"><span class="i">🚐</span>Live Map</button>
+      <button class="tab" onclick="goScreen('scr-notifs')"><span class="i">🔔</span>Alerts</button>
+      <button class="tab" onclick="goScreen('scr-login');showToast('Logged out')"><span class="i">←</span>Logout</button>
+    </div>
+  </div>
+
+  <!-- ══ NOTIFICATIONS ══ -->
+  <div class="screen" id="scr-notifs">
+    <div class="hdr hdr-navy">
+      <div class="hdr-l">
+        <button class="back" onclick="history.back()||goScreen('scr-driver')">←</button>
+        <div><h1>Notifications</h1><div class="sub">Real-time alerts</div></div>
+      </div>
+    </div>
+    <div class="scr-body">
+      <div style="height:10px"></div>
+      <div class="card" style="padding:0">
+        <div class="notif-item">
+          <div class="ni-ico ni-green">✅</div>
+          <div>
+            <div class="ni-t">Bundle Delivered – Sindhi Camp</div>
+            <div class="ni-b">Route 3A · Ramesh Saini confirmed delivery. Agent notified.</div>
+            <div class="ni-ts">Today · 4:47 AM</div>
+          </div>
+        </div>
+        <div class="notif-item">
+          <div class="ni-ico ni-green">✅</div>
+          <div>
+            <div class="ni-t">Bundle Delivered – MI Road Junction</div>
+            <div class="ni-b">Route 3A · On time. Agent notified automatically.</div>
+            <div class="ni-ts">Today · 4:53 AM</div>
+          </div>
+        </div>
+        <div class="notif-item">
+          <div class="ni-ico ni-red">🚨</div>
+          <div>
+            <div class="ni-t">Missed Drop – Tonk Road Cross</div>
+            <div class="ni-b">RJ14-CA-4821 passed Tonk Road without delivering. Supervisor alerted.</div>
+            <div class="ni-ts">Today · 5:03 AM</div>
+          </div>
+        </div>
+        <div class="notif-item">
+          <div class="ni-ico ni-amber">⚠️</div>
+          <div>
+            <div class="ni-t">Taxi Absent – Route 2C</div>
+            <div class="ni-b">RJ14-CC-9901 (Suresh Patel) did not report to press. Casual arrangement pending.</div>
+            <div class="ni-ts">Today · 4:30 AM</div>
+          </div>
+        </div>
+        <div class="notif-item">
+          <div class="ni-ico ni-blue">📦</div>
+          <div>
+            <div class="ni-t">Late Arrival – Route 4A</div>
+            <div class="ni-b">Dinesh Verma arrived 18 min late. Started trip at 4:48 AM.</div>
+            <div class="ni-ts">Today · 4:48 AM</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /phone -->
+
+<script>
+/* ─── DATA ──────────────────────────────────────── */
+const DROP_POINTS = [
+  {name:'Jaipur Press (Dispatch)',sched:'4:30 AM',km:0},
+  {name:'Sindhi Camp Agency',sched:'4:45 AM',km:4.2},
+  {name:'MI Road Junction',sched:'4:52 AM',km:6.8},
+  {name:'Tonk Road Cross',sched:'5:00 AM',km:10.1},
+  {name:'Durgapura Colony',sched:'5:10 AM',km:14.5},
+  {name:'Sanganer Choraha',sched:'5:20 AM',km:19.2},
+  {name:'New Sanganer Road',sched:'5:28 AM',km:23.4},
+  {name:'Pratap Nagar',sched:'5:35 AM',km:28.1},
+  {name:'Shyam Nagar',sched:'5:42 AM',km:32.6},
+  {name:'Ridhi Sidhi Circle',sched:'5:50 AM',km:37.8},
+  {name:'Jagatpura Main',sched:'5:58 AM',km:44.1},
+  {name:'Sanganer End (Final)',sched:'6:10 AM',km:52.3},
+];
+
+const REG_STATUS = [true,true,true,true,true,true,true,true,false,false,false,false];
+
+const TAXI_FLEET = [
+  {rn:'RJ14-CA-4821',driver:'Ramesh Saini',route:'3A',status:'on-trip',time:'4:31 AM',drops:'5/12'},
+  {rn:'RJ14-CB-2234',driver:'Mohan Kumar',route:'5B',status:'on-trip',time:'4:28 AM',drops:'9/11'},
+  {rn:'RJ14-CC-9901',driver:'Suresh Patel',route:'2C',status:'absent',time:'—',drops:'—'},
+  {rn:'RJ14-CD-7712',driver:'Bharat Lal',route:'1A',status:'done',time:'4:15 AM',drops:'15/15'},
+  {rn:'RJ14-CE-3345',driver:'Dinesh Verma',route:'4A',status:'on-trip',time:'4:48 AM',drops:'3/13'},
+  {rn:'RJ14-CF-4421',driver:'Kishan Lal',route:'7B',status:'absent',time:'—',drops:'—'},
+  {rn:'RJ14-CG-1102',driver:'Gopal Meena',route:'6C',status:'on-trip',time:'4:22 AM',drops:'7/10'},
+  {rn:'RJ14-CH-8832',driver:'Rajendra Das',route:'8A',status:'late',time:'4:48 AM',drops:'2/9'},
+];
+
+/* ─── TRIP STATE ────────────────────────────────── */
+let tripStarted = false;
+let tripClosed = false;
+let currentDropIdx = 0;
+let tripMissed = 0;
+let dropStatuses = []; // 'pending','done','missed','next'
+let startTime = null;
+let timerInterval = null;
+
+/* ─── UTILITY ───────────────────────────────────── */
+const qs = (s,c=document) => c.querySelector(s);
+let prevScreen = 'scr-driver';
+
+function goScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  qs('#'+id).classList.add('active');
+  if(id==='scr-register') initRegister();
+  if(id==='scr-supervisor') initSupervisor();
+  if(id==='scr-trip' && !tripStarted) renderPreTrip();
+}
+
+function showToast(msg,dur=2400){
+  qs('#toastMsg').textContent=msg;
+  const t=qs('#toast');
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),dur);
+}
+
+function toggleTheme(){
+  const root=document.documentElement;
+  const n=root.getAttribute('data-theme')==='dark'?'light':'dark';
+  root.setAttribute('data-theme',n);
+  qs('.theme-btn').textContent=n==='dark'?'☀️':'🌙';
+  if(qs('#attMapCanvas')) drawAttMap();
+}
+
+/* ─── LOGIN ─────────────────────────────────────── */
+let selectedRole = 'driver';
+function selRole(chip,role){
+  qs('#roleSelector').querySelectorAll('.role-chip').forEach(c=>c.classList.remove('selected'));
+  chip.classList.add('selected');
+  selectedRole=role;
+  const usePass=role==='supervisor'||role==='incharge';
+  qs('#otpToggle').style.display=usePass?'none':'block';
+}
+let otpMode=false;
+function toggleOtp(){
+  otpMode=!otpMode;
+  qs('#passWrap').style.display=otpMode?'none':'block';
+  qs('#otpWrap').style.display=otpMode?'block':'none';
+  qs('#otpToggle').textContent=otpMode?'Use password instead ↑':'Use OTP instead ↓';
+  if(otpMode) showToast('OTP sent to +91 98290 11234');
+}
+function doLogin(){
+  if(selectedRole==='driver') goScreen('scr-driver');
+  else if(selectedRole==='supervisor') goScreen('scr-supervisor');
+  else if(selectedRole==='owner'||selectedRole==='incharge'){goScreen('scr-driver');showToast('Logged in as '+selectedRole);}
+}
+
+/* ─── ATTENDANCE ────────────────────────────────── */
+let attDone=false;
+function drawAttMap(){
+  const c=qs('#attMapCanvas');if(!c)return;
+  c.width=c.offsetWidth||340;c.height=130;
+  const ctx=c.getContext('2d');
+  const dk=document.documentElement.getAttribute('data-theme')==='dark';
+  ctx.fillStyle=dk?'#1A2A1A':'#C8D8C0';ctx.fillRect(0,0,c.width,c.height);
+  ctx.strokeStyle=dk?'rgba(255,255,255,.12)':'rgba(255,255,255,.7)';ctx.lineWidth=7;
+  ctx.beginPath();ctx.moveTo(0,65);ctx.lineTo(c.width,65);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(c.width*.45,0);ctx.lineTo(c.width*.45,130);ctx.stroke();
+  // press building
+  const px=c.width*.45,py=65;
+  ctx.fillStyle='rgba(18,96,191,.25)';ctx.beginPath();ctx.arc(px,py,45,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle='rgba(18,96,191,.5)';ctx.lineWidth=1.5;ctx.setLineDash([4,3]);ctx.beginPath();ctx.arc(px,py,45,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle='#1260BF';ctx.beginPath();ctx.arc(px,py,8,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.font='bold 7px system-ui';ctx.textAlign='center';ctx.fillText('PRESS',px,py+3);
+  // you
+  const ux=px-20,uy=py+15;
+  ctx.fillStyle='rgba(30,107,71,.3)';ctx.beginPath();ctx.arc(ux,uy,18,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=attDone?'var(--green,#1E6B47)':'#FF9800';ctx.beginPath();ctx.arc(ux,uy,8,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.font='bold 7px system-ui';ctx.fillText('YOU',ux,uy+3);
+  // dist line
+  ctx.strokeStyle='rgba(30,107,71,.45)';ctx.lineWidth=1.5;ctx.setLineDash([3,3]);
+  ctx.beginPath();ctx.moveTo(ux,uy);ctx.lineTo(px,py);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=dk?'rgba(0,0,0,.6)':'rgba(255,255,255,.85)';
+  ctx.beginPath();if(ctx.roundRect)ctx.roundRect((ux+px)/2-18,py-8,40,14,3);else ctx.rect((ux+px)/2-18,py-8,40,14);ctx.fill();
+  ctx.fillStyle='#1260BF';ctx.font='8px system-ui';ctx.fillText('~22m',( ux+px)/2,py+4);
+  ctx.textAlign='left';
+}
+function refreshGeo(){
+  qs('#attGeoDot').style.background='#FF9800';
+  qs('#attGeoDot').className='geo-dot';
+  qs('#attGeoStatus').textContent='Locating…';
+  setTimeout(()=>{
+    qs('#attGeoBar').className='geo-bar ok';
+    qs('#attGeoDot').style.background='var(--green)';
+    qs('#attGeoDot').className='geo-dot gpulse';
+    qs('#attGeoStatus').textContent='✓ At Jaipur Press · 22m away';
+    qs('#attGeoSub').textContent='Within range · Attendance enabled';
+    drawAttMap();
+  },900);
+}
+function markPressAttendance(){
+  attDone=true;
+  qs('#attConfirmed').style.display='block';
+  qs('#attMarkBtn').textContent='✓ Attendance Marked';
+  qs('#attMarkBtn').style.opacity='.5';
+  qs('#attMarkBtn').style.cursor='default';
+  qs('#driverAttStatus').textContent='✓ In';
+  drawAttMap();
+  showToast('✓ Press attendance marked · 4:31 AM');
+}
+document.addEventListener('DOMContentLoaded',()=>{
+  setTimeout(()=>{refreshGeo();drawAttMap();},400);
+});
+
+/* ─── REGISTER DROP POINTS ──────────────────────── */
+let regStatus = [...REG_STATUS];
+function initRegister(){
+  renderRegList();
+}
+function renderRegList(){
+  const done=regStatus.filter(Boolean).length;
+  qs('#regProgressBadge').textContent=done+' / '+DROP_POINTS.length;
+  qs('#regProgFill').style.width=Math.round(done/DROP_POINTS.length*100)+'%';
+  qs('#dpRegList').innerHTML=DROP_POINTS.map((dp,i)=>`
+  <div class="dp-item">
+    <div class="dp-num ${regStatus[i]?'done':''}">${regStatus[i]?'✓':i+1}</div>
+    <div class="dp-info">
+      <div class="dname">${dp.name}</div>
+      <div class="dcoord">${regStatus[i]
+        ?'26.°'+(9218+i*12).toFixed(0)+' N · 75.°'+(8021+i*8).toFixed(0)+' E · Marked ✓'
+        :'Not registered yet'}</div>
+    </div>
+    <div class="dp-action">
+      <button class="mark-btn ${regStatus[i]?'done':'todo'}" onclick="markDropPoint(${i})">
+        ${regStatus[i]?'✓ Done':'📍 Mark'}
+      </button>
+    </div>
+  </div>`).join('');
+}
+function markDropPoint(i){
+  regStatus[i]=true;
+  renderRegList();
+  showToast('📍 '+DROP_POINTS[i].name+' location saved');
+}
+function markCurrentLocation(){
+  const next=regStatus.indexOf(false);
+  if(next===-1){showToast('✓ All drop points registered!');return;}
+  markDropPoint(next);
+}
+
+/* ─── LIVE TRIP ─────────────────────────────────── */
+function startTripFlow(){goScreen('scr-trip');}
+
+function renderPreTrip(){
+  qs('#tripBody').innerHTML=`
+  <div class="start-zone">
+    <div class="sz-time">Scheduled departure</div>
+    <div class="sz-sched">4:30 AM</div>
+    <div class="sz-note">Start from <strong>Jaipur Press</strong> or remote link location. Your GPS will be recorded at trip start.</div>
+    <button class="start-btn-big" onclick="beginTrip()">▶ Start Trip Now</button>
+  </div>
+  <span class="slbl">Today's Drop Points</span>
+  <div class="trip-active-hdr" style="border-radius:var(--r) var(--r) 0 0;">
+    <div style="font-size:12px;font-weight:700;color:var(--txt)">Route 3A · 12 Stops</div>
+    <div style="font-size:11px;color:var(--txt3)">Tap Start to begin</div>
+  </div>
+  <div class="drop-table">
+    <div class="dt-head"><span>#</span><span>Drop Point</span><span>Sched.</span><span>Actual</span><span></span></div>
+    ${DROP_POINTS.map((dp,i)=>`
+    <div class="dp-row ${i===0?'next':''}">
+      <div class="seq">${i===0?'▶':i+1}</div>
+      <div class="dpt-name">${dp.name}</div>
+      <div class="dpt-s">${dp.sched}</div>
+      <div class="dpt-a">${i===0?'—':'—'}</div>
+      <div class="dpt-ico">${i===0?'🔆':'⬜'}</div>
+    </div>`).join('')}
+  </div>
+  <div style="height:16px"></div>`;
+}
+
+function beginTrip(){
+  tripStarted=true;
+  dropStatuses=DROP_POINTS.map((_,i)=>i===0?'next':'pending');
+  tripMissed=0;
+  currentDropIdx=0;
+  startTime=new Date();
+  timerInterval=setInterval(updateElapsed,30000);
+  renderActiveTrip();
+  qs('#tripStatusBadge').textContent='● LIVE';
+  qs('#tripStatusBadge').style.background='rgba(30,107,71,.15)';
+  qs('#tripStatusBadge').style.color='var(--green)';
+  qs('#tripSubStatus').textContent='En route · '+DROP_POINTS[0].name;
+  showToast('🚐 Trip started · GPS tracking on');
+}
+
+function getActualTimes(){
+  const now=new Date();
+  return DROP_POINTS.map((_,i)=>{
+    if(dropStatuses[i]==='done'||dropStatuses[i]==='missed'){
+      const base=new Date(startTime.getTime()+i*7*60000+Math.random()*2*60000);
+      let h=base.getHours(),m=base.getMinutes();
+      const ap=h>=12?'PM':'AM';h=h%12||12;
+      return h+':'+(m<10?'0':'')+m+' '+ap;
+    }
+    return '—';
+  });
+}
+
+function renderActiveTrip(){
+  const actual=getActualTimes();
+  qs('#thDropsDone').textContent=dropStatuses.filter(s=>s==='done').length+'/'+DROP_POINTS.length;
+  const covKm=DROP_POINTS[Math.max(0,currentDropIdx-1)]?.km||0;
+  qs('#thKmDone').textContent=covKm.toFixed(1);
+  qs('#thMissed').textContent=tripMissed;
+
+  const rows=DROP_POINTS.map((dp,i)=>{
+    const st=dropStatuses[i];
+    const ico=st==='done'?'✅':st==='missed'?'❌':st==='next'?'🔆':'⬜';
+    const seq=st==='done'?'✓':st==='missed'?'✗':st==='next'?'▶':i+1;
+    return `<div class="dp-row ${st}">
+      <div class="seq">${seq}</div>
+      <div class="dpt-name">${dp.name}</div>
+      <div class="dpt-s">${dp.sched}</div>
+      <div class="dpt-a">${actual[i]}</div>
+      <div class="dpt-ico">${ico}</div>
+    </div>`;
+  }).join('');
+
+  const nextDp=DROP_POINTS[currentDropIdx];
+  const allDone=currentDropIdx>=DROP_POINTS.length;
+  qs('#tripBody').innerHTML=`
+  <span class="slbl" style="padding-top:10px">${allDone?'All drops completed':'Next: '+( nextDp?.name||'—')}</span>
+  <div class="trip-active-hdr">
+    <div class="ta-prog">
+      <div class="frac">${dropStatuses.filter(s=>s==='done').length}<span style="font-size:13px;font-weight:400;color:var(--txt3)">/12</span></div>
+      <div class="label">drops<br>delivered</div>
+    </div>
+    <div class="ta-km">
+      <div class="kv">${DROP_POINTS[Math.max(0,currentDropIdx-1)]?.km?.toFixed(1)||'0.0'} km</div>
+      <div class="kl">of 52.3 km</div>
+    </div>
+  </div>
+  <div class="drop-table">
+    <div class="dt-head"><span>#</span><span>Drop Point</span><span>Sched.</span><span>Actual</span><span></span></div>
+    ${rows}
+  </div>
+  ${!allDone?`
+  <div class="sim-bar">
+    <span class="sim-lbl">Demo: Simulate GPS arrival</span>
+    <button class="sim-reach" onclick="simReach()">📍 Reach</button>
+    <button class="sim-miss" onclick="simMiss()">⚡ Skip</button>
+  </div>`:''}
+  <div class="trip-close-wrap">
+    <button class="btn ${allDone?'btn-green':'btn-out'}" onclick="closeTrip()">${allDone?'✓ Trip Completed – Close':'Close Trip Manually'}</button>
+  </div>`;
+}
+
+function simReach(){
+  if(currentDropIdx>=DROP_POINTS.length)return;
+  dropStatuses[currentDropIdx]='done';
+  const dp=DROP_POINTS[currentDropIdx];
+  showToast('✅ '+dp.name+' – Bundle delivered. Agent notified.',2600);
+  currentDropIdx++;
+  if(currentDropIdx<DROP_POINTS.length) dropStatuses[currentDropIdx]='next';
+  checkTripComplete();
+  renderActiveTrip();
+}
+
+function simMiss(){
+  if(currentDropIdx>=DROP_POINTS.length)return;
+  const dp=DROP_POINTS[currentDropIdx];
+  dropStatuses[currentDropIdx]='missed';
+  tripMissed++;
+  currentDropIdx++;
+  if(currentDropIdx<DROP_POINTS.length) dropStatuses[currentDropIdx]='next';
+  // alarm!
+  qs('#alarmMsg').textContent=dp.name+' bundle NOT delivered. Supervisor & Circulation Incharge notified automatically.';
+  qs('#alarmOverlay').classList.add('active');
+  renderActiveTrip();
+  qs('#thMissed').textContent=tripMissed;
+  qs('#thMissed').style.color='var(--red)';
+}
+
+function dismissAlarm(){
+  qs('#alarmOverlay').classList.remove('active');
+  checkTripComplete();
+}
+
+function checkTripComplete(){
+  if(currentDropIdx>=DROP_POINTS.length){
+    qs('#tripStatusBadge').textContent='✓ COMPLETED';
+    qs('#tripStatusBadge').style.background='var(--green-l)';
+    qs('#tripStatusBadge').style.color='var(--green)';
+    qs('#tripSubStatus').textContent='All stops covered · Trip closing…';
+    qs('#thDropsDone').textContent=dropStatuses.filter(s=>s==='done').length+'/12';
+    renderActiveTrip();
+  }
+}
+
+function closeTrip(){
+  clearInterval(timerInterval);
+  tripClosed=true;
+  const done=dropStatuses.filter(s=>s==='done').length;
+  const missed=dropStatuses.filter(s=>s==='missed').length;
+  showToast(`Trip closed · ${done} delivered · ${missed} missed`,3000);
+  setTimeout(()=>goScreen('scr-driver'),1200);
+  tripStarted=false;
+  dropStatuses=[];
+  currentDropIdx=0;
+  tripMissed=0;
+}
+
+function updateElapsed(){
+  if(!startTime)return;
+  const diff=Math.round((new Date()-startTime)/60000);
+  const h=Math.floor(diff/60),m=diff%60;
+  const el=qs('#thElapsed');
+  if(el) el.textContent=(h>0?h+'h ':'')+m+'m';
+}
+
+/* ─── SUPERVISOR ────────────────────────────────── */
+function initSupervisor(){
+  const grid=qs('#taxiGrid');
+  if(!grid)return;
+  const colMap={
+    'on-trip':['var(--blue)','On Trip','b-blue'],
+    'absent':['var(--red)','ABSENT','b-red'],
+    'done':['var(--green)','Trip Done','b-green'],
+    'late':['var(--amber)','Late Start','b-amber'],
+  };
+  grid.innerHTML=TAXI_FLEET.map(t=>{
+    const [col,lbl,bc]=colMap[t.status]||['var(--txt3)','Unknown','b-grey'];
+    return `<div class="taxi-card">
+      <div class="tc-border" style="background:${col}"></div>
+      <div class="tc-rn">${t.rn}</div>
+      <div class="tc-driver">${t.driver}</div>
+      <div class="tc-route">Route ${t.route}</div>
+      <div class="tc-status">
+        <div class="tcs-dot" style="background:${col}"></div>
+        <span class="badge ${bc}">${lbl}</span>
+      </div>
+      <div class="tc-time">${t.status==='absent'?'Did not report':'Att: '+t.time+(t.drops!=='—'?' · '+t.drops+' drops':'')}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ─── CLOCK ─────────────────────────────────────── */
+function startClock(){
+  function update(){
+    const d=new Date();let h=d.getHours(),m=d.getMinutes();
+    const ap=h>=12?'PM':'AM';h=h%12||12;
+    const el=qs('#sTime');if(el) el.textContent=h+':'+(m<10?'0':'')+m+' '+ap;
+    const ac=qs('#attClock');if(ac) ac.textContent=h+':'+(m<10?'0':'')+m+' '+ap;
+  }
+  update();setInterval(update,30000);
+}
+
+window.addEventListener('load',()=>{
+  startClock();
+  setTimeout(()=>{refreshGeo();drawAttMap();},500);
+});
+</script>
+
+<!-- ══════════ Patrika SSO bootstrap (injected) ══════════ -->
+<script>
+(function(){
+  function hasSession(){
+    try { return !!(sessionStorage.getItem('patrika_profile')||localStorage.getItem('patrika_profile')||sessionStorage.getItem('patrika_token')||localStorage.getItem('patrika_token')); }
+    catch(e){ return false; }
+  }
+  function enter(){ try { goScreen('scr-driver'); } catch(e){ console.warn('[sso] enter failed', e); } }
+  function boot(){
+    // Only auto-skip the app's own login when launched inside the authenticated suite session.
+    if(!hasSession()) return;
+    enter();
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(boot,0); });
+  else setTimeout(boot,0);
+})();
+</script>
+
+</body>
+</html>

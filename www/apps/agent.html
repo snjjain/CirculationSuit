@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Agent App · Patrika</title>
+<style>
+/* ── TOKENS ─────────────────────────────────────── */
+:root {
+  --red:#C0392B;--red-d:#8B1A1A;--red-l:rgba(192,57,43,.10);--red-ll:#FEF6F5;
+  --navy:#1C2B45;--gold:#D4820A;--gold-l:rgba(212,130,10,.10);
+  --grn:#1E6B47;--grn-l:rgba(30,107,71,.10);
+  --blue:#1565C0;--blue-l:rgba(21,101,192,.10);
+  --bg:#FEF6F5;--surf:#FFFFFF;--surf2:#FBF0EF;
+  --brd:rgba(192,57,43,.14);
+  --txt:#1C2B45;--txt2:#5A2A2A;--txt3:#9A7A7A;
+  --shd:0 2px 10px rgba(192,57,43,.09);--shd-lg:0 8px 28px rgba(192,57,43,.14);
+  --r:12px;--r-sm:8px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#1A0A0A;--surf:#251010;--surf2:#301818;
+  --brd:rgba(192,57,43,.20);--txt:#F5DCDC;--txt2:#C4A0A0;--txt3:#7A5050;
+  --shd:0 2px 10px rgba(0,0,0,.3);--shd-lg:0 8px 28px rgba(0,0,0,.4);
+  --red-l:rgba(192,57,43,.18);--red-ll:rgba(192,57,43,.12);
+  --grn-l:rgba(30,107,71,.18);--gold-l:rgba(212,130,10,.18);--blue-l:rgba(21,101,192,.18);
+}}
+:root[data-theme=dark]{
+  --bg:#1A0A0A;--surf:#251010;--surf2:#301818;
+  --brd:rgba(192,57,43,.20);--txt:#F5DCDC;--txt2:#C4A0A0;--txt3:#7A5050;
+  --shd:0 2px 10px rgba(0,0,0,.3);--shd-lg:0 8px 28px rgba(0,0,0,.4);
+  --red-l:rgba(192,57,43,.18);--red-ll:rgba(192,57,43,.12);
+  --grn-l:rgba(30,107,71,.18);--gold-l:rgba(212,130,10,.18);--blue-l:rgba(21,101,192,.18);
+}
+:root[data-theme=light]{
+  --bg:#FEF6F5;--surf:#FFFFFF;--surf2:#FBF0EF;
+  --brd:rgba(192,57,43,.14);--txt:#1C2B45;--txt2:#5A2A2A;--txt3:#9A7A7A;
+  --shd:0 2px 10px rgba(192,57,43,.09);--shd-lg:0 8px 28px rgba(192,57,43,.14);
+  --red-l:rgba(192,57,43,.10);--red-ll:#FEF6F5;
+  --grn-l:rgba(30,107,71,.10);--gold-l:rgba(212,130,10,.10);--blue-l:rgba(21,101,192,.10);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:system-ui,-apple-system,'Segoe UI',sans-serif;
+  background:#3A0A08;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+  background-image:radial-gradient(ellipse at 30% 30%,rgba(192,57,43,.35) 0%,transparent 55%),
+                   radial-gradient(ellipse at 80% 80%,rgba(28,43,69,.4) 0%,transparent 55%);
+}
+.phone{
+  width:390px;height:844px;background:var(--bg);border-radius:44px;overflow:hidden;
+  position:relative;display:flex;flex-direction:column;
+  box-shadow:0 0 0 10px #1A0505,0 30px 80px rgba(0,0,0,.6),inset 0 0 0 2px #3A1010;
+}
+.sbar{height:44px;background:var(--red-d);flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 22px}
+.sbar .t{color:#fff;font-size:15px;font-weight:600}
+.sbar .ic{color:rgba(255,255,255,.7);font-size:11px;display:flex;gap:6px}
+.screen{display:none;flex-direction:column;flex:1;overflow:hidden}
+.screen.active{display:flex}
+.scr-body{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.scr-body::-webkit-scrollbar{display:none}
+.hdr{padding:13px 18px 11px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;background:var(--red-d)}
+.hdr-l{display:flex;align-items:center;gap:10px}
+.back{width:34px;height:34px;border-radius:50%;border:none;cursor:pointer;background:rgba(255,255,255,.15);color:#fff;font-size:16px;display:flex;align-items:center;justify-content:center}
+.hdr h1{font-family:Georgia,serif;font-size:17px;font-weight:700;color:#fff;letter-spacing:-.2px}
+.hdr .sub{font-size:10px;color:rgba(255,255,255,.55);margin-top:1px}
+.hdr-btn{height:30px;padding:0 14px;border-radius:15px;border:none;cursor:pointer;background:rgba(255,255,255,.12);color:#fff;font-size:12px;font-weight:600}
+.toast{position:absolute;bottom:80px;left:14px;right:14px;background:var(--navy);color:#fff;border-radius:var(--r-sm);padding:12px 16px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;z-index:200;box-shadow:var(--shd-lg);transform:translateY(120%);opacity:0;transition:transform .3s,opacity .3s;pointer-events:none}
+.toast.show{transform:translateY(0);opacity:1}
+.toast .tk{width:22px;height:22px;border-radius:50%;background:var(--grn);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
+.theme-btn{position:fixed;top:18px;right:18px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);color:#fff;padding:7px 13px;border-radius:20px;cursor:pointer;font-size:12px;font-weight:600;backdrop-filter:blur(8px);z-index:1000}
+.badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700}
+.b-red{background:var(--red-l);color:var(--red)}
+.b-grn{background:var(--grn-l);color:var(--grn)}
+.b-gold{background:var(--gold-l);color:var(--gold)}
+.b-blue{background:var(--blue-l);color:var(--blue)}
+.b-grey{background:var(--surf2);color:var(--txt3)}
+.card{background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);margin:0 14px 12px;overflow:hidden}
+.cp{padding:13px 14px}
+.fl{font-size:11px;font-weight:700;color:var(--txt2);letter-spacing:.3px;display:block;margin-bottom:5px}
+.fg{margin-bottom:12px}
+.inp{width:100%;padding:10px 13px;border-radius:var(--r-sm);border:1.5px solid var(--brd);background:var(--surf2);font-size:14px;color:var(--txt);outline:none;transition:border-color .15s;font-family:inherit}
+.inp:focus{border-color:var(--red)}
+.inp::placeholder{color:var(--txt3)}
+.inp-sel{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%239A7A7A' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center;padding-right:30px;cursor:pointer}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.slbl{font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--txt3);padding:14px 18px 7px;display:block}
+.btn{width:100%;padding:13px;border-radius:var(--r-sm);border:none;cursor:pointer;font-size:15px;font-weight:700;transition:opacity .15s}
+.btn:active{opacity:.85}
+.btn-red{background:var(--red);color:#fff}
+.btn-navy{background:var(--navy);color:#fff}
+.btn-grn{background:var(--grn);color:#fff}
+.btn-gold{background:var(--gold);color:#fff}
+.btn-out{background:transparent;border:1.5px solid var(--brd);color:var(--txt)}
+.btn-row{display:flex;gap:8px;padding:0 14px 16px}
+.btn-row .btn{flex:1}
+.tbl{width:100%;border-collapse:collapse}
+.tbl th{font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt3);padding:8px 10px;text-align:left;border-bottom:1px solid var(--brd);background:var(--surf2)}
+.tbl td{padding:10px 10px;border-bottom:1px solid var(--brd);font-size:12px;color:var(--txt);font-variant-numeric:tabular-nums}
+.tbl tr:last-child td{border-bottom:none}
+.tbl .num{text-align:right;font-weight:700}
+.tbl .cr{color:var(--grn)}
+.tbl .dr{color:var(--red)}
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chip{padding:7px 13px;border-radius:20px;border:1.5px solid var(--brd);background:var(--surf2);font-size:12px;color:var(--txt2);cursor:pointer;font-weight:500;transition:all .15s;white-space:nowrap}
+.chip.on{border-color:var(--red);background:var(--red-l);color:var(--red);font-weight:700}
+.stars{display:flex;gap:6px}
+.star{font-size:28px;cursor:pointer;color:var(--surf2);transition:color .1s;-webkit-tap-highlight-color:transparent}
+.star.on{color:#F59E0B}
+.prog-track{height:6px;background:var(--surf2);border-radius:3px;overflow:hidden}
+.prog-fill{height:100%;border-radius:3px}
+#scr-login{background:var(--red-d)}
+.login-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 22px}
+.logo .mark{font-family:Georgia,serif;font-size:36px;font-weight:700;color:#fff;letter-spacing:-1px;text-align:center}
+.logo .mark span{color:#FFAA88}
+.logo .sub{font-size:11px;color:rgba(255,255,255,.4);letter-spacing:1.8px;text-transform:uppercase;margin-top:4px;text-align:center;margin-bottom:28px}
+.l-card{width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:22px;backdrop-filter:blur(20px)}
+.l-card h2{font-family:Georgia,serif;font-size:20px;color:#fff;margin-bottom:3px}
+.l-card .sub{font-size:12px;color:rgba(255,255,255,.4);margin-bottom:20px}
+.l-inp{width:100%;padding:13px 15px;border-radius:10px;border:1.5px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);font-size:15px;color:#fff;outline:none;margin-bottom:10px;font-family:inherit;transition:border-color .15s}
+.l-inp::placeholder{color:rgba(255,255,255,.28)}
+.l-inp:focus{border-color:#FFAA88}
+.l-pfx{position:relative}
+.l-pfx .pfx{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:rgba(255,255,255,.35);font-size:14px}
+.l-pfx .l-inp{padding-left:44px}
+.l-btn{width:100%;padding:14px;border-radius:10px;background:var(--red);border:none;color:#fff;font-size:15px;font-weight:700;cursor:pointer;margin-top:4px}
+.l-hint{font-size:11px;color:rgba(255,255,255,.3);text-align:center;margin-top:10px}
+.l-footer{margin-top:20px;font-size:10px;color:rgba(255,255,255,.2);text-align:center}
+.otp-boxes{display:flex;gap:8px;justify-content:center;margin-bottom:14px}
+.otp-box{width:44px;height:52px;border-radius:10px;border:2px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);font-size:22px;font-weight:700;color:#fff;text-align:center;outline:none;caret-color:transparent}
+.otp-box:focus{border-color:#FFAA88}
+.otp-timer{font-size:12px;color:rgba(255,255,255,.4);text-align:center;margin-bottom:16px}
+.otp-timer .resend{color:#FFAA88;cursor:pointer;font-weight:600}
+.dash-hero{background:linear-gradient(160deg,var(--red-d),var(--red));padding:16px 18px 20px;flex-shrink:0}
+.dh-greet{font-size:12px;color:rgba(255,255,255,.55);margin-bottom:2px}
+.dh-name{font-family:Georgia,serif;font-size:22px;font-weight:700;color:#fff;margin-bottom:2px}
+.dh-meta{font-size:12px;color:rgba(255,255,255,.6)}
+.dh-cards{display:flex;gap:10px;margin-top:14px}
+.dh-card{flex:1;background:rgba(255,255,255,.1);border-radius:12px;padding:12px;text-align:center;backdrop-filter:blur(8px)}
+.dh-card .val{font-family:Georgia,serif;font-size:20px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
+.dh-card .lbl{font-size:9px;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.5px;margin-top:3px}
+.dh-card.alert .val{color:#FFAA88}
+.dh-card.ok .val{color:#86EFAC}
+.mod-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:0;padding:0 0 10px}
+.mod-item{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:14px 6px 10px;cursor:pointer;position:relative;-webkit-tap-highlight-color:transparent;transition:background .1s}
+.mod-item:active{background:var(--surf2)}
+.mod-icon{width:52px;height:52px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:24px;margin-bottom:8px;position:relative}
+.mod-label{font-size:10px;font-weight:600;color:var(--txt2);text-align:center;line-height:1.3}
+.mod-notif{position:absolute;top:-4px;right:-4px;background:var(--red);color:#fff;border-radius:10px;font-size:9px;font-weight:700;padding:1px 5px;border:2px solid var(--surf)}
+.mi-red{background:var(--red-l)}
+.mi-gold{background:var(--gold-l)}
+.mi-grn{background:var(--grn-l)}
+.mi-blue{background:var(--blue-l)}
+.mi-pur{background:rgba(109,40,217,.10)}
+.mi-teal{background:rgba(13,148,136,.10)}
+.mi-orange{background:rgba(234,88,12,.10)}
+.mi-pink{background:rgba(219,39,119,.10)}
+.mi-navy{background:rgba(28,43,69,.08)}
+.mod-divider{height:1px;background:var(--brd);margin:0 14px 4px}
+.supply-kpi{display:flex;gap:0;margin:0 14px 12px;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);overflow:hidden}
+.sk{flex:1;padding:13px 8px;text-align:center;border-right:1px solid var(--brd)}
+.sk:last-child{border-right:none}
+.sk .sv{font-family:Georgia,serif;font-size:20px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.sk .sl{font-size:9px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
+.bundle-alert{margin:0 14px 12px;background:var(--grn-l);border:1px solid rgba(30,107,71,.2);border-radius:var(--r);padding:12px 14px;display:flex;align-items:center;gap:10px}
+.ba-icon{font-size:22px}
+.ba-text strong{font-size:13px;font-weight:700;color:var(--grn);display:block}
+.ba-text span{font-size:11px;color:var(--txt2)}
+.pay-amount-card{margin:0 14px 14px;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);overflow:hidden}
+.pac-top{background:linear-gradient(135deg,var(--red-d),var(--red));padding:16px;text-align:center}
+.pac-top .lbl{font-size:11px;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.pac-top .amount{font-family:Georgia,serif;font-size:36px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
+.pac-top .due{font-size:11px;color:rgba(255,255,255,.5);margin-top:4px}
+.pay-method-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px}
+.pm-card{padding:13px 10px;border-radius:var(--r-sm);border:2px solid var(--brd);background:var(--surf2);cursor:pointer;text-align:center;transition:all .15s;-webkit-tap-highlight-color:transparent}
+.pm-card .pico{font-size:24px;display:block;margin-bottom:6px}
+.pm-card .ptxt{font-size:12px;font-weight:700;color:var(--txt2)}
+.pm-card .psub{font-size:9px;color:var(--txt3);margin-top:2px}
+.pm-card.sel{border-color:var(--red);background:var(--red-l)}
+.pm-card.sel .ptxt{color:var(--red)}
+.upi-section{padding:0 14px 14px;display:none}
+.upi-section.active{display:block}
+.qr-placeholder{background:var(--surf2);border-radius:var(--r);height:140px;display:flex;align-items:center;justify-content:center;margin-bottom:12px;border:1.5px dashed var(--brd)}
+.qr-inner{text-align:center}
+.processing-overlay{position:absolute;inset:0;background:rgba(255,255,255,.95);z-index:300;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px}
+[data-theme=dark] .processing-overlay{background:rgba(26,10,10,.95)}
+.processing-overlay.active{display:flex}
+.proc-spinner{width:60px;height:60px;border-radius:50%;border:4px solid var(--surf2);border-top-color:var(--red);animation:spin .9s linear infinite;margin-bottom:20px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.proc-title{font-family:Georgia,serif;font-size:22px;font-weight:700;color:var(--txt);margin-bottom:8px}
+.proc-sub{font-size:13px;color:var(--txt3);line-height:1.5}
+.pay-success-overlay{position:absolute;inset:0;background:var(--grn);z-index:400;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px}
+.pay-success-overlay.active{display:flex}
+.pso-ico{font-size:64px;margin-bottom:16px;animation:pop .4s ease}
+@keyframes pop{0%{transform:scale(.5);opacity:0}80%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
+.pso-title{font-family:Georgia,serif;font-size:24px;font-weight:700;color:#fff;margin-bottom:8px}
+.pso-msg{font-size:13px;color:rgba(255,255,255,.75);line-height:1.6;margin-bottom:24px}
+.pso-ref{background:rgba(255,255,255,.12);border-radius:var(--r-sm);padding:12px 16px;width:100%;margin-bottom:20px}
+.pso-ref .r{display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px}
+.pso-ref .r:last-child{margin-bottom:0}
+.pso-ref .k{color:rgba(255,255,255,.55)}
+.pso-ref .v{color:#fff;font-weight:600}
+.pso-btn{padding:14px 32px;border-radius:var(--r-sm);border:2px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;font-size:15px;font-weight:700;cursor:pointer}
+.ledger-summary{display:flex;gap:0;margin:0 14px 12px;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);overflow:hidden}
+.ls{flex:1;padding:13px 8px;text-align:center;border-right:1px solid var(--brd)}
+.ls:last-child{border-right:none}
+.ls .lv{font-family:Georgia,serif;font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+.ls .ll{font-size:9px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
+.filter-strip{display:flex;gap:7px;padding:0 14px 12px;overflow-x:auto;scrollbar-width:none}
+.filter-strip::-webkit-scrollbar{display:none}
+.f-pill{flex-shrink:0;padding:6px 13px;border-radius:20px;border:1.5px solid var(--brd);background:var(--surf);font-size:11px;font-weight:600;color:var(--txt3);cursor:pointer;white-space:nowrap}
+.f-pill.on{background:var(--red-l);border-color:rgba(192,57,43,.3);color:var(--red)}
+.profile-hero{background:linear-gradient(160deg,var(--red-d),var(--red));padding:20px 18px 24px;text-align:center}
+.ph-av{width:72px;height:72px;border-radius:50%;background:rgba(255,255,255,.15);margin:0 auto 12px;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#fff;border:3px solid rgba(255,255,255,.25)}
+.ph-name{font-family:Georgia,serif;font-size:20px;font-weight:700;color:#fff;margin-bottom:3px}
+.ph-id{font-size:12px;color:rgba(255,255,255,.55)}
+.ph-badges{display:flex;justify-content:center;gap:8px;margin-top:10px}
+.profile-row{display:flex;align-items:center;gap:0;padding:12px 16px;border-bottom:1px solid var(--brd)}
+.profile-row:last-child{border-bottom:none}
+.pr-icon{width:32px;font-size:16px;flex-shrink:0;color:var(--txt3)}
+.pr-info{flex:1}
+.pr-info .k{font-size:10px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px}
+.pr-info .v{font-size:13px;font-weight:600;color:var(--txt);margin-top:2px}
+.bill-confirm-card{margin:0 14px 12px;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);overflow:hidden}
+.bcc-top{background:linear-gradient(135deg,var(--navy),#2E4A7A);padding:14px;display:flex;align-items:center;justify-content:space-between}
+.bcc-top .month{font-family:Georgia,serif;font-size:16px;font-weight:700;color:#fff}
+.bcc-top .status{font-size:11px;color:rgba(255,255,255,.6)}
+.bill-line{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--brd)}
+.bill-line:last-child{border-bottom:none}
+.bill-line .bl-lbl{font-size:12px;color:var(--txt2)}
+.bill-line .bl-val{font-size:13px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.bill-total{background:var(--surf2);padding:12px 14px;display:flex;justify-content:space-between;align-items:center}
+.bill-total .bt-lbl{font-size:13px;font-weight:700;color:var(--txt)}
+.bill-total .bt-val{font-family:Georgia,serif;font-size:22px;font-weight:700;color:var(--red);font-variant-numeric:tabular-nums}
+.confirm-check{display:flex;align-items:flex-start;gap:10px;padding:12px 14px;background:var(--red-ll);border:1px solid rgba(192,57,43,.18);border-radius:var(--r-sm);margin:0 14px 12px;cursor:pointer}
+.cc-box{width:22px;height:22px;border-radius:5px;border:2px solid var(--brd);background:var(--surf);flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:13px;transition:all .15s}
+.cc-box.checked{background:var(--grn);border-color:var(--grn);color:#fff}
+.cc-text{font-size:12px;color:var(--txt2);line-height:1.5}
+.comp-pub{display:flex;align-items:center;gap:12px;padding:11px 16px;border-bottom:1px solid var(--brd)}
+.comp-pub:last-child{border-bottom:none}
+.cp-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.cp-name{font-size:13px;font-weight:600;color:var(--txt);flex:1}
+.cp-inp{width:80px;padding:7px 10px;border-radius:7px;border:1.5px solid var(--brd);background:var(--surf2);font-size:14px;font-weight:700;color:var(--txt);text-align:center;font-variant-numeric:tabular-nums;outline:none}
+.cp-inp:focus{border-color:var(--red)}
+.ns-card{margin:0 14px 12px;background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);padding:16px}
+.ns-card h3{font-family:Georgia,serif;font-size:15px;font-weight:700;color:var(--txt);margin-bottom:12px}
+.ns-row{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--brd)}
+.ns-row:last-child{border-bottom:none}
+.ns-row .nk{font-size:12px;color:var(--txt2)}
+.ns-row .nv{font-size:14px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.ns-total{background:var(--navy);border-radius:var(--r-sm);padding:14px;display:flex;justify-content:space-between;align-items:center;margin-top:10px}
+.ns-total .ntl{font-size:13px;font-weight:700;color:rgba(255,255,255,.7)}
+.ns-total .ntv{font-family:Georgia,serif;font-size:24px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
+.rating-section{text-align:center;padding:16px 0 12px}
+.stars{display:flex;gap:8px;justify-content:center}
+.star{font-size:34px;cursor:pointer;opacity:.3;transition:opacity .15s,transform .1s}
+.star.on{opacity:1}
+.star:active{transform:scale(.9)}
+.rating-label{font-size:13px;font-weight:600;color:var(--txt);margin-top:8px;min-height:20px}
+</style>
+</head>
+<body>
+<button class="theme-btn" onclick="toggleTheme()">🌙</button>
+<div class="phone">
+  <div class="sbar"><span class="t" id="sTime">9:41 AM</span><div class="ic"><span>▲▲▲</span><span>WiFi</span><span>🔋84%</span></div></div>
+  <div class="processing-overlay" id="procOverlay">
+    <div class="proc-spinner"></div>
+    <div class="proc-title" id="procTitle">Processing…</div>
+    <div class="proc-sub" id="procSub">Please do not close or refresh the app</div>
+  </div>
+  <div class="pay-success-overlay" id="paySuccess">
+    <div class="pso-ico">✅</div>
+    <div class="pso-title">Payment Successful!</div>
+    <div class="pso-msg">Your payment has been received and ledger updated. A confirmation has been sent to your registered mobile.</div>
+    <div class="pso-ref" id="payRef"></div>
+    <button class="pso-btn" onclick="closePaySuccess()">Back to Dashboard</button>
+  </div>
+  <div class="toast" id="toast"><div class="tk">✓</div><span id="toastMsg"></span></div>
+
+  <!-- LOGIN -->
+  <div class="screen active" id="scr-login">
+    <div style="height:44px;background:var(--red-d);flex-shrink:0"></div>
+    <div class="login-body">
+      <div class="logo">
+        <div class="mark">P<span>atrika</span></div>
+        <div class="sub">Agent Portal</div>
+      </div>
+      <div class="l-card" id="loginCard">
+        <h2>Agent Login</h2>
+        <div class="sub">Enter your registered mobile number</div>
+        <div class="l-pfx">
+          <span class="pfx">+91</span>
+          <input type="tel" class="l-inp" id="mobileInp" placeholder="Mobile number" maxlength="10" value="98290 11234">
+        </div>
+        <button class="l-btn" onclick="sendOTP()">Get OTP →</button>
+        <div class="l-hint">OTP will be sent to your registered number</div>
+      </div>
+      <div class="l-card" id="otpCard" style="display:none">
+        <h2>Verify OTP</h2>
+        <div class="sub">Sent to +91 98290 11234 &nbsp;<span style="color:#FFAA88;cursor:pointer" onclick="backToMobile()">Change</span></div>
+        <div class="otp-boxes">
+          <input type="tel" class="otp-box" maxlength="1" id="o0" oninput="otpInput(this,0)">
+          <input type="tel" class="otp-box" maxlength="1" id="o1" oninput="otpInput(this,1)">
+          <input type="tel" class="otp-box" maxlength="1" id="o2" oninput="otpInput(this,2)">
+          <input type="tel" class="otp-box" maxlength="1" id="o3" oninput="otpInput(this,3)">
+          <input type="tel" class="otp-box" maxlength="1" id="o4" oninput="otpInput(this,4)">
+          <input type="tel" class="otp-box" maxlength="1" id="o5" oninput="otpInput(this,5)">
+        </div>
+        <div class="otp-timer" id="otpTimer">Resend OTP in <strong id="otpCountdown">30s</strong></div>
+        <button class="l-btn" onclick="verifyOTP()">Verify & Login →</button>
+      </div>
+      <div class="l-footer">Patrika AI · Agent App v3.1 · Secure</div>
+    </div>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div class="screen" id="scr-dash">
+    <div class="dash-hero">
+      <div class="dh-greet">Good morning,</div>
+      <div class="dh-name">Raj General Store</div>
+      <div class="dh-meta">Agent ID: AGT-24891 &nbsp;·&nbsp; Civil Lines, Jaipur</div>
+      <div class="dh-cards">
+        <div class="dh-card alert"><div class="val">₹18,400</div><div class="lbl">Outstanding</div></div>
+        <div class="dh-card"><div class="val">280</div><div class="lbl">Today's Supply</div></div>
+        <div class="dh-card ok"><div class="val">₹8.2L</div><div class="lbl">Paid YTD</div></div>
+      </div>
+    </div>
+    <div class="scr-body">
+      <div class="mod-grid" style="padding-top:8px">
+        <div class="mod-item" onclick="goScreen('scr-supply')"><div class="mod-icon mi-red">📦<span class="mod-notif">New</span></div><div class="mod-label">Today's Supply</div></div>
+        <div class="mod-item" onclick="goScreen('scr-billing')"><div class="mod-icon mi-gold">🧾</div><div class="mod-label">Billing</div></div>
+        <div class="mod-item" onclick="goScreen('scr-feedback')"><div class="mod-icon mi-grn">💬</div><div class="mod-label">Feedback</div></div>
+        <div class="mod-item" onclick="goScreen('scr-ledger')"><div class="mod-icon mi-blue">📒<span class="mod-notif">!</span></div><div class="mod-label">Bills &amp; Ledger</div></div>
+        <div class="mod-item" onclick="goScreen('scr-payments')"><div class="mod-icon mi-pur">💳</div><div class="mod-label">Payment History</div></div>
+        <div class="mod-item" onclick="goScreen('scr-competitor')"><div class="mod-icon mi-orange">📊</div><div class="mod-label">Competitor Copies</div></div>
+        <div class="mod-item" onclick="goScreen('scr-supply-hist')"><div class="mod-icon mi-teal">📅</div><div class="mod-label">Supply History</div></div>
+        <div class="mod-item" onclick="goScreen('scr-netsales')"><div class="mod-icon mi-pink">📈</div><div class="mod-label">Net Sales</div></div>
+      </div>
+      <div class="mod-divider"></div>
+      <div class="mod-grid">
+        <div class="mod-item" onclick="goScreen('scr-profile')"><div class="mod-icon mi-navy">👤</div><div class="mod-label">User Profile</div></div>
+        <div class="mod-item" onclick="goScreen('scr-bill-confirm')"><div class="mod-icon mi-red">✅<span class="mod-notif">1</span></div><div class="mod-label">Bill Confirmation</div></div>
+        <div class="mod-item" onclick="goScreen('scr-pay-gateway')"><div class="mod-icon mi-grn">💰</div><div class="mod-label">Make Payment</div></div>
+        <div class="mod-item" onclick="logout()"><div class="mod-icon mi-navy">🚪</div><div class="mod-label">Logout</div></div>
+      </div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- TODAY'S SUPPLY -->
+  <div class="screen" id="scr-supply">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Today's Supply</h1><div class="sub">Thu, 10 Jul 2026</div></div></div><button class="hdr-btn" onclick="showToast('Supply details shared via WhatsApp')">Share</button></div>
+    <div class="scr-body">
+      <div class="bundle-alert" style="margin-top:14px"><span class="ba-icon">🚐</span><div class="ba-text"><strong>Bundle Delivered · 5:42 AM</strong><span>Route 3A · RJ14-CA-4821 · Ramesh Saini</span></div></div>
+      <div class="supply-kpi">
+        <div class="sk"><div class="sv">342</div><div class="sl">Total Copies</div></div>
+        <div class="sk"><div class="sv" style="color:var(--red)">0</div><div class="sl">Returns</div></div>
+        <div class="sk"><div class="sv" style="color:var(--grn)">342</div><div class="sl">Net Supply</div></div>
+      </div>
+      <span class="slbl">Publication-wise Breakdown</span>
+      <div class="card" style="padding:0"><div style="overflow-x:auto"><table class="tbl" style="min-width:260px"><thead><tr><th>Publication</th><th>Zone</th><th class="num">Copies</th><th class="num">Rate</th></tr></thead><tbody><tr><td>Rajasthan Patrika (Hindi)</td><td>Zone A</td><td class="num">280</td><td class="num">₹4.50</td></tr><tr><td>Patrika (English)</td><td>Zone A</td><td class="num">42</td><td class="num">₹6.00</td></tr><tr><td>Sunday Special</td><td>Zone A</td><td class="num">—</td><td class="num">—</td></tr><tr><td style="font-weight:700;color:var(--txt)">Total</td><td></td><td class="num" style="font-weight:700">322</td><td></td></tr></tbody></table></div></div>
+      <span class="slbl">Drop Point Details</span>
+      <div class="card cp">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span style="font-size:12px;color:var(--txt2)">Drop Point</span><span style="font-size:12px;font-weight:700;color:var(--txt)">Civil Lines, Shop 12</span></div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span style="font-size:12px;color:var(--txt2)">Scheduled Time</span><span style="font-size:12px;font-weight:700;color:var(--txt)">5:30 AM</span></div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span style="font-size:12px;color:var(--txt2)">Actual Delivery</span><span style="font-size:12px;font-weight:700;color:var(--grn)">5:42 AM ✓</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:var(--txt2)">Driver Contact</span><span style="font-size:12px;font-weight:700;color:var(--blue)">+91 98290 11234</span></div>
+      </div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- BILLING -->
+  <div class="screen" id="scr-billing">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Billing</h1><div class="sub">Current bill &amp; account status</div></div></div><button class="hdr-btn" onclick="showToast('Bill PDF downloaded')">📄 PDF</button></div>
+    <div class="scr-body">
+      <div style="height:14px"></div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="background:linear-gradient(135deg,var(--navy),#2E4A7A);padding:16px">
+          <div style="font-size:11px;color:rgba(255,255,255,.55);margin-bottom:4px">Current Month Bill · July 2026</div>
+          <div style="font-family:Georgia,serif;font-size:32px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums">₹12,450</div>
+          <div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:4px">Due: 20 Jul 2026 · <span style="color:#FFAA88">10 days remaining</span></div>
+        </div>
+        <div class="bill-line"><span class="bl-lbl">Patrika Hindi · 280 copies × 30 days × ₹4.50</span><span class="bl-val">₹37,800</span></div>
+        <div class="bill-line"><span class="bl-lbl">Patrika English · 42 copies × 30 days × ₹6.00</span><span class="bl-val">₹7,560</span></div>
+        <div class="bill-line"><span class="bl-lbl">Sunday Special · 320 copies × 4 × ₹8.00</span><span class="bl-val">₹10,240</span></div>
+        <div class="bill-line"><span class="bl-lbl">Previous Balance</span><span class="bl-val" style="color:var(--red)">+ ₹18,400</span></div>
+        <div class="bill-line"><span class="bl-lbl">Less: Payments Received</span><span class="bl-val" style="color:var(--grn)">– ₹63,550</span></div>
+        <div class="bill-total"><span class="bt-lbl">Net Outstanding</span><span class="bt-val">₹10,450</span></div>
+      </div>
+      <span class="slbl">Security Deposit</span>
+      <div class="card cp">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div><div style="font-size:13px;font-weight:700;color:var(--txt)">Security Deposit Held</div><div style="font-size:11px;color:var(--txt3);margin-top:2px">Refundable on account closure</div></div>
+          <div style="font-family:Georgia,serif;font-size:22px;font-weight:700;color:var(--grn)">₹25,000</div>
+        </div>
+        <div class="prog-track"><div class="prog-fill" style="width:100%;background:var(--grn)"></div></div>
+        <div style="font-size:10px;color:var(--txt3);margin-top:4px">Deposit fully paid · No additional deposit required</div>
+      </div>
+      <div class="btn-row"><button class="btn btn-red" onclick="goScreen('scr-pay-gateway')">Pay Now ₹10,450</button></div>
+      <div style="height:10px"></div>
+    </div>
+  </div>
+
+  <!-- FEEDBACK -->
+  <div class="screen" id="scr-feedback">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Feedback</h1><div class="sub">Share your experience</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:14px"></div>
+      <div class="card cp">
+        <div class="rating-section">
+          <div style="font-size:12px;font-weight:700;color:var(--txt2);margin-bottom:10px">Rate your overall experience</div>
+          <div class="stars" id="starGroup">
+            <span class="star" onclick="setStar(1)">★</span><span class="star" onclick="setStar(2)">★</span><span class="star" onclick="setStar(3)">★</span><span class="star" onclick="setStar(4)">★</span><span class="star" onclick="setStar(5)">★</span>
+          </div>
+          <div class="rating-label" id="ratingLabel">Tap to rate</div>
+        </div>
+      </div>
+      <div class="card cp">
+        <div class="fg"><label class="fl">Feedback Category</label><select class="inp inp-sel"><option>-- Select Category --</option><option>Supply – Missing Copies</option><option>Supply – Wrong Edition</option><option>Delivery – Late Arrival</option><option>Delivery – Missed Drop</option><option>Billing – Incorrect Bill</option><option>Billing – Payment Issue</option><option>App – Technical Issue</option><option>Scheme / Offer</option><option>General Feedback</option><option>Other</option></select></div>
+        <div class="fg"><label class="fl">Issue Date (if applicable)</label><input type="date" class="inp" value="2026-07-10"></div>
+        <div class="fg" style="margin-bottom:0"><label class="fl">Describe your feedback <span style="font-size:10px;color:var(--txt3)">(max 300 chars)</span></label><textarea class="inp" rows="4" style="resize:none" maxlength="300" placeholder="Please describe in detail…" id="fbArea" oninput="updateFbCount()"></textarea><div style="font-size:10px;color:var(--txt3);text-align:right;margin-top:3px" id="fbCount">0/300</div></div>
+      </div>
+      <div class="btn-row"><button class="btn btn-out">Clear</button><button class="btn btn-red" onclick="showToast('✓ Feedback submitted. Reference: FB-2847');goScreen('scr-dash')">Submit Feedback</button></div>
+      <div style="height:10px"></div>
+    </div>
+  </div>
+
+  <!-- BILLS & LEDGER -->
+  <div class="screen" id="scr-ledger">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Bills &amp; Ledger</h1><div class="sub">Complete account history</div></div></div><button class="hdr-btn" onclick="showToast('Ledger exported')">Export</button></div>
+    <div class="scr-body">
+      <div style="height:12px"></div>
+      <div class="ledger-summary">
+        <div class="ls"><div class="lv" style="color:var(--red)">₹18,400</div><div class="ll">Outstanding</div></div>
+        <div class="ls"><div class="lv" style="color:var(--grn)">₹8.2L</div><div class="ll">Total Paid</div></div>
+        <div class="ls"><div class="lv">₹25K</div><div class="ll">Security Dep.</div></div>
+      </div>
+      <div class="filter-strip"><div class="f-pill on">All</div><div class="f-pill" onclick="filterPill(this)">Jul 2026</div><div class="f-pill" onclick="filterPill(this)">Jun 2026</div><div class="f-pill" onclick="filterPill(this)">May 2026</div><div class="f-pill" onclick="filterPill(this)">Q1 2026</div><div class="f-pill" onclick="filterPill(this)">FY 2025-26</div></div>
+      <div class="card" style="padding:0"><div style="overflow-x:auto"><table class="tbl" style="min-width:300px"><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody id="ledgerBody"></tbody></table></div></div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- PAYMENT HISTORY -->
+  <div class="screen" id="scr-payments">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Payment History</h1><div class="sub">All transactions</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:12px"></div>
+      <div class="card cp" style="display:flex;gap:16px;background:var(--grn-l);border:1px solid rgba(30,107,71,.2)">
+        <div style="text-align:center;flex:1"><div style="font-family:Georgia,serif;font-size:20px;font-weight:700;color:var(--grn);font-variant-numeric:tabular-nums">₹8,20,000</div><div style="font-size:10px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-top:2px">Total Paid YTD</div></div>
+        <div style="width:1px;background:rgba(30,107,71,.2)"></div>
+        <div style="text-align:center;flex:1"><div style="font-family:Georgia,serif;font-size:20px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums">24</div><div style="font-size:10px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-top:2px">Transactions</div></div>
+      </div>
+      <div class="filter-strip"><div class="f-pill on">All</div><div class="f-pill" onclick="filterPill(this)">UPI</div><div class="f-pill" onclick="filterPill(this)">NEFT</div><div class="f-pill" onclick="filterPill(this)">Cash</div><div class="f-pill" onclick="filterPill(this)">Cheque</div></div>
+      <div class="card" style="padding:0" id="payHistList"></div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- COMPETITOR COPIES -->
+  <div class="screen" id="scr-competitor">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Competitor Copies</h1><div class="sub">Report area circulation</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:14px"></div>
+      <div class="card cp"><div class="fg"><label class="fl">Report Date</label><input type="date" class="inp" value="2026-07-10"></div><div class="fg" style="margin-bottom:0"><label class="fl">Area / Locality</label><input type="text" class="inp" placeholder="Area name" value="Civil Lines, Jaipur"></div></div>
+      <span class="slbl">Copies Circulated by Competitor</span>
+      <div class="card" style="padding:0">
+        <div class="comp-pub"><div class="cp-dot" style="background:#E63946"></div><span class="cp-name">Dainik Bhaskar</span><input type="number" class="cp-inp" placeholder="0" value="145"></div>
+        <div class="comp-pub"><div class="cp-dot" style="background:#2196F3"></div><span class="cp-name">Times of India</span><input type="number" class="cp-inp" placeholder="0" value="38"></div>
+        <div class="comp-pub"><div class="cp-dot" style="background:#FF9800"></div><span class="cp-name">Navbharat Times</span><input type="number" class="cp-inp" placeholder="0" value="22"></div>
+        <div class="comp-pub"><div class="cp-dot" style="background:#9C27B0"></div><span class="cp-name">Amar Ujala</span><input type="number" class="cp-inp" placeholder="0" value="18"></div>
+        <div class="comp-pub"><div class="cp-dot" style="background:#4CAF50"></div><span class="cp-name">Hindustan Times</span><input type="number" class="cp-inp" placeholder="0" value="12"></div>
+        <div class="comp-pub"><div class="cp-dot" style="background:var(--txt3)"></div><span class="cp-name">Other</span><input type="number" class="cp-inp" placeholder="0"></div>
+      </div>
+      <div class="card cp"><div class="fg" style="margin-bottom:0"><label class="fl">Remarks / Observations</label><textarea class="inp" rows="3" style="resize:none" placeholder="Any special observations about competitor activity…"></textarea></div></div>
+      <div class="btn-row"><button class="btn btn-red" onclick="showToast('✓ Competitor data submitted')">Submit Report</button></div>
+      <div style="height:10px"></div>
+    </div>
+  </div>
+
+  <!-- SUPPLY HISTORY -->
+  <div class="screen" id="scr-supply-hist">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Supply History</h1><div class="sub">Date-wise summary</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:12px"></div>
+      <div class="filter-strip"><div class="f-pill on">This Month</div><div class="f-pill" onclick="filterPill(this)">Last Month</div><div class="f-pill" onclick="filterPill(this)">Last 3 Months</div><div class="f-pill" onclick="filterPill(this)">Custom</div></div>
+      <div class="card" style="padding:0"><div style="overflow-x:auto"><table class="tbl" style="min-width:280px"><thead><tr><th>Date</th><th class="num">Hindi</th><th class="num">Eng</th><th class="num">Total</th><th class="num">Return</th></tr></thead><tbody id="supplyHistBody"></tbody></table></div></div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- NET SALES -->
+  <div class="screen" id="scr-netsales">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Net Sales</h1><div class="sub">July 2026</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:14px"></div>
+      <div class="ns-card"><h3>Patrika Hindi</h3><div class="ns-row"><span class="nk">Total Supply (30 days)</span><span class="nv">8,400</span></div><div class="ns-row"><span class="nk">Returns</span><span class="nv" style="color:var(--red)">– 124</span></div><div class="ns-row"><span class="nk">Cancelled Issues</span><span class="nv" style="color:var(--red)">– 18</span></div><div class="ns-row"><span class="nk">Missed Deliveries</span><span class="nv" style="color:var(--red)">– 6</span></div><div class="ns-total"><span class="ntl">Net Sold · Hindi</span><span class="ntv">8,252</span></div></div>
+      <div class="ns-card"><h3>Patrika English</h3><div class="ns-row"><span class="nk">Total Supply (30 days)</span><span class="nv">1,260</span></div><div class="ns-row"><span class="nk">Returns</span><span class="nv" style="color:var(--red)">– 32</span></div><div class="ns-row"><span class="nk">Cancelled Issues</span><span class="nv" style="color:var(--red)">– 4</span></div><div class="ns-total"><span class="ntl">Net Sold · English</span><span class="ntv">1,224</span></div></div>
+      <div class="card cp" style="background:var(--navy)"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12px;font-weight:700;color:rgba(255,255,255,.6)">Total Net Sales · All Editions</div><div style="font-size:10px;color:rgba(255,255,255,.4);margin-top:2px">July 2026 · Return Rate: 1.7%</div></div><div style="font-family:Georgia,serif;font-size:28px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums">9,476</div></div></div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- PROFILE -->
+  <div class="screen" id="scr-profile">
+    <div style="height:44px;background:var(--red-d);flex-shrink:0"></div>
+    <div class="scr-body">
+      <div class="profile-hero">
+        <div class="ph-av">RG</div>
+        <div class="ph-name">Raj General Store</div>
+        <div class="ph-id">Agent ID: AGT-24891 · Since March 2019</div>
+        <div class="ph-badges"><span class="badge b-grn">Active</span><span class="badge b-blue">Credit Account</span><span class="badge b-gold">Zone A</span></div>
+      </div>
+      <div style="padding:8px 14px 0;display:flex;justify-content:space-between;align-items:center"><span class="slbl" style="padding:0">Account Details</span><button class="hdr-btn" style="background:var(--red-l);color:var(--red);border-radius:8px;height:28px;font-size:11px" onclick="showToast('Edit request sent to branch')">✏️ Request Edit</button></div>
+      <div class="card" style="padding:0">
+        <div class="profile-row"><span class="pr-icon">📞</span><div class="pr-info"><div class="k">Mobile</div><div class="v">+91 98290 11234</div></div></div>
+        <div class="profile-row"><span class="pr-icon">📧</span><div class="pr-info"><div class="k">Email</div><div class="v">raj.general@gmail.com</div></div></div>
+        <div class="profile-row"><span class="pr-icon">📍</span><div class="pr-info"><div class="k">Shop Address</div><div class="v">Shop 12, Civil Lines, Jaipur – 302006</div></div></div>
+        <div class="profile-row"><span class="pr-icon">🏦</span><div class="pr-info"><div class="k">Bank Account</div><div class="v">SBI ••••4821</div></div></div>
+        <div class="profile-row"><span class="pr-icon">🪪</span><div class="pr-info"><div class="k">GST / PAN</div><div class="v">AACPR1234F</div></div></div>
+        <div class="profile-row"><span class="pr-icon">🗂️</span><div class="pr-info"><div class="k">Branch</div><div class="v">Jaipur City · Circulation South</div></div></div>
+        <div class="profile-row"><span class="pr-icon">📦</span><div class="pr-info"><div class="k">Supply / Day</div><div class="v">322 copies · 2 publications</div></div></div>
+        <div class="profile-row"><span class="pr-icon">💰</span><div class="pr-info"><div class="k">Credit Limit</div><div class="v">₹50,000</div></div></div>
+      </div>
+      <div class="btn-row" style="padding-top:4px"><button class="btn btn-out" onclick="goScreen('scr-dash')">← Back to Dashboard</button></div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <!-- BILL CONFIRMATION -->
+  <div class="screen" id="scr-bill-confirm">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Bill Confirmation</h1><div class="sub">July 2026 · Pending acknowledgement</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:14px"></div>
+      <div class="bill-confirm-card">
+        <div class="bcc-top"><div><div class="month">July 2026 Statement</div><div class="status" style="margin-top:3px">Generated: 1 Jul 2026 · Due: 20 Jul 2026</div></div><span class="badge" style="background:rgba(255,200,0,.2);color:#FCD34D">Pending</span></div>
+        <div class="bill-line"><span class="bl-lbl">Rajasthan Patrika (Hindi)</span><span class="bl-val">₹37,800</span></div>
+        <div class="bill-line"><span class="bl-lbl">Patrika (English)</span><span class="bl-val">₹7,560</span></div>
+        <div class="bill-line"><span class="bl-lbl">Sunday Special Edition</span><span class="bl-val">₹10,240</span></div>
+        <div class="bill-line"><span class="bl-lbl">Previous Balance Carried</span><span class="bl-val" style="color:var(--red)">₹18,400</span></div>
+        <div class="bill-line"><span class="bl-lbl">Payments Received</span><span class="bl-val" style="color:var(--grn)">– ₹63,550</span></div>
+        <div class="bill-total"><span class="bt-lbl">Net Payable</span><span class="bt-val">₹10,450</span></div>
+      </div>
+      <div class="confirm-check" id="confirmCheck" onclick="toggleConfirm()">
+        <div class="cc-box" id="ccBox"></div>
+        <div class="cc-text">I, <strong>Raj General Store (AGT-24891)</strong>, confirm that I have received and reviewed the July 2026 bill of <strong>₹10,450</strong> and agree with the details mentioned above. This serves as my digital acknowledgement.</div>
+      </div>
+      <div class="card cp" style="background:var(--surf2);border:1.5px dashed var(--brd)"><div style="font-size:11px;color:var(--txt3);display:flex;align-items:flex-start;gap:8px"><span>ℹ️</span><span>Confirming this bill replaces the paper acknowledgement. Your digital confirmation (with timestamp &amp; device ID) will be recorded in the system.</span></div></div>
+      <div class="btn-row"><button class="btn btn-out" onclick="showToast('Bill disputed. Branch will contact you.')">Dispute Bill</button><button class="btn btn-grn" id="confirmBillBtn" onclick="confirmBill()" style="opacity:.4;cursor:not-allowed">Confirm &amp; Sign ✓</button></div>
+      <div style="height:10px"></div>
+    </div>
+  </div>
+
+  <!-- PAYMENT GATEWAY -->
+  <div class="screen" id="scr-pay-gateway">
+    <div class="hdr"><div class="hdr-l"><button class="back" onclick="goScreen('scr-dash')">←</button><div><h1>Make Payment</h1><div class="sub">Secure payment gateway</div></div></div></div>
+    <div class="scr-body">
+      <div style="height:14px"></div>
+      <div class="pay-amount-card">
+        <div class="pac-top"><div class="lbl">Outstanding Amount</div><div class="amount">₹10,450</div><div class="due">Due: 20 Jul 2026 · Raj General Store</div></div>
+        <div class="cp">
+          <label class="fl" style="margin-bottom:6px">Enter Payment Amount</label>
+          <div style="position:relative"><span style="position:absolute;left:13px;top:50%;transform:translateY(-50%);font-size:16px;font-weight:700;color:var(--txt3)">₹</span><input type="number" class="inp" id="payAmtInp" value="10450" style="padding-left:28px;font-family:Georgia,serif;font-size:20px;font-weight:700"></div>
+          <div style="display:flex;gap:6px;margin-top:8px">
+            <span style="padding:5px 11px;border-radius:20px;border:1.5px solid var(--brd);background:var(--surf2);font-size:11px;font-weight:600;color:var(--txt2);cursor:pointer" onclick="setPayAmt(10450)">Full ₹10,450</span>
+            <span style="padding:5px 11px;border-radius:20px;border:1.5px solid var(--brd);background:var(--surf2);font-size:11px;font-weight:600;color:var(--txt2);cursor:pointer" onclick="setPayAmt(5000)">₹5,000</span>
+            <span style="padding:5px 11px;border-radius:20px;border:1.5px solid var(--brd);background:var(--surf2);font-size:11px;font-weight:600;color:var(--txt2);cursor:pointer" onclick="setPayAmt(2000)">₹2,000</span>
+          </div>
+        </div>
+      </div>
+      <span class="slbl">Select Payment Method</span>
+      <div class="pay-method-grid" id="payMethodGrid">
+        <div class="pm-card sel" onclick="selPayMethod(this,'upi')"><span class="pico">📲</span><div class="ptxt">UPI</div><div class="psub">Instant transfer</div></div>
+        <div class="pm-card" onclick="selPayMethod(this,'netbanking')"><span class="pico">🏦</span><div class="ptxt">Net Banking</div><div class="psub">All major banks</div></div>
+        <div class="pm-card" onclick="selPayMethod(this,'card')"><span class="pico">💳</span><div class="ptxt">Debit / Credit</div><div class="psub">Visa · Mastercard</div></div>
+        <div class="pm-card" onclick="selPayMethod(this,'cheque')"><span class="pico">📝</span><div class="ptxt">Cheque / DD</div><div class="psub">Physical instrument</div></div>
+      </div>
+      <div class="upi-section active" id="upiSection">
+        <div class="qr-placeholder"><div class="qr-inner"><div style="font-size:32px">⬛⬛⬛<br>⬛⬜⬛<br>⬛⬛⬛</div><p style="font-size:11px;color:var(--txt3);margin-top:6px">Scan QR code to pay</p><p style="font-size:10px;color:var(--txt3)">patrika@ybl</p></div></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px"><div style="flex:1;height:1px;background:var(--brd)"></div><span style="font-size:11px;color:var(--txt3);white-space:nowrap">or enter UPI ID</span><div style="flex:1;height:1px;background:var(--brd)"></div></div>
+        <input type="text" class="inp" placeholder="yourname@upi / mobile@paytm" id="upiId">
+      </div>
+      <div class="upi-section" id="nbSection"><select class="inp inp-sel"><option>-- Select Your Bank --</option><option>State Bank of India</option><option>HDFC Bank</option><option>ICICI Bank</option><option>Axis Bank</option><option>Kotak Mahindra</option><option>Bank of Baroda</option><option>Punjab National Bank</option><option>Other</option></select></div>
+      <div class="upi-section" id="cardSection"><div class="fg"><input type="text" class="inp" placeholder="Card Number" maxlength="19"></div><div class="row2"><input type="text" class="inp" placeholder="MM / YY" maxlength="5"><input type="text" class="inp" placeholder="CVV" maxlength="3"></div><div class="fg" style="margin-top:10px;margin-bottom:0"><input type="text" class="inp" placeholder="Name on Card"></div></div>
+      <div class="upi-section" id="chequeSection"><div class="fg"><label class="fl">Cheque / DD Number</label><input type="text" class="inp" placeholder="e.g. 014562"></div><div class="fg"><label class="fl">Bank Name</label><input type="text" class="inp" placeholder="Issuing bank"></div><div class="fg" style="margin-bottom:0"><label class="fl">Cheque Date</label><input type="date" class="inp"></div></div>
+      <div class="btn-row" style="padding-top:4px"><button class="btn btn-red" onclick="initiatePayment()">🔒 Pay Securely</button></div>
+      <div style="padding:0 14px 20px;font-size:10px;color:var(--txt3);text-align:center;line-height:1.5">🔒 256-bit SSL encrypted · Payments powered by Razorpay<br>All transactions are PCI-DSS compliant and secure.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const qs=s=>document.querySelector(s);
+function showToast(msg,dur=2400){const t=qs('#toast');qs('#toastMsg').textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),dur);}
+function goScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');if(id==='scr-ledger')initLedger();if(id==='scr-payments')initPayHist();if(id==='scr-supply-hist')initSupplyHist();}
+function toggleTheme(){const r=document.documentElement;const n=r.getAttribute('data-theme')==='dark'?'light':'dark';r.setAttribute('data-theme',n);qs('.theme-btn').textContent=n==='dark'?'☀️':'🌙';}
+function updateClock(){const d=new Date(),h=d.getHours(),m=d.getMinutes();const ap=h>=12?'PM':'AM',h12=h%12||12;const el=qs('#sTime');if(el)el.textContent=h12+':'+(m<10?'0':'')+m+' '+ap;}
+setInterval(updateClock,30000);updateClock();
+let otpTimer,otpSec=30;
+function sendOTP(){qs('#loginCard').style.display='none';qs('#otpCard').style.display='block';startOtpTimer();setTimeout(()=>qs('#o0').focus(),100);}
+function startOtpTimer(){otpSec=30;clearInterval(otpTimer);otpTimer=setInterval(()=>{otpSec--;qs('#otpCountdown').textContent=otpSec+'s';if(otpSec<=0){clearInterval(otpTimer);qs('#otpTimer').innerHTML='<span class="resend" onclick="resendOTP()">Resend OTP</span>';}},1000);}
+function resendOTP(){showToast('OTP resent to +91 98290 11234');startOtpTimer();}
+function backToMobile(){qs('#loginCard').style.display='block';qs('#otpCard').style.display='none';clearInterval(otpTimer);}
+function otpInput(el,idx){if(el.value.length===1&&idx<5)document.getElementById('o'+(idx+1)).focus();if(el.value.length===0&&idx>0)document.getElementById('o'+(idx-1)).focus();const all=[0,1,2,3,4,5].map(i=>document.getElementById('o'+i).value).join('');if(all.length===6)setTimeout(verifyOTP,300);}
+function verifyOTP(){const all=[0,1,2,3,4,5].map(i=>document.getElementById('o'+i).value).join('');if(all.length<6){showToast('⚠ Please enter complete OTP');return;}clearInterval(otpTimer);goScreen('scr-dash');showToast('✓ Logged in as Raj General Store');}
+function logout(){goScreen('scr-login');qs('#loginCard').style.display='block';qs('#otpCard').style.display='none';[0,1,2,3,4,5].forEach(i=>{const b=document.getElementById('o'+i);if(b)b.value='';});}
+const STAR_LABELS=['','Very Dissatisfied','Dissatisfied','Neutral','Satisfied','Very Satisfied 😊'];
+let currentRating=0;
+function setStar(n){currentRating=n;document.querySelectorAll('.star').forEach((s,i)=>s.classList.toggle('on',i<n));qs('#ratingLabel').textContent=STAR_LABELS[n]||'';}
+function updateFbCount(){const a=qs('#fbArea');if(a){qs('#fbCount').textContent=a.value.length+'/300';}}
+const LEDGER_DATA=[{date:'10 Jul 26',desc:'Supply Bill – Jul 1-10',dr:4150,cr:0},{date:'08 Jul 26',desc:'UPI Payment – PAT24891',dr:0,cr:15000},{date:'01 Jul 26',desc:'Monthly Bill – June 2026',dr:12450,cr:0},{date:'28 Jun 26',desc:'Cheque #014562 Cleared',dr:0,cr:20000},{date:'22 Jun 26',desc:'Cash Collection by Exec.',dr:0,cr:12000},{date:'15 Jun 26',desc:'Supply Bill – Jun 1-15',dr:6200,cr:0},{date:'10 Jun 26',desc:'NEFT Transfer',dr:0,cr:18500},{date:'01 Jun 26',desc:'Monthly Bill – May 2026',dr:11800,cr:0},{date:'25 May 26',desc:'UPI Payment',dr:0,cr:25000}];
+function initLedger(){let bal=18400;const rows=LEDGER_DATA.map(r=>{if(r.dr)bal+=r.dr;else bal-=r.cr;return`<tr><td>${r.date}</td><td>${r.desc}</td><td class="num dr">${r.dr?'₹'+r.dr.toLocaleString('en-IN'):'—'}</td><td class="num cr">${r.cr?'₹'+r.cr.toLocaleString('en-IN'):'—'}</td><td class="num" style="color:${bal>0?'var(--red)':'var(--grn)'}">₹${Math.abs(bal).toLocaleString('en-IN')}</td></tr>`;}).join('');const b=qs('#ledgerBody');if(b)b.innerHTML=rows;}
+const PAY_HIST=[{date:'08 Jul 2026',mode:'UPI',ref:'PAT24891UPI',amt:15000,status:'Cleared'},{date:'28 Jun 2026',mode:'Cheque',ref:'CHQ-014562',amt:20000,status:'Cleared'},{date:'22 Jun 2026',mode:'Cash',ref:'CASH-8821',amt:12000,status:'Cleared'},{date:'10 Jun 2026',mode:'NEFT',ref:'NEFT-224419',amt:18500,status:'Cleared'},{date:'25 May 2026',mode:'UPI',ref:'PAT9912UPI',amt:25000,status:'Cleared'},{date:'10 May 2026',mode:'Net Banking',ref:'NB-881204',amt:30000,status:'Cleared'}];
+function initPayHist(){const el=qs('#payHistList');if(!el)return;el.innerHTML=PAY_HIST.map(p=>`<div style="display:flex;align-items:center;gap:11px;padding:12px 14px;border-bottom:1px solid var(--brd)"><div style="width:38px;height:38px;border-radius:10px;background:var(--grn-l);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">💳</div><div style="flex:1"><div style="font-size:13px;font-weight:700;color:var(--txt)">${p.mode} · ${p.ref}</div><div style="font-size:11px;color:var(--txt3)">${p.date}</div></div><div style="text-align:right"><div style="font-family:Georgia,serif;font-size:15px;font-weight:700;color:var(--grn);font-variant-numeric:tabular-nums">+₹${p.amt.toLocaleString('en-IN')}</div><span style="font-size:9px;font-weight:700;background:var(--grn-l);color:var(--grn);padding:1px 7px;border-radius:10px">${p.status}</span></div></div>`).join('');}
+function initSupplyHist(){const el=qs('#supplyHistBody');if(!el)return;const dates=[];for(let i=10;i>=1;i--){dates.push({date:(i<10?'0':'')+i+' Jul',hi:280+Math.floor((Math.random()-.3)*5),en:42+Math.floor((Math.random()-.4)*3),ret:Math.floor(Math.random()*4)});}el.innerHTML=dates.map(d=>{const tot=d.hi+d.en;return`<tr><td>${d.date}</td><td class="num">${d.hi}</td><td class="num">${d.en}</td><td class="num" style="font-weight:700">${tot}</td><td class="num" style="color:${d.ret>0?'var(--red)':'var(--grn)'}">${d.ret>0?d.ret:'—'}</td></tr>`;}).join('');}
+function filterPill(pill){pill.closest('.filter-strip').querySelectorAll('.f-pill').forEach(p=>p.classList.remove('on'));pill.classList.add('on');showToast('Filtered: '+pill.textContent);}
+let billChecked=false;
+function toggleConfirm(){billChecked=!billChecked;qs('#ccBox').classList.toggle('checked',billChecked);qs('#ccBox').textContent=billChecked?'✓':'';const btn=qs('#confirmBillBtn');btn.style.opacity=billChecked?'1':'0.4';btn.style.cursor=billChecked?'pointer':'not-allowed';}
+function confirmBill(){if(!billChecked){showToast('⚠ Please check the confirmation box first');return;}showToast('✓ Bill confirmed digitally · Timestamp recorded');setTimeout(()=>goScreen('scr-dash'),1200);}
+let selectedPayMethod='upi';
+const methodSections={upi:'upiSection',netbanking:'nbSection',card:'cardSection',cheque:'chequeSection'};
+function selPayMethod(card,method){qs('#payMethodGrid').querySelectorAll('.pm-card').forEach(c=>c.classList.remove('sel'));card.classList.add('sel');selectedPayMethod=method;Object.values(methodSections).forEach(id=>{const el=qs('#'+id);if(el)el.classList.remove('active');});const s=qs('#'+methodSections[method]);if(s)s.classList.add('active');}
+function setPayAmt(n){const el=qs('#payAmtInp');if(el)el.value=n;}
+function initiatePayment(){const amt=parseFloat(qs('#payAmtInp')?.value||0);if(!amt||amt<=0){showToast('⚠ Enter a valid payment amount');return;}qs('#procTitle').textContent='Processing Payment…';qs('#procSub').textContent='Please do not close or refresh the app';qs('#procOverlay').classList.add('active');setTimeout(()=>{qs('#procOverlay').classList.remove('active');const ref='TXN'+Date.now().toString().slice(-8);const mode={upi:'UPI',netbanking:'Net Banking',card:'Debit Card',cheque:'Cheque/DD'}[selectedPayMethod];qs('#payRef').innerHTML=`<div class="r"><span class="k">Transaction ID</span><span class="v">${ref}</span></div><div class="r"><span class="k">Amount Paid</span><span class="v">₹${amt.toLocaleString('en-IN')}</span></div><div class="r"><span class="k">Payment Mode</span><span class="v">${mode}</span></div><div class="r"><span class="k">Date & Time</span><span class="v">${new Date().toLocaleString('en-IN',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</span></div><div class="r"><span class="k">Updated Balance</span><span class="v">₹${Math.max(0,10450-amt).toLocaleString('en-IN')}</span></div>`;qs('#paySuccess').classList.add('active');},2200);}
+function closePaySuccess(){qs('#paySuccess').classList.remove('active');goScreen('scr-dash');}
+</script>
+
+<!-- ══════════ Patrika SSO bootstrap (injected) ══════════ -->
+<script>
+(function(){
+  function hasSession(){
+    try { return !!(sessionStorage.getItem('patrika_profile')||localStorage.getItem('patrika_profile')||sessionStorage.getItem('patrika_token')||localStorage.getItem('patrika_token')); }
+    catch(e){ return false; }
+  }
+  function enter(){ try { goScreen('scr-dash'); } catch(e){ console.warn('[sso] enter failed', e); } }
+  function boot(){
+    // Only auto-skip the app's own login when launched inside the authenticated suite session.
+    if(!hasSession()) return;
+    enter();
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(boot,0); });
+  else setTimeout(boot,0);
+})();
+</script>
+
+</body>
+</html>

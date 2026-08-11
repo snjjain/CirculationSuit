@@ -1,0 +1,1422 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>DCR Entry Forms · Patrika</title>
+<style>
+/* ── TOKENS ─────────────────────────────────────── */
+:root {
+  --navy:#1C2B45; --gold:#D4820A; --gold-l:rgba(212,130,10,.12);
+  --green:#1E6B47; --green-l:rgba(30,107,71,.1);
+  --red:#C0392B;   --red-l:rgba(192,57,43,.1);
+  --blue:#1565C0;  --blue-l:rgba(21,101,192,.1);
+  --bg:#F5F0E8; --surf:#fff; --surf2:#EDE8DF;
+  --brd:rgba(28,43,69,.12);
+  --txt:#1C2B45; --txt2:#4A5568; --txt3:#8A96A5;
+  --shd:0 2px 10px rgba(28,43,69,.10);
+  --shd-lg:0 8px 28px rgba(28,43,69,.16);
+  --r:12px; --r-sm:8px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#0E1620;--surf:#1A2535;--surf2:#243044;
+  --brd:rgba(255,255,255,.08);--txt:#EDF0F4;--txt2:#A8B4C4;--txt3:#5A6A7E;
+  --shd:0 2px 10px rgba(0,0,0,.3);--shd-lg:0 8px 28px rgba(0,0,0,.4);
+  --green-l:rgba(30,107,71,.18);--red-l:rgba(192,57,43,.18);--blue-l:rgba(21,101,192,.18);--gold-l:rgba(212,130,10,.18);
+}}
+:root[data-theme=dark]{
+  --bg:#0E1620;--surf:#1A2535;--surf2:#243044;
+  --brd:rgba(255,255,255,.08);--txt:#EDF0F4;--txt2:#A8B4C4;--txt3:#5A6A7E;
+  --shd:0 2px 10px rgba(0,0,0,.3);--shd-lg:0 8px 28px rgba(0,0,0,.4);
+  --green-l:rgba(30,107,71,.18);--red-l:rgba(192,57,43,.18);--blue-l:rgba(21,101,192,.18);--gold-l:rgba(212,130,10,.18);
+}
+:root[data-theme=light]{
+  --bg:#F5F0E8;--surf:#fff;--surf2:#EDE8DF;
+  --brd:rgba(28,43,69,.12);--txt:#1C2B45;--txt2:#4A5568;--txt3:#8A96A5;
+  --shd:0 2px 10px rgba(28,43,69,.10);--shd-lg:0 8px 28px rgba(28,43,69,.16);
+  --green-l:rgba(30,107,71,.1);--red-l:rgba(192,57,43,.1);--blue-l:rgba(21,101,192,.1);--gold-l:rgba(212,130,10,.12);
+}
+
+/* ── RESET ──────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:system-ui,-apple-system,'Segoe UI',sans-serif;
+  background:#2A3A52;min-height:100vh;display:flex;
+  align-items:center;justify-content:center;padding:24px;
+  background-image:radial-gradient(ellipse at 30% 20%,#D4820A1A 0%,transparent 60%);
+}
+
+/* ── PHONE SHELL ─────────────────────────────────── */
+.phone{
+  width:390px;height:844px;background:var(--bg);
+  border-radius:44px;overflow:hidden;position:relative;
+  display:flex;flex-direction:column;
+  box-shadow:0 0 0 10px #111820,0 30px 70px rgba(0,0,0,.5),inset 0 0 0 2px #2a3040;
+}
+.status-bar{
+  height:44px;background:var(--navy);flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 22px;
+}
+.status-bar .t{color:#fff;font-size:15px;font-weight:600}
+.status-bar .icons{color:rgba(255,255,255,.8);font-size:11px;display:flex;gap:6px;align-items:center}
+
+/* ── SCREEN SYSTEM ──────────────────────────────── */
+.screen{display:none;flex-direction:column;flex:1;overflow:hidden}
+.screen.active{display:flex}
+.scr-body{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.scr-body::-webkit-scrollbar{display:none}
+
+/* ── HEADERS ────────────────────────────────────── */
+.hdr{
+  padding:14px 18px 12px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between;
+}
+.hdr-left{display:flex;align-items:center;gap:10px}
+.back-btn{
+  width:34px;height:34px;border-radius:50%;border:none;cursor:pointer;
+  background:rgba(255,255,255,.15);color:#fff;font-size:15px;
+  display:flex;align-items:center;justify-content:center;
+}
+.hdr-title{font-family:Georgia,'Times New Roman',serif;font-size:17px;font-weight:700;color:#fff}
+.hdr-sub{font-size:10px;color:rgba(255,255,255,.6);margin-top:1px}
+.hdr-actions{display:flex;gap:8px}
+.hdr-btn{
+  height:32px;padding:0 12px;border-radius:16px;border:none;cursor:pointer;
+  background:rgba(255,255,255,.12);color:#fff;font-size:12px;font-weight:600;
+  display:flex;align-items:center;gap:5px;
+}
+
+/* ── BOTTOM TABS ────────────────────────────────── */
+.tabs{
+  height:60px;background:var(--surf);border-top:1px solid var(--brd);
+  display:flex;align-items:stretch;flex-shrink:0;
+}
+.tab{
+  flex:1;border:none;background:none;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;color:var(--txt3);font-size:10px;font-weight:600;
+  border-top:2px solid transparent;transition:color .15s,border-color .15s;
+  -webkit-tap-highlight-color:transparent;
+}
+.tab .ico{font-size:19px;line-height:1}
+.tab.on{color:var(--gold);border-top-color:var(--gold)}
+
+/* ── FORM PRIMITIVES ────────────────────────────── */
+.section-gap{height:14px}
+.section-label{
+  font-size:10px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--txt3);padding:14px 18px 7px;
+}
+.card{background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);margin:0 14px 12px;overflow:hidden}
+.card-pad{padding:14px 16px}
+
+.f-label{font-size:11px;font-weight:700;color:var(--txt2);letter-spacing:.3px;display:block;margin-bottom:6px}
+.f-group{padding:0 0 14px}
+.f-input{
+  width:100%;padding:11px 14px;border-radius:var(--r-sm);
+  border:1.5px solid var(--brd);background:var(--surf2);
+  font-size:14px;color:var(--txt);outline:none;transition:border-color .15s;
+  font-family:inherit;
+}
+.f-input:focus{border-color:var(--gold)}
+.f-input::placeholder{color:var(--txt3)}
+.f-select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238A96A5' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px;cursor:pointer}
+.f-textarea{resize:none;min-height:80px;line-height:1.5}
+.f-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.f-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.f-hint{font-size:10px;color:var(--txt3);margin-top:4px}
+
+/* Auto-fill banner */
+.autofill-banner{
+  background:var(--green-l);border:1px solid rgba(30,107,71,.2);
+  border-radius:var(--r-sm);padding:10px 12px;margin-bottom:14px;
+}
+.autofill-banner .title{font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px}
+.autofill-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.af-item .lbl{font-size:9px;color:var(--txt3);text-transform:uppercase;letter-spacing:.5px}
+.af-item .val{font-size:12px;font-weight:600;color:var(--txt);margin-top:1px}
+.af-item .val.red{color:var(--red)}
+.af-item .val.green{color:var(--green)}
+
+/* Chips */
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chip{
+  padding:7px 13px;border-radius:20px;border:1.5px solid var(--brd);
+  background:var(--surf2);font-size:12px;color:var(--txt2);cursor:pointer;
+  font-weight:500;transition:border-color .15s,background .15s,color .15s;
+  white-space:nowrap;
+}
+.chip.on{border-color:var(--gold);background:var(--gold-l);color:var(--gold)}
+.chip.on-green{border-color:var(--green);background:var(--green-l);color:var(--green)}
+.chip.on-red{border-color:var(--red);background:var(--red-l);color:var(--red)}
+.chip.on-blue{border-color:var(--blue);background:var(--blue-l);color:var(--blue)}
+
+/* Competitor supply table */
+.comp-table{width:100%;border-collapse:collapse}
+.comp-table th{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--txt3);padding:6px 8px;text-align:left;border-bottom:1px solid var(--brd)}
+.comp-table td{padding:6px 4px;border-bottom:1px solid var(--brd)}
+.comp-table tr:last-child td{border-bottom:none}
+.comp-table .pub-name{font-size:12px;font-weight:600;color:var(--txt)}
+.comp-input{
+  width:80px;padding:6px 8px;border-radius:6px;border:1.5px solid var(--brd);
+  background:var(--surf2);font-size:13px;color:var(--txt);text-align:center;
+  outline:none;font-variant-numeric:tabular-nums;
+}
+.comp-input:focus{border-color:var(--gold)}
+
+/* Duration calc */
+.duration-pill{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--blue-l);border:1px solid rgba(21,101,192,.2);
+  border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;color:var(--blue);
+}
+
+/* Geo indicator */
+.geo-bar{
+  display:flex;align-items:center;gap:10px;
+  padding:11px 14px;border-radius:var(--r-sm);
+  background:var(--surf2);border:1.5px solid var(--brd);
+}
+.geo-bar.confirmed{background:var(--green-l);border-color:rgba(30,107,71,.25)}
+.geo-bar.error{background:var(--red-l);border-color:rgba(192,57,43,.2)}
+.geo-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.geo-dot.pulse{animation:geopulse 1.6s infinite}
+@keyframes geopulse{0%,100%{box-shadow:0 0 0 0 rgba(30,107,71,.4)}50%{box-shadow:0 0 0 6px rgba(30,107,71,0)}}
+.geo-text{flex:1}
+.geo-text strong{font-size:13px;font-weight:700;display:block}
+.geo-text span{font-size:10px;color:var(--txt3)}
+.geo-action{font-size:12px;font-weight:600;color:var(--blue);cursor:pointer;white-space:nowrap}
+
+/* Amount input with prefix */
+.amount-wrap{position:relative}
+.amount-prefix{
+  position:absolute;left:12px;top:50%;transform:translateY(-50%);
+  font-size:15px;font-weight:700;color:var(--txt3);
+}
+.amount-wrap .f-input{padding-left:26px}
+
+/* Selfie block */
+.selfie-block{
+  border:2px dashed var(--brd);border-radius:var(--r);
+  padding:20px;text-align:center;cursor:pointer;transition:border-color .15s;
+}
+.selfie-block:hover{border-color:var(--gold)}
+.selfie-block .ico{font-size:32px;display:block;margin-bottom:6px}
+.selfie-block .lbl{font-size:13px;font-weight:600;color:var(--txt2)}
+.selfie-block .sub{font-size:11px;color:var(--txt3);margin-top:3px}
+.selfie-captured{border-color:var(--green);background:var(--green-l)}
+.selfie-captured .lbl{color:var(--green)}
+
+/* Approved visit card */
+.ap-card{
+  background:var(--surf);border-radius:var(--r);box-shadow:var(--shd);
+  margin:0 14px 10px;padding:13px 14px;
+  display:flex;align-items:flex-start;gap:12px;cursor:pointer;
+  border-left:3px solid transparent;transition:border-color .15s;
+}
+.ap-card:hover{border-left-color:var(--gold)}
+.ap-card .avatar{
+  width:40px;height:40px;border-radius:50%;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;
+}
+.ap-card .info{flex:1}
+.ap-card .aname{font-size:14px;font-weight:700;color:var(--txt)}
+.ap-card .ameta{font-size:11px;color:var(--txt3);margin-top:2px}
+.ap-card .abadge{margin-top:7px;display:flex;gap:6px;flex-wrap:wrap}
+.start-btn{
+  padding:7px 14px;border-radius:8px;border:none;cursor:pointer;
+  background:var(--gold);color:#fff;font-size:12px;font-weight:700;
+  flex-shrink:0;align-self:center;
+}
+
+/* Primary button */
+.btn-primary{
+  width:100%;padding:14px;border-radius:var(--r-sm);border:none;cursor:pointer;
+  font-size:15px;font-weight:700;letter-spacing:.2px;transition:opacity .15s;
+}
+.btn-primary:active{opacity:.85}
+.btn-gold{background:var(--gold);color:#fff}
+.btn-navy{background:var(--navy);color:#fff}
+.btn-green{background:var(--green);color:#fff}
+.btn-outline{background:transparent;border:1.5px solid var(--brd);color:var(--txt)}
+.btn-row{display:flex;gap:10px;padding:0 14px 20px}
+.btn-row .btn-primary{flex:1}
+
+/* Virtual call FAB */
+.vcall-fab{
+  position:absolute;bottom:70px;right:14px;
+  width:46px;height:46px;border-radius:50%;background:var(--navy);
+  border:none;cursor:pointer;color:#fff;font-size:20px;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 16px rgba(28,43,69,.35);z-index:50;
+  transition:transform .15s;
+}
+.vcall-fab:active{transform:scale(.92)}
+
+/* Badge inline */
+.badge{
+  display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;
+  font-size:10px;font-weight:700;
+}
+.badge-green{background:var(--green-l);color:var(--green)}
+.badge-gold{background:var(--gold-l);color:var(--gold)}
+.badge-red{background:var(--red-l);color:var(--red)}
+.badge-blue{background:var(--blue-l);color:var(--blue)}
+.badge-grey{background:var(--surf2);color:var(--txt3)}
+
+/* Divider */
+.divider{height:1px;background:var(--brd);margin:0 14px}
+
+/* Geofence map mockup */
+.geo-map{
+  height:120px;border-radius:var(--r-sm);overflow:hidden;
+  position:relative;background:var(--surf2);margin-bottom:12px;
+}
+
+/* Toast */
+.toast{
+  position:absolute;bottom:80px;left:14px;right:14px;
+  background:var(--navy);color:#fff;border-radius:var(--r-sm);
+  padding:13px 16px;font-size:13px;font-weight:600;
+  display:flex;align-items:center;gap:10px;
+  box-shadow:var(--shd-lg);z-index:100;
+  transform:translateY(120%);opacity:0;transition:transform .3s,opacity .3s;
+  pointer-events:none;
+}
+.toast.show{transform:translateY(0);opacity:1}
+.toast .tick{
+  width:24px;height:24px;border-radius:50%;background:var(--green);
+  display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;
+}
+
+/* Step progress */
+.step-bar{display:flex;align-items:center;gap:0;padding:12px 16px 0;overflow:hidden}
+.step-item{display:flex;align-items:center;flex:1}
+.step-circle{
+  width:26px;height:26px;border-radius:50%;border:2px solid var(--brd);
+  background:var(--surf2);flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;color:var(--txt3);
+}
+.step-circle.done{background:var(--green);border-color:var(--green);color:#fff}
+.step-circle.active{background:var(--gold);border-color:var(--gold);color:#fff}
+.step-line{flex:1;height:2px;background:var(--brd)}
+.step-line.done{background:var(--green)}
+.step-lbl{font-size:9px;font-weight:600;color:var(--txt3);margin-top:3px;text-align:center;width:50px}
+.step-wrap{display:flex;flex-direction:column;align-items:center}
+
+/* Reader status row */
+.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:14px}
+.status-chip{
+  padding:9px 10px;border-radius:var(--r-sm);border:1.5px solid var(--brd);
+  background:var(--surf2);font-size:11px;font-weight:600;color:var(--txt2);
+  cursor:pointer;text-align:center;transition:all .15s;
+}
+.status-chip.on-green{border-color:var(--green);background:var(--green-l);color:var(--green)}
+.status-chip.on-gold{border-color:var(--gold);background:var(--gold-l);color:var(--gold)}
+.status-chip.on-red{border-color:var(--red);background:var(--red-l);color:var(--red)}
+.status-chip.on-grey{border-color:var(--txt3);background:var(--surf2);color:var(--txt3)}
+
+/* ── SCREEN: TYPE PICKER ─────────────────────────── */
+#scr-pick .hdr{background:var(--navy)}
+#scr-pick .scr-body{background:var(--bg)}
+.pick-hero{
+  background:var(--navy);padding:0 18px 28px;
+  border-bottom-left-radius:24px;border-bottom-right-radius:24px;
+}
+.pick-hero p{font-size:13px;color:rgba(255,255,255,.6);line-height:1.5}
+.pick-hero strong{color:var(--gold)}
+.pick-user{
+  display:flex;align-items:center;gap:10px;margin-bottom:14px;
+  background:rgba(255,255,255,.07);border-radius:10px;padding:10px 12px;
+}
+.pick-user .av{
+  width:38px;height:38px;border-radius:50%;
+  background:linear-gradient(135deg,var(--gold),#F0A83A);
+  display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;
+}
+.pick-user .name{font-size:14px;font-weight:700;color:#fff}
+.pick-user .role{font-size:11px;color:rgba(255,255,255,.5)}
+.type-card{
+  background:var(--surf);border-radius:16px;margin:0 14px 12px;
+  padding:16px;box-shadow:var(--shd);cursor:pointer;
+  display:flex;gap:14px;align-items:flex-start;
+  border:2px solid transparent;transition:border-color .15s,transform .1s;
+  -webkit-tap-highlight-color:transparent;
+}
+.type-card:active{transform:scale(.98)}
+.type-icon{
+  width:48px;height:48px;border-radius:14px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:22px;
+}
+.type-card .tc-title{font-family:Georgia,serif;font-size:15px;font-weight:700;color:var(--txt)}
+.type-card .tc-desc{font-size:11px;color:var(--txt3);margin-top:4px;line-height:1.5}
+.type-card .tc-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+.type-card .tc-tag{
+  padding:3px 9px;border-radius:20px;font-size:10px;font-weight:600;
+}
+.ti-agent{background:linear-gradient(135deg,#B36200,var(--gold))}
+.ti-hawker{background:linear-gradient(135deg,#1B5E20,var(--green))}
+.ti-office{background:linear-gradient(135deg,#1565C0,#2196F3)}
+
+/* ── SCREENS: HEADERS ───────────────────────────── */
+#scr-agent .hdr{background:linear-gradient(135deg,#9A5800,var(--gold))}
+#scr-hawker .hdr{background:linear-gradient(135deg,#1B5E20,var(--green))}
+#scr-office .hdr{background:linear-gradient(135deg,var(--navy),#2E4A7A)}
+
+/* Dark-mode theme toggle */
+.theme-toggle{
+  position:fixed;top:18px;right:18px;
+  background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.2);
+  color:#fff;padding:7px 13px;border-radius:20px;cursor:pointer;
+  font-size:12px;font-weight:600;backdrop-filter:blur(8px);z-index:1000;
+}
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" onclick="toggleTheme()">🌙</button>
+
+<div class="phone">
+  <div class="status-bar">
+    <span class="t" id="sTime">9:41 AM</span>
+    <div class="icons"><span>▲▲▲</span><span>●WiFi</span><span>🔋 88%</span></div>
+  </div>
+
+  <!-- ══ TOAST ══ -->
+  <div class="toast" id="toast"><div class="tick">✓</div><span id="toastMsg">Submitted successfully</span></div>
+
+  <!-- ════════════════════════════════════════
+       SCREEN: TYPE PICKER
+  ════════════════════════════════════════ -->
+  <div class="screen active" id="scr-pick">
+    <div class="hdr">
+      <div class="hdr-left">
+        <div>
+          <div class="hdr-title">DCR Entry</div>
+          <div class="hdr-sub">Select your work mode for today</div>
+        </div>
+      </div>
+      <div class="hdr-actions">
+        <button class="hdr-btn" onclick="showToast('Synced with ERP ✓')">🔄 Sync</button>
+      </div>
+    </div>
+    <div class="scr-body">
+      <div class="pick-hero">
+        <div class="pick-user">
+          <div class="av">RS</div>
+          <div>
+            <div class="name">Rajesh Sharma</div>
+            <div class="role">Sr. Executive · Jaipur South · <strong style="color:var(--gold)">Thu, 10 Jul 2026</strong></div>
+          </div>
+        </div>
+        <p>Choose your <strong>work mode</strong> to begin logging today's activity. Your attendance and location will be captured automatically on first entry.</p>
+      </div>
+
+      <div class="section-gap"></div>
+      <div class="section-label">Select Work Mode</div>
+
+      <div class="type-card" onclick="goScreen('scr-agent')">
+        <div class="type-icon ti-agent">🏪</div>
+        <div>
+          <div class="tc-title">Agent Visit</div>
+          <div class="tc-desc">Plan tours, visit credit agents, collect outstanding, record selfie &amp; meeting report.</div>
+          <div class="tc-tags">
+            <span class="tc-tag" style="background:var(--gold-l);color:var(--gold)">Tour Plan</span>
+            <span class="tc-tag" style="background:var(--gold-l);color:var(--gold)">Recovery</span>
+            <span class="tc-tag" style="background:var(--gold-l);color:var(--gold)">Growth</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="type-card" onclick="goScreen('scr-hawker')">
+        <div class="type-icon ti-hawker">🛵</div>
+        <div>
+          <div class="tc-title">Hawker / Reader Visit</div>
+          <div class="tc-desc">Mark attendance, visit cash-sale hawkers, survey readers for leads &amp; develop new areas.</div>
+          <div class="tc-tags">
+            <span class="tc-tag" style="background:var(--green-l);color:var(--green)">Attendance</span>
+            <span class="tc-tag" style="background:var(--green-l);color:var(--green)">Hawker</span>
+            <span class="tc-tag" style="background:var(--green-l);color:var(--green)">Reader Survey</span>
+            <span class="tc-tag" style="background:var(--green-l);color:var(--green)">New Area</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="type-card" onclick="goScreen('scr-office')">
+        <div class="type-icon ti-office">🏢</div>
+        <div>
+          <div class="tc-title">Office / Other Work</div>
+          <div class="tc-desc">Log office meetings, legal work, incharge-assigned tasks or other non-field duties.</div>
+          <div class="tc-tags">
+            <span class="tc-tag" style="background:var(--blue-l);color:var(--blue)">Meeting</span>
+            <span class="tc-tag" style="background:var(--blue-l);color:var(--blue)">Legal</span>
+            <span class="tc-tag" style="background:var(--blue-l);color:var(--blue)">Report</span>
+          </div>
+        </div>
+      </div>
+      <div style="height:20px"></div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SCREEN: AGENT VISIT
+  ════════════════════════════════════════ -->
+  <div class="screen" id="scr-agent">
+    <div class="hdr">
+      <div class="hdr-left">
+        <button class="back-btn" onclick="goScreen('scr-pick')">←</button>
+        <div>
+          <div class="hdr-title">Agent Visit</div>
+          <div class="hdr-sub" id="agentTabLabel">Plan your tour for today</div>
+        </div>
+      </div>
+      <div class="hdr-actions">
+        <button class="hdr-btn" onclick="makeVirtualCall()">📞 Call</button>
+      </div>
+    </div>
+
+    <div class="scr-body" id="agentBody">
+      <!-- SUB-CONTENT rendered by JS -->
+    </div>
+
+    <div class="tabs" id="agentTabs">
+      <button class="tab on" onclick="agentTab(this,0)"><span class="ico">📋</span>Plan Tour</button>
+      <button class="tab" onclick="agentTab(this,1)"><span class="ico">✅</span>Approved</button>
+      <button class="tab" onclick="agentTab(this,2)"><span class="ico">📝</span>Report</button>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SCREEN: HAWKER / READER VISIT
+  ════════════════════════════════════════ -->
+  <div class="screen" id="scr-hawker">
+    <div class="hdr">
+      <div class="hdr-left">
+        <button class="back-btn" onclick="goScreen('scr-pick')">←</button>
+        <div>
+          <div class="hdr-title">Hawker / Reader</div>
+          <div class="hdr-sub" id="hawkerTabLabel">Mark your attendance first</div>
+        </div>
+      </div>
+      <div class="hdr-actions">
+        <button class="hdr-btn" onclick="makeVirtualCall()">📞 Call</button>
+      </div>
+    </div>
+    <div class="scr-body" id="hawkerBody"></div>
+    <div class="tabs" id="hawkerTabs">
+      <button class="tab on" onclick="hawkerTab(this,0)"><span class="ico">📍</span>Attendance</button>
+      <button class="tab" onclick="hawkerTab(this,1)"><span class="ico">🛵</span>Hawker</button>
+      <button class="tab" onclick="hawkerTab(this,2)"><span class="ico">📰</span>Reader</button>
+      <button class="tab" onclick="hawkerTab(this,3)"><span class="ico">🗺️</span>New Area</button>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SCREEN: OFFICE / OTHER WORK
+  ════════════════════════════════════════ -->
+  <div class="screen" id="scr-office">
+    <div class="hdr">
+      <div class="hdr-left">
+        <button class="back-btn" onclick="goScreen('scr-pick')">←</button>
+        <div>
+          <div class="hdr-title">Office / Other Work</div>
+          <div class="hdr-sub">Log non-field activity</div>
+        </div>
+      </div>
+    </div>
+    <div class="scr-body" id="officeBody"></div>
+  </div>
+
+</div><!-- /phone -->
+
+<script>
+/* ─── DATA ──────────────────────────────────────── */
+const AGENCIES = {
+  '': null,
+  'AGT-001': {name:'Raj General Store',mobile:'98290 11234',email:'raj.general@gmail.com',location:'Civil Lines, Jaipur',supply:280,outstanding:18400,bill:2340},
+  'AGT-002': {name:'Metro News Agency',mobile:'97142 55678',email:'metro.news@gmail.com',location:'MI Road, Jaipur',supply:145,outstanding:8200,bill:1890},
+  'AGT-003': {name:'Agarwal Book Depot',mobile:'96140 77890',email:'agarwal.books@gmail.com',location:'Station Road, Jaipur',supply:420,outstanding:24500,bill:4100},
+  'AGT-004': {name:'Sharma Medicos',mobile:'99295 44321',email:'sharma.medicos@gmail.com',location:'Vaishali Nagar, Jaipur',supply:95,outstanding:6200,bill:980},
+  'AGT-005': {name:'Pink City Agency',mobile:'98291 33456',email:'pinkcity.news@gmail.com',location:'Bani Park, Jaipur',supply:210,outstanding:12800,bill:2150},
+  'AGT-006': {name:'Jaipur Book House',mobile:'97143 88901',email:'jbh@gmail.com',location:'Station Road, Jaipur',supply:350,outstanding:44200,bill:3800},
+};
+const VISIT_PURPOSES = ['-- Select Purpose --','Recovery – Outstanding Amount','Growth Discussion','New Agreement / Contract','Reader Feedback Collection','Scheme & Offer Promotion','Supply Complaint Redressal','Relationship Visit','Competitor Analysis Visit','Other'];
+const CENTERS = ['-- Select Center --','Civil Lines Cash Center','MI Road Center','Vaishali Nagar Center','Tonk Road Center','Sanganer Center'];
+const HAWKERS = {
+  'Civil Lines Cash Center': ['Ramesh Halwai (H-CL-01)','Sunita Devi (H-CL-02)','Mukesh Kumar (H-CL-03)','Pawan Kiosks (H-CL-04)'],
+  'MI Road Center': ['Arun Traders (H-MI-01)','Lucky Press Corner (H-MI-02)'],
+  'Vaishali Nagar Center': ['Deep Agency (H-VN-01)','Star Hawker (H-VN-02)','New Point (H-VN-03)'],
+  'Tonk Road Center': ['City News (H-TR-01)','National Hawker (H-TR-02)'],
+  'Sanganer Center': ['Shiv Agency (H-SG-01)','Ram Press (H-SG-02)'],
+};
+const APPROVED_VISITS = [
+  {id:'TV-001',agency:'AGT-001',time:'10:00 AM',purpose:'Recovery – Outstanding Amount',outstanding:18400,priority:'high'},
+  {id:'TV-002',agency:'AGT-003',time:'12:30 PM',purpose:'Growth Discussion',outstanding:24500,priority:'high'},
+  {id:'TV-003',agency:'AGT-005',time:'2:00 PM',purpose:'New Agreement / Contract',outstanding:12800,priority:'medium'},
+  {id:'TV-004',agency:'AGT-002',time:'4:00 PM',purpose:'Scheme & Offer Promotion',outstanding:8200,priority:'low'},
+];
+const WORK_TYPES = ['-- Select Work Type --','In-Office Meeting with Incharge','Team Meeting / Review','Report Preparation','Legal Work / Court Visit','Office Visit (Other Branch)','Training / Workshop','Other Incharge-Assigned Work'];
+const NEWSPAPERS = ['Rajasthan Patrika','Dainik Bhaskar','Times of India','Navbharat Times','Amar Ujala','Hindustan Times'];
+
+/* ─── STATE ─────────────────────────────────────── */
+let agentTabIdx = 0;
+let hawkerTabIdx = 0;
+let geoConfirmed = false;
+let selfieCapt = false;
+let checkinTime = '';
+let checkoutTime = '';
+let selectedCenter = '';
+let hindiMode = false;
+
+/* ─── UTILITIES ─────────────────────────────────── */
+function qs(sel,ctx=document){return ctx.querySelector(sel)}
+function now24(){const d=new Date();return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0')}
+function fmtCur(n){return '₹'+Number(n).toLocaleString('en-IN')}
+function showToast(msg,duration=2400){
+  const t=qs('#toast');qs('#toastMsg').textContent=msg;
+  t.classList.add('show');setTimeout(()=>t.classList.remove('show'),duration);
+}
+function goScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  qs('#'+id).classList.add('active');
+  if(id==='scr-agent'){renderAgentTab(agentTabIdx);}
+  if(id==='scr-hawker'){renderHawkerTab(hawkerTabIdx);}
+  if(id==='scr-office'){renderOffice();}
+}
+function toggleTheme(){
+  const root=document.documentElement;
+  const next=root.getAttribute('data-theme')==='dark'?'light':'dark';
+  root.setAttribute('data-theme',next);
+  qs('.theme-toggle').textContent=next==='dark'?'☀️':'🌙';
+}
+function calcDuration(a,b){
+  if(!a||!b)return'--';
+  const [ah,am]=a.split(':').map(Number);
+  const [bh,bm]=b.split(':').map(Number);
+  const diff=(bh*60+bm)-(ah*60+am);
+  if(diff<=0)return'--';
+  return Math.floor(diff/60)+'h '+( diff%60)+'m';
+}
+function makeVirtualCall(){showToast('📞 Opening virtual call log...');}
+
+/* ─── AGENT SCREEN ──────────────────────────────── */
+function agentTab(btn,idx){
+  agentTabIdx=idx;
+  qs('#agentTabs').querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('on',i===idx));
+  renderAgentTab(idx);
+}
+
+function renderAgentTab(idx){
+  const labels=['Plan your tour for today','Approved visits ready to start','Submit your visit report'];
+  qs('#agentTabLabel').textContent=labels[idx];
+  if(idx===0) qs('#agentBody').innerHTML=renderPlanTour();
+  if(idx===1) qs('#agentBody').innerHTML=renderApprovedVisits();
+  if(idx===2) qs('#agentBody').innerHTML=renderSubmitReport();
+  bindAgentEvents(idx);
+}
+
+function renderPlanTour(){
+  return `
+  <div class="section-gap"></div>
+  <div class="section-label">Tour Planning – Step 1 of 3</div>
+  <div class="card card-pad">
+    <div class="f-group">
+      <label class="f-label">Date of Tour</label>
+      <input type="date" class="f-input" id="tourDate" value="2026-07-11">
+    </div>
+    <div class="f-group">
+      <label class="f-label">Select Agency</label>
+      <select class="f-input f-select" id="agencySelect" onchange="onAgencyChange()">
+        <option value="">-- Choose Agency --</option>
+        <option value="AGT-001">Raj General Store – Civil Lines</option>
+        <option value="AGT-002">Metro News Agency – MI Road</option>
+        <option value="AGT-003">Agarwal Book Depot – Station Road</option>
+        <option value="AGT-004">Sharma Medicos – Vaishali Nagar</option>
+        <option value="AGT-005">Pink City Agency – Bani Park</option>
+        <option value="AGT-006">Jaipur Book House – Station Road</option>
+      </select>
+    </div>
+    <div id="agencyAutoFill"></div>
+    <div class="f-group">
+      <label class="f-label">Tentative Visit Time</label>
+      <input type="time" class="f-input" id="tentTime" value="10:00">
+      <div class="f-hint">Can be changed during actual visit</div>
+    </div>
+    <div class="f-group">
+      <label class="f-label">Visit Purpose</label>
+      <select class="f-input f-select">
+        ${VISIT_PURPOSES.map(p=>`<option>${p}</option>`).join('')}
+      </select>
+    </div>
+    <div class="f-group">
+      <label class="f-label">Purpose Description</label>
+      <textarea class="f-input f-textarea" placeholder="Briefly describe the reason for visit and expected outcome…"></textarea>
+    </div>
+  </div>
+
+  <div class="section-label">Competitor Supply in Agent Area</div>
+  <div class="card card-pad">
+    <div style="overflow-x:auto">
+      <table class="comp-table" style="min-width:240px">
+        <thead><tr><th>Publication</th><th style="text-align:center">Copies</th></tr></thead>
+        <tbody>
+          ${NEWSPAPERS.filter(n=>n!=='Rajasthan Patrika').map(n=>`
+          <tr>
+            <td class="pub-name">${n}</td>
+            <td style="text-align:center"><input type="number" class="comp-input" placeholder="0" min="0"></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section-label">Growth Target</div>
+  <div class="card card-pad">
+    <div class="f-row">
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Target Copies to Add</label>
+        <input type="number" class="f-input" placeholder="e.g. 25">
+      </div>
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Expected Start Date</label>
+        <input type="date" class="f-input">
+      </div>
+    </div>
+  </div>
+
+  <div class="btn-row" style="padding-top:4px">
+    <button class="btn-primary btn-gold" onclick="submitPlanTour()">📤 Submit for Approval</button>
+  </div>`;
+}
+
+function onAgencyChange(){
+  const sel=qs('#agencySelect').value;
+  const af=qs('#agencyAutoFill');
+  if(!sel||!AGENCIES[sel]){af.innerHTML='';return;}
+  const a=AGENCIES[sel];
+  const os=a.outstanding;
+  af.innerHTML=`
+  <div class="autofill-banner">
+    <div class="title">✦ Agency Details (ERP)</div>
+    <div class="autofill-grid">
+      <div class="af-item"><div class="lbl">Name</div><div class="val">${a.name}</div></div>
+      <div class="af-item"><div class="lbl">Mobile</div><div class="val">${a.mobile}</div></div>
+      <div class="af-item"><div class="lbl">Location</div><div class="val">${a.location}</div></div>
+      <div class="af-item"><div class="lbl">Email</div><div class="val" style="font-size:10px">${a.email}</div></div>
+      <div class="af-item"><div class="lbl">Current Supply</div><div class="val">${a.supply} copies/day</div></div>
+      <div class="af-item"><div class="lbl">Current Bill</div><div class="val">${fmtCur(a.bill)}</div></div>
+      <div class="af-item"><div class="lbl">Outstanding</div><div class="val red">${fmtCur(os)}</div></div>
+      <div class="af-item"><div class="lbl">Status</div><div class="val ${os>20000?'red':os>10000?'':'green'}">${os>20000?'⚠ High Dues':os>10000?'Moderate':'✓ Clear'}</div></div>
+    </div>
+  </div>`;
+}
+
+function submitPlanTour(){
+  const sel=qs('#agencySelect')?.value;
+  if(!sel){showToast('⚠ Please select an agency first');return;}
+  showToast('✓ Tour plan submitted for approval');
+}
+
+function renderApprovedVisits(){
+  const rows=APPROVED_VISITS.map(v=>{
+    const a=AGENCIES[v.agency];
+    const col=v.priority==='high'?'var(--red)':v.priority==='medium'?'var(--gold)':'var(--green)';
+    const initials=a.name.split(' ').map(w=>w[0]).join('').slice(0,2);
+    return `
+    <div class="ap-card" id="ap-${v.id}">
+      <div class="avatar" style="background:${col}">${initials}</div>
+      <div class="info">
+        <div class="aname">${a.name}</div>
+        <div class="ameta">${a.location} · ${v.time}</div>
+        <div class="ameta" style="margin-top:2px;color:var(--txt)">${v.purpose}</div>
+        <div class="abadge">
+          <span class="badge ${v.priority==='high'?'badge-red':v.priority==='medium'?'badge-gold':'badge-green'}">${v.priority.toUpperCase()}</span>
+          <span class="badge badge-grey">O/S: ${fmtCur(v.outstanding)}</span>
+          <span class="badge badge-gold">${v.time}</span>
+        </div>
+      </div>
+      <button class="start-btn" onclick="startVisit('${v.id}')">Start →</button>
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="section-gap"></div>
+  <div style="padding:0 14px 10px;display:flex;align-items:center;justify-content:space-between">
+    <div class="section-label" style="padding:0">Approved Visits · Today</div>
+    <span class="badge badge-green">${APPROVED_VISITS.length} Approved</span>
+  </div>
+  ${rows}
+  <div style="padding:10px 14px 20px">
+    <div style="background:var(--surf2);border-radius:var(--r-sm);padding:11px 13px;font-size:12px;color:var(--txt3);line-height:1.5">
+      <strong style="color:var(--txt);display:block;margin-bottom:4px">How it works</strong>
+      Tap <strong style="color:var(--gold)">Start →</strong> to begin a visit. You'll be asked to enter check-in time, collect amount, take a selfie and submit your report.
+    </div>
+  </div>`;
+}
+
+function startVisit(id){
+  agentTabIdx=2;
+  qs('#agentTabs').querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('on',i===2));
+  qs('#agentTabLabel').textContent='Submit your visit report';
+  const v=APPROVED_VISITS.find(x=>x.id===id);
+  qs('#agentBody').innerHTML=renderSubmitReport(v?.agency);
+  bindAgentEvents(2);
+}
+
+function renderSubmitReport(preselect=''){
+  const opts=Object.entries(AGENCIES).map(([k,a])=>a?`<option value="${k}" ${k===preselect?'selected':''}>${a.name} – ${a.location}</option>`:'').join('');
+  return `
+  <div class="section-gap"></div>
+  <div class="section-label">Visit Details</div>
+  <div class="card card-pad">
+    <div class="f-group">
+      <label class="f-label">Agency</label>
+      <select class="f-input f-select" id="rptAgency" onchange="onReportAgencyChange()">
+        <option value="">-- Select Agency --</option>
+        ${opts}
+      </select>
+    </div>
+    <div id="rptAgencyBanner"></div>
+    <div class="f-row">
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Check-In Time</label>
+        <input type="time" class="f-input" id="rptCheckin" value="${now24()}" oninput="updateDuration()">
+      </div>
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Check-Out Time</label>
+        <input type="time" class="f-input" id="rptCheckout" oninput="updateDuration()">
+      </div>
+    </div>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
+      <span style="font-size:11px;color:var(--txt3)">Meeting Duration:</span>
+      <span class="duration-pill" id="durationPill">⏱ Set check-out time</span>
+    </div>
+  </div>
+
+  <div class="section-label">Collection Details</div>
+  <div class="card card-pad">
+    <label class="f-label">Payment Mode</label>
+    <div class="chips" style="margin-bottom:14px" id="payModeChips">
+      ${['Cash','Cheque','NEFT / RTGS','Net Banking','Agent App'].map(m=>`<span class="chip" onclick="toggleChip(this,'payModeChips','single')">${m}</span>`).join('')}
+    </div>
+    <label class="f-label">Payment Type</label>
+    <div class="chips" style="margin-bottom:14px" id="payTypeChips">
+      <span class="chip" onclick="toggleChip(this,'payTypeChips','single')">Full Payment</span>
+      <span class="chip" onclick="toggleChip(this,'payTypeChips','single')">Partial Payment</span>
+    </div>
+    <div class="f-group" style="padding-bottom:0">
+      <label class="f-label">Amount Collected (₹)</label>
+      <div class="amount-wrap">
+        <span class="amount-prefix">₹</span>
+        <input type="number" class="f-input" placeholder="0" id="collectedAmt">
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Growth Commitment</div>
+  <div class="card card-pad">
+    <div class="f-row">
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">New Copies Committed</label>
+        <input type="number" class="f-input" placeholder="0">
+      </div>
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Growth Start Date</label>
+        <input type="date" class="f-input">
+      </div>
+    </div>
+    <div class="f-group" style="padding-top:12px;padding-bottom:0">
+      <label class="f-label">Agent will clear dues by</label>
+      <input type="date" class="f-input">
+    </div>
+  </div>
+
+  <div class="section-label">Meeting Remarks</div>
+  <div class="card card-pad">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <label class="f-label" style="margin-bottom:0">Notes / Remarks</label>
+      <button onclick="toggleHindi()" style="background:var(--surf2);border:1px solid var(--brd);border-radius:6px;padding:4px 9px;font-size:10px;font-weight:700;color:var(--txt2);cursor:pointer" id="langBtn">अ Hindi</button>
+    </div>
+    <textarea class="f-input f-textarea" id="remarksArea" style="min-height:90px" placeholder="Enter meeting notes, agent feedback, next steps…"></textarea>
+    <div class="f-hint" id="langHint">Type in English or Hindi (both accepted)</div>
+  </div>
+
+  <div class="section-label">Selfie with Agent</div>
+  <div class="card card-pad">
+    <div class="selfie-block" id="selfieBlock" onclick="captureSelfie()">
+      <span class="ico" id="selfieIco">📷</span>
+      <div class="lbl" id="selfieLbl">Tap to take selfie with agent</div>
+      <div class="sub" id="selfieSub">Required before submitting report</div>
+    </div>
+  </div>
+
+  <div style="padding:4px 14px 6px">
+    <div style="background:var(--surf2);border-radius:var(--r-sm);padding:10px 13px;display:flex;align-items:center;gap:9px;margin-bottom:12px">
+      <span style="font-size:18px">📍</span>
+      <div>
+        <div style="font-size:12px;font-weight:700;color:var(--txt)">Location will be captured on submit</div>
+        <div style="font-size:10px;color:var(--txt3)">Lat/Long + timestamp recorded automatically</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-primary btn-outline" onclick="showToast('Draft saved')">Save Draft</button>
+    <button class="btn-primary btn-gold" onclick="submitReport()">Submit Report 📤</button>
+  </div>`;
+}
+
+function onReportAgencyChange(){
+  const sel=qs('#rptAgency')?.value;
+  const banner=qs('#rptAgencyBanner');
+  if(!banner)return;
+  if(!sel||!AGENCIES[sel]){banner.innerHTML='';return;}
+  const a=AGENCIES[sel];
+  banner.innerHTML=`<div class="autofill-banner" style="margin-top:10px">
+    <div class="title">ERP Data</div>
+    <div class="autofill-grid">
+      <div class="af-item"><div class="lbl">Outstanding</div><div class="val red">${fmtCur(a.outstanding)}</div></div>
+      <div class="af-item"><div class="lbl">Current Supply</div><div class="val">${a.supply} copies</div></div>
+    </div>
+  </div>`;
+}
+
+function updateDuration(){
+  const ci=qs('#rptCheckin')?.value;
+  const co=qs('#rptCheckout')?.value;
+  const pill=qs('#durationPill');
+  if(!pill)return;
+  const dur=calcDuration(ci,co);
+  pill.textContent=dur==='--'?'⏱ Set check-out time':'⏱ '+dur;
+}
+
+function captureSelfie(){
+  selfieCapt=!selfieCapt;
+  const blk=qs('#selfieBlock');
+  if(selfieCapt){
+    blk.classList.add('selfie-captured');
+    qs('#selfieIco').textContent='✅';
+    qs('#selfieLbl').textContent='Selfie captured!';
+    qs('#selfieSub').textContent='Tap to retake if needed';
+  } else {
+    blk.classList.remove('selfie-captured');
+    qs('#selfieIco').textContent='📷';
+    qs('#selfieLbl').textContent='Tap to take selfie with agent';
+    qs('#selfieSub').textContent='Required before submitting report';
+  }
+}
+
+function toggleHindi(){
+  hindiMode=!hindiMode;
+  const area=qs('#remarksArea');
+  const btn=qs('#langBtn');
+  const hint=qs('#langHint');
+  if(area){area.placeholder=hindiMode?'हिंदी में टाइप करें – एजेंट की बात, अगले कदम, कोई भी जानकारी…':'Enter meeting notes, agent feedback, next steps…';}
+  if(btn){btn.textContent=hindiMode?'A English':'अ Hindi';}
+  if(hint){hint.textContent=hindiMode?'हिंदी में भरें (दोनों भाषाएं मान्य हैं)':'Type in English or Hindi (both accepted)';}
+}
+
+function submitReport(){
+  if(!selfieCapt){showToast('⚠ Please take a selfie with the agent first');return;}
+  const agency=qs('#rptAgency')?.value;
+  if(!agency){showToast('⚠ Please select the agency');return;}
+  showToast('✓ Report submitted · Location captured');
+  selfieCapt=false;
+}
+
+function toggleChip(chip,groupId,mode){
+  const group=qs('#'+groupId);
+  if(mode==='single'){group.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));}
+  chip.classList.toggle('on');
+}
+
+function bindAgentEvents(idx){
+  if(idx===0){onAgencyChange();}
+  if(idx===1){}
+  if(idx===2){setTimeout(()=>{const s=qs('#rptAgency');if(s&&s.value)onReportAgencyChange();},50);}
+}
+
+/* ─── HAWKER / READER SCREEN ──────────────────────── */
+function hawkerTab(btn,idx){
+  hawkerTabIdx=idx;
+  const labels=['Mark your attendance first','Visit hawkers in your area','Survey readers for leads','Develop new areas for growth'];
+  qs('#hawkerTabLabel').textContent=labels[idx];
+  qs('#hawkerTabs').querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('on',i===idx));
+  if(idx===0) qs('#hawkerBody').innerHTML=renderAttendance();
+  if(idx===1) qs('#hawkerBody').innerHTML=renderHawkerVisit();
+  if(idx===2) qs('#hawkerBody').innerHTML=renderReaderVisit();
+  if(idx===3) qs('#hawkerBody').innerHTML=renderNewArea();
+  bindHawkerEvents(idx);
+}
+
+function renderAttendance(){
+  return `
+  <div class="section-gap"></div>
+  <div class="section-label">Cash Sale Center</div>
+  <div class="card card-pad">
+    <div class="f-group">
+      <label class="f-label">Select Your Center</label>
+      <select class="f-input f-select" id="centerSelectAtt" onchange="onCenterAttChange()">
+        ${CENTERS.map(c=>`<option>${c}</option>`).join('')}
+      </select>
+    </div>
+    <div id="geoCheckWrap">
+      <div class="geo-bar" id="geoBar">
+        <div class="geo-dot" id="geoDot" style="background:var(--txt3)"></div>
+        <div class="geo-text">
+          <strong id="geoStatus">Select a center to check location</strong>
+          <span id="geoSub">Your GPS will be verified against the registered location</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="geoMapWrap" style="display:none">
+    <div class="section-label">Location Check</div>
+    <div class="card card-pad">
+      <canvas id="geoCanvas" width="330" height="130" style="width:100%;border-radius:var(--r-sm);display:block"></canvas>
+      <div style="margin-top:10px;font-size:11px;color:var(--txt3);display:flex;align-items:center;gap:6px">
+        <span style="width:10px;height:10px;border-radius:50%;background:var(--blue);display:inline-block"></span> You
+        <span style="width:10px;height:10px;border-radius:50%;background:var(--gold);display:inline-block;margin-left:8px"></span> Center
+        <span style="display:inline-block;margin-left:8px">Radius: 50m</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="attFormWrap" style="display:none">
+    <div class="section-label">Mark Attendance</div>
+    <div class="card card-pad">
+      <div class="f-row">
+        <div class="f-group" style="padding-bottom:0">
+          <label class="f-label">Date</label>
+          <input type="date" class="f-input" value="2026-07-10" readonly>
+        </div>
+        <div class="f-group" style="padding-bottom:0">
+          <label class="f-label">Time</label>
+          <input type="time" class="f-input" value="${now24()}" id="attTime">
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <button class="btn-primary btn-green" onclick="markAttendance()">📍 Mark Attendance</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-gap"></div>`;
+}
+
+function onCenterAttChange(){
+  const sel=qs('#centerSelectAtt')?.value;
+  if(!sel||sel.startsWith('--')){
+    qs('#geoBar').className='geo-bar';
+    qs('#geoDot').style.background='var(--txt3)';
+    qs('#geoStatus').textContent='Select a center to check location';
+    qs('#geoSub').textContent='Your GPS will be verified against the registered location';
+    qs('#geoMapWrap').style.display='none';
+    qs('#attFormWrap').style.display='none';
+    return;
+  }
+  qs('#geoBar').className='geo-bar';
+  qs('#geoDot').style.background='#FF9800';
+  qs('#geoStatus').textContent='Checking your location…';
+  qs('#geoSub').textContent='Comparing with '+sel;
+  qs('#geoMapWrap').style.display='block';
+  drawGeoMap();
+  setTimeout(()=>{
+    const within=Math.random()>0.3;
+    const bar=qs('#geoBar');
+    const dot=qs('#geoDot');
+    if(within){
+      bar.className='geo-bar confirmed';
+      dot.style.background=within?'var(--green)':'var(--red)';
+      dot.className='geo-dot pulse';
+      qs('#geoStatus').textContent='✓ Within range – '+sel;
+      qs('#geoSub').textContent='You are ~18m from the center. Attendance enabled.';
+      qs('#attFormWrap').style.display='block';
+      geoConfirmed=true;
+    } else {
+      bar.className='geo-bar error';
+      dot.style.background='var(--red)';
+      dot.className='geo-dot';
+      qs('#geoStatus').textContent='⚠ Too far from center';
+      qs('#geoSub').textContent='You are ~124m away. Move within 50m to mark attendance.';
+      geoConfirmed=false;
+    }
+  },1200);
+}
+
+function drawGeoMap(){
+  const canvas=qs('#geoCanvas');
+  if(!canvas)return;
+  const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  canvas.width=canvas.offsetWidth||330;
+  const ctx=canvas.getContext('2d');
+  // bg
+  ctx.fillStyle=isDark?'#1A2A1A':'#C8D8C0';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  // roads
+  ctx.strokeStyle=isDark?'rgba(255,255,255,.12)':'rgba(255,255,255,.7)';
+  ctx.lineWidth=7;
+  ctx.beginPath();ctx.moveTo(0,65);ctx.lineTo(canvas.width,65);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(canvas.width/2,0);ctx.lineTo(canvas.width/2,canvas.height);ctx.stroke();
+  // center
+  const cx=canvas.width*0.55,cy=65;
+  ctx.fillStyle='rgba(212,130,10,.15)';ctx.beginPath();ctx.arc(cx,cy,42,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle='rgba(212,130,10,.5)';ctx.lineWidth=1.5;ctx.setLineDash([4,3]);ctx.beginPath();ctx.arc(cx,cy,42,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=isDark?'rgba(212,130,10,.9)':'#D4820A';ctx.beginPath();ctx.arc(cx,cy,7,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.font='bold 8px system-ui';ctx.textAlign='center';ctx.fillText('C',cx,cy+3);
+  // user (within range)
+  const ux=cx-18,uy=cy+12;
+  ctx.fillStyle=isDark?'rgba(30,107,71,.5)':'rgba(30,107,71,.2)';ctx.beginPath();ctx.arc(ux,uy,20,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='var(--blue)';ctx.beginPath();ctx.arc(ux,uy,8,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.font='bold 8px system-ui';ctx.fillText('Y',ux,uy+3);
+  // line
+  ctx.strokeStyle='rgba(21,101,192,.4)';ctx.lineWidth=1.5;ctx.setLineDash([3,3]);
+  ctx.beginPath();ctx.moveTo(ux,uy);ctx.lineTo(cx,cy);ctx.stroke();ctx.setLineDash([]);
+  // label
+  ctx.fillStyle=isDark?'rgba(0,0,0,.6)':'rgba(255,255,255,.8)';
+  ctx.beginPath();if(ctx.roundRect)ctx.roundRect(cx+12,cy-8,60,14,3);else ctx.rect(cx+12,cy-8,60,14);ctx.fill();
+  ctx.fillStyle=isDark?'#EDF0F4':'#1C2B45';ctx.font='9px system-ui';ctx.textAlign='left';
+  ctx.fillText('50m radius',cx+15,cy+3);
+}
+
+function markAttendance(){
+  if(!geoConfirmed){showToast('⚠ Location not confirmed yet');return;}
+  showToast('✓ Attendance marked · 9:41 AM');
+}
+
+function renderHawkerVisit(){
+  return `
+  <div class="section-gap"></div>
+  <div class="section-label">Hawker Visit Details</div>
+  <div class="card card-pad">
+    <div class="f-group">
+      <label class="f-label">Cash Sale Center</label>
+      <select class="f-input f-select" id="centerSelectHwk" onchange="onCenterHawkerChange()">
+        ${CENTERS.map(c=>`<option>${c}</option>`).join('')}
+      </select>
+    </div>
+    <div class="f-group" id="hawkerDropWrap">
+      <label class="f-label">Select Hawker</label>
+      <select class="f-input f-select" id="hawkerSelect"><option>-- Select Center First --</option></select>
+    </div>
+    <div class="f-row">
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Visit Date</label>
+        <input type="date" class="f-input" value="2026-07-10">
+      </div>
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Visit Time</label>
+        <input type="time" class="f-input" value="${now24()}">
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Outstanding &amp; Collection</div>
+  <div class="card card-pad">
+    <div class="f-row">
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Outstanding Amount (₹)</label>
+        <div class="amount-wrap"><span class="amount-prefix">₹</span><input type="number" class="f-input" placeholder="0"></div>
+      </div>
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Collected Amount (₹)</label>
+        <div class="amount-wrap"><span class="amount-prefix">₹</span><input type="number" class="f-input" placeholder="0"></div>
+      </div>
+    </div>
+    <div class="f-group" style="padding-top:12px;padding-bottom:0">
+      <label class="f-label">Remarks / Notes</label>
+      <textarea class="f-input f-textarea" placeholder="Area observations, hawker feedback, issue if any…"></textarea>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-primary btn-green" onclick="showToast('✓ Hawker visit submitted')">Submit Visit 📤</button>
+  </div>`;
+}
+
+function onCenterHawkerChange(){
+  const val=qs('#centerSelectHwk')?.value;
+  const hwkSel=qs('#hawkerSelect');
+  if(!hwkSel)return;
+  const list=HAWKERS[val]||[];
+  hwkSel.innerHTML=list.length
+    ?['<option>-- Select Hawker --</option>',...list.map(h=>`<option>${h}</option>`)].join('')
+    :'<option>-- Select Center First --</option>';
+}
+
+function renderReaderVisit(){
+  return `
+  <div class="section-gap"></div>
+  <div class="section-label">Reader / Lead Information</div>
+  <div class="card card-pad">
+    <div class="f-group">
+      <label class="f-label">Area / Colony / Locality</label>
+      <input type="text" class="f-input" placeholder="e.g. Malviya Nagar, Block B" list="areaList">
+      <datalist id="areaList">
+        <option>Malviya Nagar</option><option>Vaishali Nagar</option><option>Bani Park</option>
+        <option>Civil Lines</option><option>Tonk Road</option><option>Gandhi Nagar</option>
+      </datalist>
+    </div>
+    <div class="f-row">
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Full Name</label>
+        <input type="text" class="f-input" placeholder="Reader's name">
+      </div>
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Gender</label>
+        <select class="f-input f-select"><option>-- Gender --</option><option>Male</option><option>Female</option><option>Other</option></select>
+      </div>
+    </div>
+    <div class="f-group" style="padding-top:12px">
+      <label class="f-label">Address</label>
+      <input type="text" class="f-input" placeholder="House no., Street, Landmark">
+    </div>
+    <div class="f-row">
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Mobile No.</label>
+        <input type="tel" class="f-input" placeholder="10-digit mobile">
+      </div>
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Email (optional)</label>
+        <input type="email" class="f-input" placeholder="email@example.com">
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Current Newspaper</div>
+  <div class="card card-pad">
+    <label class="f-label">Which paper do they currently read?</label>
+    <div class="chips" id="paperChips">
+      ${NEWSPAPERS.map(n=>`<span class="chip" onclick="toggleChip(this,'paperChips','single')">${n}</span>`).join('')}
+      <span class="chip" onclick="toggleChip(this,'paperChips','single')">None / New Reader</span>
+    </div>
+  </div>
+
+  <div class="section-label">Outcome / Status</div>
+  <div class="card card-pad">
+    <label class="f-label">Select visit outcome</label>
+    <div class="status-grid" id="outcomeGrid">
+      <div class="status-chip" onclick="selectOutcome(this,'on-green')">✅ Already Patrika Reader</div>
+      <div class="status-chip" onclick="selectOutcome(this,'on-green')">🔄 Converted to Patrika</div>
+      <div class="status-chip" onclick="selectOutcome(this,'on-red')">❌ Not Interested</div>
+      <div class="status-chip" onclick="selectOutcome(this,'on-grey')">📵 No Reply</div>
+      <div class="status-chip" onclick="selectOutcome(this,'on-gold')" style="grid-column:span 2">⏰ Will Reply Later</div>
+    </div>
+    <label class="f-label">Additional Notes</label>
+    <textarea class="f-input f-textarea" placeholder="Feedback, reasons, any useful observation…"></textarea>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-primary btn-green" onclick="showToast('✓ Reader lead submitted · Location captured')">Submit &amp; Mark Location 📍</button>
+  </div>`;
+}
+
+function selectOutcome(chip,cls){
+  qs('#outcomeGrid').querySelectorAll('.status-chip').forEach(c=>{
+    c.classList.remove('on-green','on-red','on-gold','on-grey');
+  });
+  chip.classList.add(cls);
+}
+
+function renderNewArea(){
+  return `
+  <div class="section-gap"></div>
+  <div class="section-label">New Area Development</div>
+  <div class="card card-pad">
+    <div class="f-group">
+      <label class="f-label">Area / Locality Name</label>
+      <input type="text" class="f-input" placeholder="Name of area being explored">
+    </div>
+    <div class="f-row">
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">City / Town</label>
+        <input type="text" class="f-input" placeholder="City">
+      </div>
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">District</label>
+        <input type="text" class="f-input" placeholder="District">
+      </div>
+    </div>
+    <div class="f-group" style="padding-top:12px">
+      <label class="f-label">Estimated Households</label>
+      <input type="number" class="f-input" placeholder="Approx. no. of households in area">
+    </div>
+    <div class="f-group">
+      <label class="f-label">Current Newspaper Penetration</label>
+      <div class="chips" id="penetChips">
+        ${NEWSPAPERS.filter(n=>n!=='Rajasthan Patrika').map(n=>`<span class="chip" onclick="toggleChip(this,'penetChips','multi')">${n}</span>`).join('')}
+        <span class="chip" onclick="toggleChip(this,'penetChips','multi')">None</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Growth Potential</div>
+  <div class="card card-pad">
+    <div class="f-group">
+      <label class="f-label">Estimated Patrika Potential (copies/day)</label>
+      <input type="number" class="f-input" placeholder="Your estimate">
+    </div>
+    <div class="f-group">
+      <label class="f-label">Nearest Existing Hawker / Center</label>
+      <input type="text" class="f-input" placeholder="Who can supply this area?">
+    </div>
+    <div class="f-group" style="padding-bottom:0">
+      <label class="f-label">Working Notes / Field Observations</label>
+      <textarea class="f-input f-textarea" style="min-height:100px" placeholder="Describe what you observed — access, demand signals, competition, challenges…"></textarea>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-primary btn-green" onclick="showToast('✓ New area report submitted · GPS logged')">Submit Report 📍</button>
+  </div>`;
+}
+
+function bindHawkerEvents(idx){
+  if(idx===0){setTimeout(drawGeoMap,50);}
+}
+
+/* ─── OFFICE SCREEN ──────────────────────────────── */
+function renderOffice(){
+  qs('#officeBody').innerHTML=`
+  <div class="section-gap"></div>
+  <div class="section-label">Work Details</div>
+  <div class="card card-pad">
+    <div class="f-group">
+      <label class="f-label">Work Type</label>
+      <select class="f-input f-select" id="workTypeSelect">
+        ${WORK_TYPES.map(w=>`<option>${w}</option>`).join('')}
+      </select>
+    </div>
+    <div class="f-row">
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Date</label>
+        <input type="date" class="f-input" value="2026-07-10">
+      </div>
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Location</label>
+        <input type="text" class="f-input" placeholder="Office / Venue">
+      </div>
+    </div>
+    <div class="f-row" style="padding-top:12px">
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">Start Time</label>
+        <input type="time" class="f-input" id="officeIn" value="${now24()}" oninput="updateOfficeDur()">
+      </div>
+      <div class="f-group" style="padding-bottom:0">
+        <label class="f-label">End Time</label>
+        <input type="time" class="f-input" id="officeOut" oninput="updateOfficeDur()">
+      </div>
+    </div>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
+      <span style="font-size:11px;color:var(--txt3)">Duration:</span>
+      <span class="duration-pill" id="officeDurPill">⏱ Enter end time</span>
+    </div>
+  </div>
+
+  <div class="section-label">People Involved</div>
+  <div class="card card-pad">
+    <div class="f-group">
+      <label class="f-label">Permitted / Assigned By</label>
+      <input type="text" class="f-input" placeholder="Name and designation of incharge">
+    </div>
+    <div class="f-group" style="padding-bottom:0">
+      <label class="f-label">Attendees / Others Involved</label>
+      <input type="text" class="f-input" placeholder="Names of others present (optional)">
+    </div>
+  </div>
+
+  <div class="section-label">Work Description</div>
+  <div class="card card-pad">
+    <div class="f-group">
+      <label class="f-label">Subject / Topic</label>
+      <input type="text" class="f-input" placeholder="Brief subject line">
+    </div>
+    <div class="f-group" style="padding-bottom:0">
+      <label class="f-label">Detailed Description</label>
+      <textarea class="f-input f-textarea" style="min-height:100px" placeholder="Describe the work done, decisions made, outcomes achieved…"></textarea>
+    </div>
+  </div>
+
+  <div class="section-label">Work Mode</div>
+  <div class="card card-pad">
+    <label class="f-label">Where was this work done?</label>
+    <div class="chips" id="modeChips">
+      <span class="chip on" onclick="toggleChip(this,'modeChips','single')">In Office</span>
+      <span class="chip" onclick="toggleChip(this,'modeChips','single')">Field Visit</span>
+      <span class="chip" onclick="toggleChip(this,'modeChips','single')">Work from Home</span>
+      <span class="chip" onclick="toggleChip(this,'modeChips','single')">Virtual / Online</span>
+    </div>
+  </div>
+
+  <div style="padding:4px 14px 6px">
+    <div style="background:var(--surf2);border-radius:var(--r-sm);padding:10px 13px;display:flex;align-items:center;gap:9px;margin-bottom:12px">
+      <span style="font-size:18px">📍</span>
+      <div>
+        <div style="font-size:12px;font-weight:700;color:var(--txt)">Location &amp; timestamp on submit</div>
+        <div style="font-size:10px;color:var(--txt3)">GPS coordinates captured automatically</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-primary btn-outline" onclick="showToast('Draft saved')">Save Draft</button>
+    <button class="btn-primary btn-navy" onclick="showToast('✓ Work log submitted · Location captured')">Submit Log 📤</button>
+  </div>`;
+}
+
+function updateOfficeDur(){
+  const ci=qs('#officeIn')?.value;
+  const co=qs('#officeOut')?.value;
+  const pill=qs('#officeDurPill');
+  if(!pill)return;
+  const dur=calcDuration(ci,co);
+  pill.textContent=dur==='--'?'⏱ Enter end time':'⏱ '+dur;
+}
+
+/* ─── INIT ──────────────────────────────────────── */
+function init(){
+  // clock
+  setInterval(()=>{
+    const d=new Date(),h=d.getHours(),m=d.getMinutes();
+    const ap=h>=12?'PM':'AM',h12=h%12||12;
+    qs('#sTime').textContent=h12+':'+(m<10?'0':'')+m+' '+ap;
+  },30000);
+  // bootstrap agent tab
+  renderAgentTab(0);
+  renderHawkerTab(0);
+}
+
+function renderHawkerTab(idx){
+  hawkerTabIdx=idx;
+  const labels=['Mark your attendance first','Visit hawkers in your area','Survey readers for leads','Develop new areas for growth'];
+  if(idx===0) qs('#hawkerBody').innerHTML=renderAttendance();
+  if(idx===1) qs('#hawkerBody').innerHTML=renderHawkerVisit();
+  if(idx===2) qs('#hawkerBody').innerHTML=renderReaderVisit();
+  if(idx===3) qs('#hawkerBody').innerHTML=renderNewArea();
+}
+
+window.addEventListener('load',init);
+</script>
+
+<!-- ══════════ Patrika SSO bootstrap (injected) ══════════ -->
+<script>
+(function(){
+  function hasSession(){
+    try { return !!(sessionStorage.getItem('patrika_profile')||localStorage.getItem('patrika_profile')||sessionStorage.getItem('patrika_token')||localStorage.getItem('patrika_token')); }
+    catch(e){ return false; }
+  }
+  function enter(){ try { /* starts on role picker scr-pick — no login to skip */ } catch(e){ console.warn('[sso] enter failed', e); } }
+  function boot(){
+    // Only auto-skip the app's own login when launched inside the authenticated suite session.
+    if(!hasSession()) return;
+    enter();
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(boot,0); });
+  else setTimeout(boot,0);
+})();
+</script>
+
+</body>
+</html>

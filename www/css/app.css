@@ -201,6 +201,16 @@ td.r,th.r{text-align:right}
 .tagrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 @media(max-width:400px){.applist{grid-template-columns:1fr}}
 
+/* Field app embedded in the authenticated shell */
+.appframe-bar{display:flex;align-items:center;gap:12px;margin:-18px -20px 12px;padding:9px 16px;background:var(--surf);border-bottom:1px solid var(--brd);position:sticky;top:-18px;z-index:6}
+.appframe-bar b{font-family:Georgia,serif;font-size:15px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.appframe-wrap{width:100%;height:calc(100dvh - var(--header-h) - 96px);border:1px solid var(--brd2);border-radius:var(--r);overflow:hidden;background:var(--surf);box-shadow:var(--shd)}
+.appframe{width:100%;height:100%;border:0;display:block}
+@media(max-width:820px){
+  .appframe-bar{margin:-14px -13px 10px;top:-14px}
+  .appframe-wrap{height:calc(100dvh - var(--header-h) - 150px)}
+}
+
 /* Hero (home) */
 .hero{background:linear-gradient(135deg,var(--navy) 0%,#2A3F65 100%);border-radius:var(--r);color:#fff;padding:22px;margin-bottom:15px;position:relative;overflow:hidden}
 .hero::after{content:"";position:absolute;inset:0;background:radial-gradient(420px 200px at 90% 0%,rgba(201,150,26,.28),transparent 60%)}
