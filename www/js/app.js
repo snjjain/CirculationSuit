@@ -694,9 +694,10 @@ function liveGet(cacheKey, path) {
 }
 
 const DCR_MODULES = [
-  { key: "visit",  screen: "dcr_visit",  icon: "📝", tint: "var(--gold-l)", label: "Record Visit",  desc: "Log an agent or hawker visit." },
-  { key: "today",  screen: "dcr_today",  icon: "📋", tint: "var(--blue-l)", label: "Today's Visits", desc: "Visits you've submitted today." },
-  { key: "report", screen: "dcr_report", icon: "📊", tint: "var(--grn-l)",  label: "Day Report",     desc: "Your visit summary for the day." },
+  { key: "visit",  screen: "dcr_visit",  icon: "📝", tint: "var(--gold-l)",   label: "Record Visit",  desc: "Agent, hawker or office visit." },
+  { key: "plan",   screen: "dcr_plan",   icon: "🗓️", tint: "var(--purple-l)", label: "Tour Planning", desc: "Plan visits ahead." },
+  { key: "today",  screen: "dcr_today",  icon: "📋", tint: "var(--blue-l)",   label: "Today's Visits", desc: "Visits you've submitted today." },
+  { key: "report", screen: "dcr_report", icon: "📊", tint: "var(--grn-l)",    label: "Day Report",     desc: "Your visit summary for the day." },
 ];
 function dcrCtx() { return S.live.dcr && S.live.dcr.context; }
 async function fetchDcr() {
@@ -775,35 +776,113 @@ window.dcrGeo = () => {
     p => { S.live.dcrGeo = { lat: p.coords.latitude, lng: p.coords.longitude }; const g = document.getElementById("dcr-geo"); if (g) g.textContent = "✓ " + S.live.dcrGeo.lat.toFixed(4) + ", " + S.live.dcrGeo.lng.toFixed(4); toast("Location captured"); },
     () => toast("Could not get location"));
 };
+const DCR_PURPOSES = ["Routine visit", "Collection", "Supply issue", "Complaint", "Growth / new copies", "Dues follow-up", "New agency/hawker", "Other"];
+const DCR_OUTCOMES = ["Met", "Not available", "Resolved", "Pending", "Escalated"];
+const dcrOpts = arr => arr.map(o => `<option>${o}</option>`).join("");
+window.dcrSetKind = k => { S.live.dcrKind = k; if (k !== "office") S.live.dcrType = k; S.live.dcrSelected = null; S.live.dcrTargets = null; render(); };
 window.dcrSubmitVisit = async () => {
-  const sel = S.live.dcrSelected; if (!sel) { toast("Please select an agent or hawker"); return; }
-  const body = { target_type: S.live.dcrType || "agent", unit_code: sel.unit_code, target_code: sel.code, target_name: sel.name, target_extra: sel.extra, purpose: gv("dcr-purpose"), outcome: gv("dcr-outcome"), remarks: gv("dcr-remarks") };
+  const kind = S.live.dcrKind || "agent";
+  const body = { target_type: kind, purpose: gv("dcr-purpose"), outcome: gv("dcr-outcome"), remarks: gv("dcr-remarks"), check_in: gv("dcr-checkin"), check_out: gv("dcr-checkout") };
+  if (kind === "office") {
+    body.work_type = gv("dcr-worktype"); body.location = gv("dcr-location"); body.assigned_by = gv("dcr-assigned");
+    body.attendees = gv("dcr-attendees"); body.subject = gv("dcr-subject");
+    const dt = gv("dcr-date"); if (dt) body.visit_date = dt;
+  } else {
+    const sel = S.live.dcrSelected; if (!sel) { toast("Please select an " + kind); return; }
+    body.unit_code = sel.unit_code; body.target_code = sel.code; body.target_name = sel.name; body.target_extra = sel.extra;
+    body.amount_collected = gv("dcr-amount");
+    if (kind === "agent") { body.payment_mode = gv("dcr-paymode"); body.payment_type = gv("dcr-paytype"); body.copies_committed = gv("dcr-copies"); body.growth_start = gv("dcr-growth"); body.dues_clear_by = gv("dcr-dues"); }
+    if (kind === "hawker") { body.outstanding_amount = gv("dcr-outstanding"); }
+  }
   if (S.live.dcrGeo) { body.lat = S.live.dcrGeo.lat; body.lng = S.live.dcrGeo.lng; }
   const r = await api.post("/api/dcr/visit", body);
   if (r && r.ok) { toast("✓ Visit recorded"); S.live.dcrSelected = null; S.live.dcrGeo = null; delete S.live["dcrToday_" + todayISO()]; delete S.live["dcrRep_" + todayISO()]; go("dcr_today"); }
   else toast((r && r.detail) || "Could not submit");
 };
+window.dcrSubmitTour = async () => {
+  const sel = S.live.dcrSelected; if (!sel) { toast("Select an agent or hawker to plan"); return; }
+  const tour_date = gv("dcrp-date"); if (!tour_date) { toast("Pick a tour date"); return; }
+  const body = { target_type: S.live.dcrType || "agent", unit_code: sel.unit_code, target_code: sel.code, target_name: sel.name, target_extra: sel.extra, tour_date, visit_time: gv("dcrp-time"), purpose: gv("dcrp-purpose"), description: gv("dcrp-desc") };
+  const r = await api.post("/api/dcr/tour", body);
+  if (r && r.ok) { toast("✓ Visit planned"); S.live.dcrSelected = null; delete S.live["dcrTours"]; go("dcr_plan"); }
+  else toast((r && r.detail) || "Could not save");
+};
 VIEWS.dcr_visit = () => {
   if (!S.live.dcr) { if (!S.live._dcrLoading) fetchDcr(); return dcrBackBar() + `<div class="card pad">Loading…</div>`; }
-  const type = S.live.dcrType || "agent", sel = S.live.dcrSelected;
+  const kind = S.live.dcrKind || "agent", sel = S.live.dcrSelected;
+  const two = (a, b) => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">${a}${b}</div>`;
+  const fld = (label, inner) => `<div class="fld"><label>${label}</label>${inner}</div>`;
+  const roleSeg = `<div class="seg" style="margin-bottom:12px">
+    <button class="${kind === "agent" ? "on" : ""}" onclick="dcrSetKind('agent')">🏢 Agent</button>
+    <button class="${kind === "hawker" ? "on" : ""}" onclick="dcrSetKind('hawker')">🛵 Hawker</button>
+    <button class="${kind === "office" ? "on" : ""}" onclick="dcrSetKind('office')">🗂️ Office</button></div>`;
+  const picker = kind === "office" ? "" : `
+    <div class="fld"><label>Find ${kind}</label><input id="dcr-q" placeholder="Search name or code…" oninput="dcrSearch()" autocomplete="off"></div>
+    <div id="dcr-results" class="dcr-results"></div>
+    <div id="dcr-selected">${sel ? dcrSelectedHTML(sel) : ""}</div>`;
+  let fields = "";
+  if (kind === "agent") {
+    fields = two(fld("Check-In", `<input id="dcr-checkin" type="time">`), fld("Check-Out", `<input id="dcr-checkout" type="time">`))
+      + fld("Visit Purpose", `<select id="dcr-purpose">${dcrOpts(DCR_PURPOSES)}</select>`)
+      + two(fld("Payment Mode", `<select id="dcr-paymode"><option>None</option><option>Cash</option><option>Cheque</option><option>UPI</option><option>NEFT/RTGS</option></select>`),
+            fld("Payment Type", `<select id="dcr-paytype"><option>—</option><option>Full</option><option>Partial</option><option>Advance</option></select>`))
+      + two(fld("Amount Collected (₹)", `<input id="dcr-amount" type="number" inputmode="numeric" placeholder="0">`),
+            fld("New Copies Committed", `<input id="dcr-copies" type="number" inputmode="numeric" placeholder="0">`))
+      + two(fld("Growth Start Date", `<input id="dcr-growth" type="date">`), fld("Agent will clear dues by", `<input id="dcr-dues" type="date">`))
+      + fld("Outcome", `<select id="dcr-outcome">${dcrOpts(DCR_OUTCOMES)}</select>`)
+      + fld("Notes / Remarks", `<textarea id="dcr-remarks" placeholder="Meeting notes, agent feedback, next steps…"></textarea>`);
+  } else if (kind === "hawker") {
+    fields = fld("Visit Time", `<input id="dcr-checkin" type="time">`)
+      + two(fld("Outstanding (₹)", `<input id="dcr-outstanding" type="number" inputmode="numeric" placeholder="0">`),
+            fld("Collected (₹)", `<input id="dcr-amount" type="number" inputmode="numeric" placeholder="0">`))
+      + fld("Visit Purpose", `<select id="dcr-purpose">${dcrOpts(DCR_PURPOSES)}</select>`)
+      + fld("Outcome", `<select id="dcr-outcome">${dcrOpts(DCR_OUTCOMES)}</select>`)
+      + fld("Remarks / Notes", `<textarea id="dcr-remarks" placeholder="Area observations, hawker feedback, issue if any…"></textarea>`);
+  } else {
+    fields = fld("Work Type", `<select id="dcr-worktype"><option>Meeting</option><option>Report / MIS</option><option>Training</option><option>Admin work</option><option>Field coordination</option><option>Other</option></select>`)
+      + two(fld("Date", `<input id="dcr-date" type="date" value="${todayISO()}">`), fld("Location", `<input id="dcr-location" placeholder="Office / venue">`))
+      + two(fld("Start Time", `<input id="dcr-checkin" type="time">`), fld("End Time", `<input id="dcr-checkout" type="time">`))
+      + fld("Permitted / Assigned By", `<input id="dcr-assigned" placeholder="Name & designation">`)
+      + fld("Attendees / Others", `<input id="dcr-attendees" placeholder="Names of others present (optional)">`)
+      + fld("Subject / Topic", `<input id="dcr-subject" placeholder="Brief subject line">`)
+      + fld("Detailed Description", `<textarea id="dcr-remarks" placeholder="Work done, decisions, outcomes…"></textarea>`);
+  }
+  const geo = `<div style="display:flex;gap:8px;align-items:center;margin:4px 0 12px">
+    <button class="btn sm" onclick="dcrGeo()">📍 Use my location</button>
+    <span id="dcr-geo" class="lbl" style="color:var(--muted)">${S.live.dcrGeo ? "✓ " + S.live.dcrGeo.lat.toFixed(4) + ", " + S.live.dcrGeo.lng.toFixed(4) : "optional"}</span></div>`;
   const inner = `<div class="card pad field-col">
     <div class="lbl" style="margin-bottom:8px">Record a Visit</div>
+    ${roleSeg}${picker}${fields}${geo}
+    <button class="btn pri block" onclick="dcrSubmitVisit()">Submit ${kind} visit</button></div>`;
+  return dcrScreen(inner);
+};
+
+/* ── Tour Planning ── */
+VIEWS.dcr_plan = () => {
+  if (!S.live.dcr) { if (!S.live._dcrLoading) fetchDcr(); return dcrBackBar() + `<div class="card pad">Loading…</div>`; }
+  const type = S.live.dcrType || "agent", sel = S.live.dcrSelected;
+  const tours = liveGet("dcrTours", "/api/dcr/tours");
+  const form = `<div class="card pad field-col">
+    <div class="lbl" style="margin-bottom:8px">Plan a Visit</div>
     <div class="seg" style="margin-bottom:12px">
       <button class="${type === "agent" ? "on" : ""}" onclick="dcrSetType('agent')">🏢 Agent</button>
       <button class="${type === "hawker" ? "on" : ""}" onclick="dcrSetType('hawker')">🛵 Hawker</button></div>
     <div class="fld"><label>Find ${type}</label><input id="dcr-q" placeholder="Search name or code…" oninput="dcrSearch()" autocomplete="off"></div>
     <div id="dcr-results" class="dcr-results"></div>
     <div id="dcr-selected">${sel ? dcrSelectedHTML(sel) : ""}</div>
-    <div class="fld"><label>Purpose</label><select id="dcr-purpose">
-      <option>Routine visit</option><option>Collection</option><option>Supply issue</option><option>Complaint</option><option>New agency/hawker</option><option>Payment follow-up</option><option>Other</option></select></div>
-    <div class="fld"><label>Outcome</label><select id="dcr-outcome">
-      <option>Met</option><option>Not available</option><option>Resolved</option><option>Pending</option><option>Escalated</option></select></div>
-    <div class="fld"><label>Remarks</label><textarea id="dcr-remarks" placeholder="Notes from the visit…"></textarea></div>
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-      <button class="btn sm" onclick="dcrGeo()">📍 Use my location</button>
-      <span id="dcr-geo" class="lbl" style="color:var(--muted)">${S.live.dcrGeo ? "✓ " + S.live.dcrGeo.lat.toFixed(4) + ", " + S.live.dcrGeo.lng.toFixed(4) : "optional"}</span></div>
-    <button class="btn pri block" onclick="dcrSubmitVisit()">Submit visit</button></div>`;
-  return dcrScreen(inner);
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="fld"><label>Date of Tour</label><input id="dcrp-date" type="date" value="${todayISO()}"></div>
+      <div class="fld"><label>Tentative Time</label><input id="dcrp-time" type="time"></div></div>
+    <div class="fld"><label>Visit Purpose</label><select id="dcrp-purpose">${dcrOpts(DCR_PURPOSES)}</select></div>
+    <div class="fld"><label>Purpose Description</label><textarea id="dcrp-desc" placeholder="Reason for visit and expected outcome…"></textarea></div>
+    <button class="btn pri block" onclick="dcrSubmitTour()">Save plan</button></div>`;
+  let list;
+  if (tours === undefined) list = `<div class="card pad">Loading…</div>`;
+  else {
+    const rows = ((tours && tours.tours) || []).map(t => `<tr><td>${t.tour_date}${t.visit_time ? " " + t.visit_time : ""}</td><td><span class="chip ${t.target_type === "hawker" ? "teal" : "info"}">${t.target_type}</span></td><td>${t.target_name || t.target_code}</td><td>${t.purpose || ""}</td><td>${t.status || ""}</td></tr>`);
+    list = `<div class="card"><div class="cardhead"><h3>Upcoming Tours</h3></div><div class="tablewrap"><table><thead><tr><th>When</th><th>Type</th><th>Target</th><th>Purpose</th><th>Status</th></tr></thead><tbody>${rows.join("") || `<tr><td colspan="5" style="color:var(--muted)">No planned visits</td></tr>`}</tbody></table></div></div>`;
+  }
+  return dcrScreen(`<div class="two">${form}${list}</div>`);
 };
 
 /* ── Today's Visits ── */
