@@ -481,10 +481,11 @@ module.exports = function registerSupplyDash(ctx) {
 
   // Publication → geography mapping (business rule, configurable — not hard-coded in queries).
   const PUB_GEO = {
-    'RAJASTHAN PATRIKA':      { label: 'Rajasthan + National', core: ['RAJASTHAN'] },
-    'RAJASTHAN PATRIKA CITY': { label: 'Rajasthan + National', core: ['RAJASTHAN'] },
-    'PATRIKA':                { label: 'MP + Chhattisgarh',    core: ['MADHYA PRADESH', 'CHHATTISGARH'] },
+    'RAJASTHAN PATRIKA': { label: 'Rajasthan + National', core: ['RAJASTHAN'] },
+    'PATRIKA':           { label: 'MP + Chhattisgarh',    core: ['MADHYA PRADESH', 'CHHATTISGARH'] },
   };
+  // Publications excluded from Agent Sale (by publ code). P14 = RAJASTHAN PATRIKA CITY.
+  const AGENT_EXCLUDE_PUBS = ['P14'];
 
   // Agent Sale base = REGULAR supply to CREDIT-SALE + ACTIVE agencies only.
   // DISTINCT (unit,agcd) prevents agency_master dpcd rows from fanning out supply_data.
@@ -492,7 +493,8 @@ module.exports = function registerSupplyDash(ctx) {
       WHERE ag_class_name = 'CREDIT SALE' AND COALESCE(supply_stop_flag,'N') = 'N'
         AND (suspend_date IS NULL OR suspend_date > CURDATE())) cm
     ON cm.unit = s.unit_code AND cm.agcd = s.agcd`;
-  const AGENT_WHERE = `s.sup_type_code = 'S01'`; // REGULAR (excludes FREE / subscription)
+  // REGULAR only, and drop excluded publications (Rajasthan Patrika City) from Agent Sale.
+  const AGENT_WHERE = `s.sup_type_code = 'S01' AND COALESCE(s.publ,'') NOT IN (${AGENT_EXCLUDE_PUBS.map(p => `'${p}'`).join(',')})`;
 
   // Unit → single home state (dominant state of that unit's agencies) — hawker_supply has no
   // state column, and a unit supplies many states in supply_data, so we cannot join unit→state
