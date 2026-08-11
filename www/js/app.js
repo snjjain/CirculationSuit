@@ -389,7 +389,121 @@ function appFrameView(key) {
     </div>
     <div class="appframe-wrap"><iframe class="appframe" src="apps/${key}.html" title="${title}" allow="geolocation; clipboard-write"></iframe></div>`;
 }
-Object.keys(APP_META).forEach(k => { VIEWS["app_" + k] = () => appFrameView(k); });
+/* ═══════════ Agent (Agency) app — responsive web page on live ERP data ═══════════ */
+function _inr(n, dec) { n = Number(n) || 0; return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: dec ? 2 : 0, maximumFractionDigits: dec ? 2 : 0 }); }
+function _n(n) { return (Number(n) || 0).toLocaleString("en-IN"); }
+let AGENT_TAB = "overview";
+window.agentTab = t => { AGENT_TAB = t; render(); };
+window.agentRefresh = () => { S.live.agent = null; render(); };
+window.agentSelectAgency = v => {
+  const list = (S.live.agent && S.live.agent.context && S.live.agent.context.agencies) || [];
+  S.live.agentSel = list[+v] || null; S.live.agent = null; render();
+};
+async function fetchAgent() {
+  if (S.live._agentLoading) return;
+  S.live._agentLoading = true;
+  const sel = S.live.agentSel;
+  const p = sel ? `?unit=${encodeURIComponent(sel.unit_code)}&agcd=${encodeURIComponent(sel.agcd)}` : "";
+  const amp = p ? "&" : "?";
+  const [context, summary, supply, billing, ledger] = await Promise.all([
+    api.get("/api/agent/context"),
+    api.get("/api/agent/summary" + p),
+    api.get("/api/agent/supply" + p + amp + "days=30"),
+    api.get("/api/agent/billing" + p),
+    api.get("/api/agent/ledger" + p + amp + "limit=50"),
+  ]);
+  S.live.agent = { context, summary, supply, billing, ledger };
+  S.live._agentLoading = false;
+  if (S.screen === "app_agent") render();
+}
+function _agentTabs(active) {
+  const tabs = [["overview", "Overview"], ["supply", "Supply"], ["billing", "Billing & Outstanding"], ["ledger", "Ledger"]];
+  return `<div class="seg" style="margin-bottom:14px">${tabs.map(([k, l]) => `<button class="${active === k ? "on" : ""}" onclick="agentTab('${k}')">${l}</button>`).join("")}</div>`;
+}
+function _agentHeader(ag, agencies) {
+  const sel = agencies && agencies.length > 1
+    ? `<select onchange="agentSelectAgency(this.value)" style="margin-left:auto;max-width:100%">${agencies.map((a, i) => `<option value="${i}" ${a.agcd === ag.agcd && a.unit_code === ag.unit_code ? "selected" : ""}>${a.ag_name} · ${a.unit_code}</option>`).join("")}</select>`
+    : "";
+  return `<div class="pagehead">
+    <div><div class="crumbs">${ag.unit_name || ag.unit_code}${ag.city_name ? " · " + ag.city_name : ""}${ag.state_name ? " · " + ag.state_name : ""}</div>
+      <h2>${ag.ag_name}</h2>
+      <div class="sub">Agency ${ag.agcd}${ag.ag_class_name ? " · " + ag.ag_class_name : ""}${ag.executive_name ? " · Exec: " + ag.executive_name : ""}</div>
+    </div>${sel}</div>`;
+}
+function _agentBack() {
+  return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+    <button class="btn sm" onclick="go('home')">← Apps</button>
+    <button class="btn sm" onclick="agentRefresh()">↻ Refresh</button></div>`;
+}
+VIEWS.app_agent = () => {
+  const d = S.live.agent;
+  if (!d) { if (!S.live._agentLoading) fetchAgent(); return _agentBack() + `<div class="card pad">Loading your agency data…</div>`; }
+  const sum = d.summary || {};
+  const ag = sum.agency || (d.context && d.context.primary);
+  const agencies = (d.context && d.context.agencies) || [];
+  if (!ag) return _agentBack() + `<div class="card pad" style="color:var(--muted)">No active agency is linked to your login. Please contact your administrator.</div>`;
+
+  const kpis = `<div class="grid kpis">
+    ${kpi("Today's Supply", _n(sum.today_copies) + " cp", sum.latest_supply_date || "", "fl", "var(--blue-l)", "📦")}
+    ${kpi("Outstanding", _inr(sum.outstanding), "Current", "fl", "var(--red-l)", "💰")}
+    ${kpi("This Month Bill", d.billing && d.billing.month_bill != null ? _inr(d.billing.month_bill) : "—", (d.billing && d.billing.month_bill_label) || "", "fl", "var(--gold-l)", "🧾")}
+    ${kpi("Collected (MTD)", _inr(sum.collection_this_month), sum.last_collection_date ? "last " + sum.last_collection_date : "", "fl", "var(--grn-l)", "₹")}
+  </div>`;
+
+  let body = "";
+  if (AGENT_TAB === "overview") {
+    const pubRows = (sum.today_by_publication || []).map(p => `<tr><td>${p.publication}</td><td class="r num">${_n(p.copies)}</td></tr>`);
+    body = kpis + `<div class="two">
+      <div class="card"><div class="cardhead"><h3>Latest Supply by Publication</h3><span class="lbl">${sum.latest_supply_date || ""}</span></div>
+        <div class="tablewrap"><table><thead><tr><th>Publication</th><th class="r">Copies</th></tr></thead><tbody>${pubRows.join("") || `<tr><td colspan="2" style="color:var(--muted)">No supply found</td></tr>`}</tbody></table></div></div>
+      <div class="card pad"><div class="lbl" style="margin-bottom:8px">Account Snapshot</div>
+        <div class="stat-pair"><span>Opening</span><span class="num">${_inr(sum.opening)}</span></div>
+        <div class="stat-pair"><span>Billed (cumulative)</span><span class="num">${_inr(sum.billed)}</span></div>
+        <div class="stat-pair"><span>Received</span><span class="num" style="color:var(--grn)">${_inr(sum.received)}</span></div>
+        <div class="stat-pair"><span>Outstanding</span><span class="num" style="color:var(--red);font-weight:800">${_inr(sum.outstanding)}</span></div>
+        <div class="stat-pair"><span>Total copies (period)</span><span class="num">${_n(sum.total_copies)}</span></div>
+      </div></div>`;
+  } else if (AGENT_TAB === "supply") {
+    const sup = d.supply || {};
+    const brk = (sup.breakdown || []).map(b => `<tr><td>${b.publication}</td><td>${b.edition || ""}</td><td>${b.type || ""}</td><td class="r num">${_n(b.copies)}</td><td class="r num">${_inr(b.rate, true)}</td><td class="r num">${_n(b.commission)}%</td></tr>`);
+    const trend = sup.days || [];
+    const maxc = Math.max(1, ...trend.map(t => t.copies));
+    const spark = trend.map(t => `<div title="${t.date}: ${_n(t.copies)} copies" style="flex:1;min-width:3px;height:${Math.max(4, Math.round(t.copies / maxc * 60))}px;background:var(--blue);border-radius:2px 2px 0 0;opacity:.85"></div>`).join("");
+    body = `<div class="card pad"><div class="cardhead" style="padding:0 0 10px;border:0"><h3>Supply — last ${trend.length} days</h3><span class="lbl">latest ${sup.latest_supply_date || ""}</span></div>
+        <div style="display:flex;align-items:flex-end;gap:2px;height:66px">${spark}</div></div>
+      <div class="card"><div class="cardhead"><h3>Latest Supply Breakdown</h3></div>
+        <div class="tablewrap"><table><thead><tr><th>Publication</th><th>Edition</th><th>Type</th><th class="r">Copies</th><th class="r">Rate</th><th class="r">Comm</th></tr></thead>
+        <tbody>${brk.join("") || `<tr><td colspan="6" style="color:var(--muted)">No supply found</td></tr>`}</tbody></table></div></div>`;
+  } else if (AGENT_TAB === "billing") {
+    const b = d.billing || {};
+    body = `<div class="two">
+      <div class="card pad"><div class="lbl" style="margin-bottom:8px">Outstanding Breakdown</div>
+        <div class="stat-pair"><span>Opening balance</span><span class="num">${_inr(b.opening)}</span></div>
+        <div class="stat-pair"><span>Billed (cumulative)</span><span class="num">${_inr(b.billed_cumulative)}</span></div>
+        <div class="stat-pair"><span>Other debit</span><span class="num">${_inr(b.other_debit)}</span></div>
+        <div class="stat-pair"><span>Received</span><span class="num" style="color:var(--grn)">${_inr(b.received)}</span></div>
+        <div class="stat-pair"><span>Other credit</span><span class="num">${_inr(b.other_credit)}</span></div>
+        <div class="stat-pair"><span>Outstanding</span><span class="num" style="color:var(--red);font-weight:800">${_inr(b.outstanding)}</span></div>
+      </div>
+      <div class="card pad"><div class="lbl" style="margin-bottom:8px">This Month &amp; Copies</div>
+        <div class="stat-pair"><span>${b.month_bill_label || "Month"} bill</span><span class="num">${b.month_bill != null ? _inr(b.month_bill) : "—"}</span></div>
+        <div class="stat-pair"><span>Security balance</span><span class="num">${_inr(b.security_balance)}</span></div>
+        <div class="stat-pair"><span>Total copies (period)</span><span class="num">${_n(b.total_copies)}</span></div>
+        <div class="stat-pair"><span>Day copies</span><span class="num">${_n(b.day_copies)}</span></div>
+      </div></div>`;
+  } else if (AGENT_TAB === "ledger") {
+    const rows = ((d.ledger && d.ledger.rows) || []).map(r => `<tr>
+      <td>${r.date || ""}</td><td>${r.doc_no || ""}</td><td>${r.mode || r.category || ""}</td>
+      <td class="r num" style="color:${r.is_receipt ? "var(--grn)" : "var(--red)"}">${_inr(Math.abs(r.amount), true)}${r.is_receipt ? " cr" : " dr"}</td></tr>`);
+    body = `<div class="card"><div class="cardhead"><h3>Recent Transactions</h3><span class="lbl">receipts &amp; charges</span></div>
+      <div class="tablewrap"><table><thead><tr><th>Date</th><th>Voucher</th><th>Mode</th><th class="r">Amount</th></tr></thead>
+      <tbody>${rows.join("") || `<tr><td colspan="4" style="color:var(--muted)">No transactions found</td></tr>`}</tbody></table></div></div>`;
+  }
+  return _agentBack() + _agentHeader(ag, agencies) + _agentTabs(AGENT_TAB) + body;
+};
+
+/* Remaining field apps still open their standalone prototype in an iframe (redesigned one-by-one). */
+Object.keys(APP_META).forEach(k => { if (!VIEWS["app_" + k]) VIEWS["app_" + k] = () => appFrameView(k); });
 
 /* ---- Dashboard: Command Centre ---- */
 /* ── Command Centre helpers ─────────────────────────────── */
