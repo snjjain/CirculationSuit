@@ -389,117 +389,296 @@ function appFrameView(key) {
     </div>
     <div class="appframe-wrap"><iframe class="appframe" src="apps/${key}.html" title="${title}" allow="geolocation; clipboard-write"></iframe></div>`;
 }
-/* ═══════════ Agent (Agency) app — responsive web page on live ERP data ═══════════ */
+/* ═══════════ Agent (Agency) app — feature-complete responsive web app on live ERP data ═══════════ */
 function _inr(n, dec) { n = Number(n) || 0; return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: dec ? 2 : 0, maximumFractionDigits: dec ? 2 : 0 }); }
 function _n(n) { return (Number(n) || 0).toLocaleString("en-IN"); }
-let AGENT_TAB = "overview";
-window.agentTab = t => { AGENT_TAB = t; render(); };
-window.agentRefresh = () => { S.live.agent = null; render(); };
-window.agentSelectAgency = v => {
-  const list = (S.live.agent && S.live.agent.context && S.live.agent.context.agencies) || [];
-  S.live.agentSel = list[+v] || null; S.live.agent = null; render();
-};
+
+/* Every feature from the original mobile app, as icon modules */
+const AGENT_MODULES = [
+  { key: "supply",     screen: "agent_supply",     icon: "📦", tint: "var(--blue-l)",   label: "Today's Supply",   desc: "Copies supplied by publication & edition." },
+  { key: "history",    screen: "agent_history",    icon: "📅", tint: "var(--teal-l)",   label: "Supply History",   desc: "Month-wise supply — current + last 6 months." },
+  { key: "billing",    screen: "agent_billing",    icon: "🧾", tint: "var(--gold-l)",   label: "Billing",          desc: "Monthly bill, outstanding & account status." },
+  { key: "ledger",     screen: "agent_ledger",     icon: "📒", tint: "var(--purple-l)", label: "Bills & Ledger",   desc: "Every debit & credit on your account." },
+  { key: "payments",   screen: "agent_payments",   icon: "💳", tint: "var(--grn-l)",    label: "Payment History",  desc: "Receipts / payments made in." },
+  { key: "netsales",   screen: "agent_netsales",   icon: "📈", tint: "var(--red-l)",    label: "Net Sales",        desc: "Sale value net of commission." },
+  { key: "competitor", screen: "agent_competitor", icon: "📊", tint: "var(--gold-l)",   label: "Competitor Copies",desc: "Report competitor circulation." },
+  { key: "feedback",   screen: "agent_feedback",   icon: "💬", tint: "var(--grn-l)",    label: "Feedback",         desc: "Share issues or suggestions." },
+  { key: "profile",    screen: "agent_profile",    icon: "👤", tint: "var(--navy-l)",   label: "User Profile",     desc: "Agency & contact details." },
+  { key: "pay",        screen: "agent_pay",        icon: "💰", tint: "var(--teal-l)",   label: "Make Payment",     desc: "How to pay your outstanding." },
+];
+
+/* Date window: current + last 6 months only */
+let AGENT_MONTH = null;
+function agentMonthList() { const out = [], d = new Date(); for (let i = 0; i <= 6; i++) { const dd = new Date(d.getFullYear(), d.getMonth() - i, 1); out.push(dd.getFullYear() + "-" + String(dd.getMonth() + 1).padStart(2, "0")); } return out; }
+function agentMonthLabel(ym) { const [y, m] = ym.split("-").map(Number); return new Date(y, m - 1, 1).toLocaleString("en-IN", { month: "short", year: "numeric" }); }
+function agentCurMonth() { return AGENT_MONTH || agentMonthList()[0]; }
+window.agentSetMonth = ym => { AGENT_MONTH = ym; render(); };
+window.agentRefresh = () => { Object.keys(S.live).forEach(k => { if (k.indexOf("ag") === 0 || k === "agent") delete S.live[k]; }); render(); };
+window.agentSelectAgency = v => { const list = (S.live.agent && S.live.agent.context && S.live.agent.context.agencies) || []; S.live.agentSel = list[+v] || null; window.agentRefresh(); };
+function agentKey() { const s = S.live.agentSel; return s ? s.unit_code + s.agcd : "me"; }
+function agentSelQS() { const s = S.live.agentSel; return s ? "unit=" + encodeURIComponent(s.unit_code) + "&agcd=" + encodeURIComponent(s.agcd) : ""; }
+function agentPath(base, params) { const all = [agentSelQS(), params].filter(Boolean).join("&"); return base + (all ? "?" + all : ""); }
+
+/* Lazy per-(module,agency,month) loader. Returns undefined while loading. */
+const _agentInflight = new Set();
+function agentGet(cacheKey, path) {
+  if (cacheKey in S.live) return S.live[cacheKey];
+  if (!_agentInflight.has(cacheKey)) {
+    _agentInflight.add(cacheKey);
+    api.get(path).then(d => { S.live[cacheKey] = d || null; _agentInflight.delete(cacheKey); if (S.screen === "app_agent" || String(S.screen).indexOf("agent_") === 0) render(); });
+  }
+  return undefined;
+}
+/* Base bundle (context + summary + billing) loaded once */
 async function fetchAgent() {
   if (S.live._agentLoading) return;
   S.live._agentLoading = true;
   const sel = S.live.agentSel;
   const p = sel ? `?unit=${encodeURIComponent(sel.unit_code)}&agcd=${encodeURIComponent(sel.agcd)}` : "";
-  const amp = p ? "&" : "?";
-  const [context, summary, supply, billing, ledger] = await Promise.all([
-    api.get("/api/agent/context"),
-    api.get("/api/agent/summary" + p),
-    api.get("/api/agent/supply" + p + amp + "days=30"),
-    api.get("/api/agent/billing" + p),
-    api.get("/api/agent/ledger" + p + amp + "limit=50"),
+  const [context, summary, billing] = await Promise.all([
+    api.get("/api/agent/context"), api.get("/api/agent/summary" + p), api.get("/api/agent/billing" + p),
   ]);
-  S.live.agent = { context, summary, supply, billing, ledger };
+  S.live.agent = { context, summary, billing };
   S.live._agentLoading = false;
-  if (S.screen === "app_agent") render();
+  if (S.screen === "app_agent" || String(S.screen).indexOf("agent_") === 0) render();
 }
-function _agentTabs(active) {
-  const tabs = [["overview", "Overview"], ["supply", "Supply"], ["billing", "Billing & Outstanding"], ["ledger", "Ledger"]];
-  return `<div class="seg" style="margin-bottom:14px">${tabs.map(([k, l]) => `<button class="${active === k ? "on" : ""}" onclick="agentTab('${k}')">${l}</button>`).join("")}</div>`;
-}
-function _agentHeader(ag, agencies) {
-  const sel = agencies && agencies.length > 1
-    ? `<select onchange="agentSelectAgency(this.value)" style="margin-left:auto;max-width:100%">${agencies.map((a, i) => `<option value="${i}" ${a.agcd === ag.agcd && a.unit_code === ag.unit_code ? "selected" : ""}>${a.ag_name} · ${a.unit_code}</option>`).join("")}</select>`
+function agentAgency() { const d = S.live.agent; return d && ((d.summary && d.summary.agency) || (d.context && d.context.primary)); }
+function agentAgencies() { const d = S.live.agent; return (d && d.context && d.context.agencies) || []; }
+
+function agentHeaderBar() {
+  const ag = agentAgency(), list = agentAgencies();
+  if (!ag) return "";
+  const sel = list.length > 1
+    ? `<select onchange="agentSelectAgency(this.value)" style="margin-left:auto;max-width:100%">${list.map((a, i) => `<option value="${i}" ${a.agcd === ag.agcd && a.unit_code === ag.unit_code ? "selected" : ""}>${a.ag_name} · ${a.unit_code}</option>`).join("")}</select>`
     : "";
-  return `<div class="pagehead">
-    <div><div class="crumbs">${ag.unit_name || ag.unit_code}${ag.city_name ? " · " + ag.city_name : ""}${ag.state_name ? " · " + ag.state_name : ""}</div>
-      <h2>${ag.ag_name}</h2>
-      <div class="sub">Agency ${ag.agcd}${ag.ag_class_name ? " · " + ag.ag_class_name : ""}${ag.executive_name ? " · Exec: " + ag.executive_name : ""}</div>
+  return `<div class="pagehead"><div>
+    <div class="crumbs">${ag.unit_name || ag.unit_code}${ag.city_name ? " · " + ag.city_name : ""}${ag.state_name ? " · " + ag.state_name : ""}</div>
+    <h2>${ag.ag_name}</h2>
+    <div class="sub">Agency ${ag.agcd}${ag.ag_class_name ? " · " + ag.ag_class_name : ""}${ag.executive_name ? " · Exec: " + ag.executive_name : ""}</div>
     </div>${sel}</div>`;
 }
-function _agentBack() {
-  return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-    <button class="btn sm" onclick="go('home')">← Apps</button>
+function agentModuleBar() {
+  return `<div class="seg" style="margin-bottom:12px">${AGENT_MODULES.map(m => `<button class="${S.screen === m.screen ? "on" : ""}" onclick="go('${m.screen}')" title="${m.label}">${m.icon} ${m.label}</button>`).join("")}</div>`;
+}
+function agentMonthPicker() {
+  const cur = agentCurMonth();
+  return `<div class="filters" style="margin-bottom:13px">
+    <span class="lbl" style="align-self:center">📅 Period</span>
+    <select onchange="agentSetMonth(this.value)">${agentMonthList().map(m => `<option value="${m}" ${m === cur ? "selected" : ""}>${agentMonthLabel(m)}</option>`).join("")}</select>
+    <span class="lbl" style="align-self:center;color:var(--muted)">current + last 6 months</span></div>`;
+}
+function agentBackBar() {
+  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+    <button class="btn sm" onclick="go('app_agent')">← Dashboard</button>
     <button class="btn sm" onclick="agentRefresh()">↻ Refresh</button></div>`;
 }
+/* wrapper for every module screen: back + agency header + module menu (+ optional month picker) + content */
+function agentScreen(inner, withMonth) {
+  if (!S.live.agent) { if (!S.live._agentLoading) fetchAgent(); return agentBackBar() + `<div class="card pad">Loading…</div>`; }
+  if (!agentAgency()) return agentBackBar() + `<div class="card pad" style="color:var(--muted)">No active agency is linked to your login. Please contact your administrator.</div>`;
+  return agentBackBar() + agentHeaderBar() + agentModuleBar() + (withMonth ? agentMonthPicker() : "") + inner;
+}
+const _agLoad = `<div class="card pad">Loading…</div>`;
+
+/* ── Icon dashboard (landing) ── */
 VIEWS.app_agent = () => {
   const d = S.live.agent;
-  if (!d) { if (!S.live._agentLoading) fetchAgent(); return _agentBack() + `<div class="card pad">Loading your agency data…</div>`; }
-  const sum = d.summary || {};
-  const ag = sum.agency || (d.context && d.context.primary);
-  const agencies = (d.context && d.context.agencies) || [];
-  if (!ag) return _agentBack() + `<div class="card pad" style="color:var(--muted)">No active agency is linked to your login. Please contact your administrator.</div>`;
-
+  if (!d) { if (!S.live._agentLoading) fetchAgent(); return agentBackBar() + `<div class="card pad">Loading your agency…</div>`; }
+  const ag = agentAgency(), sum = d.summary || {};
+  if (!ag) return agentBackBar() + `<div class="card pad" style="color:var(--muted)">No active agency is linked to your login. Please contact your administrator.</div>`;
   const kpis = `<div class="grid kpis">
     ${kpi("Today's Supply", _n(sum.today_copies) + " cp", sum.latest_supply_date || "", "fl", "var(--blue-l)", "📦")}
     ${kpi("Outstanding", _inr(sum.outstanding), "Current", "fl", "var(--red-l)", "💰")}
     ${kpi("This Month Bill", d.billing && d.billing.month_bill != null ? _inr(d.billing.month_bill) : "—", (d.billing && d.billing.month_bill_label) || "", "fl", "var(--gold-l)", "🧾")}
     ${kpi("Collected (MTD)", _inr(sum.collection_this_month), sum.last_collection_date ? "last " + sum.last_collection_date : "", "fl", "var(--grn-l)", "₹")}
   </div>`;
+  const tiles = AGENT_MODULES.map(m => `<button class="card appcard" onclick="go('${m.screen}')" aria-label="${m.label}">
+    <div class="app-top"><div class="aico" style="background:${m.tint}">${m.icon}</div></div>
+    <b>${m.label}</b><small>${m.desc}</small></button>`).join("");
+  return agentBackBar() + agentHeaderBar() + kpis + `<div class="sb-lbl" style="padding-left:2px">Modules</div><div class="applist">${tiles}</div>`;
+};
 
-  let body = "";
-  if (AGENT_TAB === "overview") {
-    const pubRows = (sum.today_by_publication || []).map(p => `<tr><td>${p.publication}</td><td class="r num">${_n(p.copies)}</td></tr>`);
-    body = kpis + `<div class="two">
-      <div class="card"><div class="cardhead"><h3>Latest Supply by Publication</h3><span class="lbl">${sum.latest_supply_date || ""}</span></div>
-        <div class="tablewrap"><table><thead><tr><th>Publication</th><th class="r">Copies</th></tr></thead><tbody>${pubRows.join("") || `<tr><td colspan="2" style="color:var(--muted)">No supply found</td></tr>`}</tbody></table></div></div>
-      <div class="card pad"><div class="lbl" style="margin-bottom:8px">Account Snapshot</div>
-        <div class="stat-pair"><span>Opening</span><span class="num">${_inr(sum.opening)}</span></div>
-        <div class="stat-pair"><span>Billed (cumulative)</span><span class="num">${_inr(sum.billed)}</span></div>
-        <div class="stat-pair"><span>Received</span><span class="num" style="color:var(--grn)">${_inr(sum.received)}</span></div>
-        <div class="stat-pair"><span>Outstanding</span><span class="num" style="color:var(--red);font-weight:800">${_inr(sum.outstanding)}</span></div>
-        <div class="stat-pair"><span>Total copies (period)</span><span class="num">${_n(sum.total_copies)}</span></div>
-      </div></div>`;
-  } else if (AGENT_TAB === "supply") {
-    const sup = d.supply || {};
-    const brk = (sup.breakdown || []).map(b => `<tr><td>${b.publication}</td><td>${b.edition || ""}</td><td>${b.type || ""}</td><td class="r num">${_n(b.copies)}</td><td class="r num">${_inr(b.rate, true)}</td><td class="r num">${_n(b.commission)}%</td></tr>`);
-    const trend = sup.days || [];
-    const maxc = Math.max(1, ...trend.map(t => t.copies));
+/* ── Today's Supply (month/day) ── */
+VIEWS.agent_supply = () => {
+  if (!S.live.agent) { if (!S.live._agentLoading) fetchAgent(); return agentBackBar() + _agLoad; }
+  const month = agentCurMonth();
+  const data = agentGet("agSup_" + agentKey() + month, agentPath("/api/agent/supply", "month=" + month));
+  let inner;
+  if (data === undefined) inner = _agLoad;
+  else {
+    const trend = data.days || [], maxc = Math.max(1, ...trend.map(t => t.copies));
     const spark = trend.map(t => `<div title="${t.date}: ${_n(t.copies)} copies" style="flex:1;min-width:3px;height:${Math.max(4, Math.round(t.copies / maxc * 60))}px;background:var(--blue);border-radius:2px 2px 0 0;opacity:.85"></div>`).join("");
-    body = `<div class="card pad"><div class="cardhead" style="padding:0 0 10px;border:0"><h3>Supply — last ${trend.length} days</h3><span class="lbl">latest ${sup.latest_supply_date || ""}</span></div>
-        <div style="display:flex;align-items:flex-end;gap:2px;height:66px">${spark}</div></div>
-      <div class="card"><div class="cardhead"><h3>Latest Supply Breakdown</h3></div>
+    const tot = trend.reduce((a, t) => a + t.copies, 0);
+    const brk = (data.breakdown || []).map(b => `<tr><td>${b.publication}</td><td>${b.edition || ""}</td><td>${b.type || ""}</td><td class="r num">${_n(b.copies)}</td><td class="r num">${_inr(b.rate, true)}</td><td class="r num">${_n(b.commission)}%</td></tr>`);
+    inner = `<div class="card pad"><div class="cardhead" style="padding:0 0 10px;border:0"><h3>Daily supply — ${agentMonthLabel(month)}</h3><span class="lbl">${_n(tot)} copies · latest ${data.breakdown_date || "—"}</span></div>
+        <div style="display:flex;align-items:flex-end;gap:2px;height:66px">${spark || '<span class="lbl">No supply this month</span>'}</div></div>
+      <div class="card"><div class="cardhead"><h3>Breakdown · ${data.breakdown_date || month}</h3></div>
         <div class="tablewrap"><table><thead><tr><th>Publication</th><th>Edition</th><th>Type</th><th class="r">Copies</th><th class="r">Rate</th><th class="r">Comm</th></tr></thead>
         <tbody>${brk.join("") || `<tr><td colspan="6" style="color:var(--muted)">No supply found</td></tr>`}</tbody></table></div></div>`;
-  } else if (AGENT_TAB === "billing") {
-    const b = d.billing || {};
-    body = `<div class="two">
-      <div class="card pad"><div class="lbl" style="margin-bottom:8px">Outstanding Breakdown</div>
-        <div class="stat-pair"><span>Opening balance</span><span class="num">${_inr(b.opening)}</span></div>
-        <div class="stat-pair"><span>Billed (cumulative)</span><span class="num">${_inr(b.billed_cumulative)}</span></div>
-        <div class="stat-pair"><span>Other debit</span><span class="num">${_inr(b.other_debit)}</span></div>
-        <div class="stat-pair"><span>Received</span><span class="num" style="color:var(--grn)">${_inr(b.received)}</span></div>
-        <div class="stat-pair"><span>Other credit</span><span class="num">${_inr(b.other_credit)}</span></div>
-        <div class="stat-pair"><span>Outstanding</span><span class="num" style="color:var(--red);font-weight:800">${_inr(b.outstanding)}</span></div>
-      </div>
-      <div class="card pad"><div class="lbl" style="margin-bottom:8px">This Month &amp; Copies</div>
-        <div class="stat-pair"><span>${b.month_bill_label || "Month"} bill</span><span class="num">${b.month_bill != null ? _inr(b.month_bill) : "—"}</span></div>
-        <div class="stat-pair"><span>Security balance</span><span class="num">${_inr(b.security_balance)}</span></div>
-        <div class="stat-pair"><span>Total copies (period)</span><span class="num">${_n(b.total_copies)}</span></div>
-        <div class="stat-pair"><span>Day copies</span><span class="num">${_n(b.day_copies)}</span></div>
-      </div></div>`;
-  } else if (AGENT_TAB === "ledger") {
-    const rows = ((d.ledger && d.ledger.rows) || []).map(r => `<tr>
-      <td>${r.date || ""}</td><td>${r.doc_no || ""}</td><td>${r.mode || r.category || ""}</td>
-      <td class="r num" style="color:${r.is_receipt ? "var(--grn)" : "var(--red)"}">${_inr(Math.abs(r.amount), true)}${r.is_receipt ? " cr" : " dr"}</td></tr>`);
-    body = `<div class="card"><div class="cardhead"><h3>Recent Transactions</h3><span class="lbl">receipts &amp; charges</span></div>
-      <div class="tablewrap"><table><thead><tr><th>Date</th><th>Voucher</th><th>Mode</th><th class="r">Amount</th></tr></thead>
-      <tbody>${rows.join("") || `<tr><td colspan="4" style="color:var(--muted)">No transactions found</td></tr>`}</tbody></table></div></div>`;
   }
-  return _agentBack() + _agentHeader(ag, agencies) + _agentTabs(AGENT_TAB) + body;
+  return agentScreen(inner, true);
+};
+
+/* ── Supply History (6 months) ── */
+VIEWS.agent_history = () => {
+  if (!S.live.agent) { if (!S.live._agentLoading) fetchAgent(); return agentBackBar() + _agLoad; }
+  const data = agentGet("agHist_" + agentKey(), agentPath("/api/agent/supply-history", "months=6"));
+  let inner;
+  if (data === undefined) inner = _agLoad;
+  else {
+    const months = data.months || [], maxc = Math.max(1, ...months.map(m => m.copies));
+    const rows = months.slice().reverse().map(m => `<tr class="rowbtn" onclick="agentSetMonth('${m.month}');go('agent_supply')">
+      <td><b>${agentMonthLabel(m.month)}</b></td>
+      <td><div class="bar"><i style="width:${Math.round(m.copies / maxc * 100)}%"></i></div></td>
+      <td class="r num">${_n(m.copies)}</td><td class="r num">${_inr(m.value)}</td><td class="r num">${_n(m.avg_commission)}%</td></tr>`);
+    inner = `<div class="card"><div class="cardhead"><h3>Monthly Supply — current + last 6 months</h3><span class="lbl">tap a month for daily detail</span></div>
+      <div class="tablewrap"><table><thead><tr><th>Month</th><th></th><th class="r">Copies</th><th class="r">Value</th><th class="r">Avg Comm</th></tr></thead>
+      <tbody>${rows.join("") || `<tr><td colspan="5" style="color:var(--muted)">No supply history</td></tr>`}</tbody></table></div></div>`;
+  }
+  return agentScreen(inner, false);
+};
+
+/* ── Billing (current snapshot + monthly trend) ── */
+VIEWS.agent_billing = () => {
+  if (!S.live.agent) { if (!S.live._agentLoading) fetchAgent(); return agentBackBar() + _agLoad; }
+  const b = (S.live.agent.billing) || {};
+  const hist = agentGet("agBillH_" + agentKey(), agentPath("/api/agent/bill-history", "months=6"));
+  const snap = `<div class="two">
+    <div class="card pad"><div class="lbl" style="margin-bottom:8px">Outstanding Breakdown</div>
+      <div class="stat-pair"><span>Opening balance</span><span class="num">${_inr(b.opening)}</span></div>
+      <div class="stat-pair"><span>Billed (cumulative)</span><span class="num">${_inr(b.billed_cumulative)}</span></div>
+      <div class="stat-pair"><span>Other debit</span><span class="num">${_inr(b.other_debit)}</span></div>
+      <div class="stat-pair"><span>Received</span><span class="num" style="color:var(--grn)">${_inr(b.received)}</span></div>
+      <div class="stat-pair"><span>Other credit</span><span class="num">${_inr(b.other_credit)}</span></div>
+      <div class="stat-pair"><span>Outstanding</span><span class="num" style="color:var(--red);font-weight:800">${_inr(b.outstanding)}</span></div></div>
+    <div class="card pad"><div class="lbl" style="margin-bottom:8px">This Month &amp; Security</div>
+      <div class="stat-pair"><span>${b.month_bill_label || "Month"} bill</span><span class="num">${b.month_bill != null ? _inr(b.month_bill) : "—"}</span></div>
+      <div class="stat-pair"><span>Security balance</span><span class="num">${_inr(b.security_balance)}</span></div>
+      <div class="stat-pair"><span>Total copies (period)</span><span class="num">${_n(b.total_copies)}</span></div>
+      <div class="stat-pair"><span>Day copies</span><span class="num">${_n(b.day_copies)}</span></div></div></div>`;
+  let trend = "";
+  if (hist === undefined) trend = _agLoad;
+  else { const rows = ((hist.months) || []).slice().reverse().map(m => `<tr><td>${agentMonthLabel(m.month)}</td><td class="r num">${_inr(m.billing)}</td><td class="r num">${m.outstanding != null ? _inr(m.outstanding) : "—"}</td></tr>`);
+    trend = `<div class="card"><div class="cardhead"><h3>Monthly Billing — last 6 months</h3></div>
+      <div class="tablewrap"><table><thead><tr><th>Month</th><th class="r">Billed</th><th class="r">Outstanding</th></tr></thead>
+      <tbody>${rows.join("") || `<tr><td colspan="3" style="color:var(--muted)">No history</td></tr>`}</tbody></table></div>`; }
+  return agentScreen(snap + trend, false);
+};
+
+/* ── Bills & Ledger ── */
+VIEWS.agent_ledger = () => {
+  if (!S.live.agent) { if (!S.live._agentLoading) fetchAgent(); return agentBackBar() + _agLoad; }
+  const data = agentGet("agLed_" + agentKey(), agentPath("/api/agent/ledger", "limit=80"));
+  let inner;
+  if (data === undefined) inner = _agLoad;
+  else { const rows = ((data.rows) || []).map(r => `<tr><td>${r.date || ""}</td><td>${r.doc_no || ""}</td><td>${r.mode || r.category || ""}</td>
+      <td class="r num" style="color:${r.is_receipt ? "var(--grn)" : "var(--red)"}">${_inr(Math.abs(r.amount), true)}${r.is_receipt ? " cr" : " dr"}</td></tr>`);
+    inner = `<div class="card"><div class="cardhead"><h3>Bills &amp; Ledger</h3><span class="lbl">receipts &amp; charges</span></div>
+      <div class="tablewrap"><table><thead><tr><th>Date</th><th>Voucher</th><th>Mode</th><th class="r">Amount</th></tr></thead>
+      <tbody>${rows.join("") || `<tr><td colspan="4" style="color:var(--muted)">No transactions</td></tr>`}</tbody></table></div>`; }
+  return agentScreen(inner, false);
+};
+
+/* ── Payment History (month) ── */
+VIEWS.agent_payments = () => {
+  if (!S.live.agent) { if (!S.live._agentLoading) fetchAgent(); return agentBackBar() + _agLoad; }
+  const month = agentCurMonth();
+  const data = agentGet("agPay_" + agentKey() + month, agentPath("/api/agent/payments", "month=" + month));
+  let inner;
+  if (data === undefined) inner = _agLoad;
+  else { const rows = ((data.rows) || []).map(r => `<tr><td>${r.date || ""}</td><td>${r.doc_no || ""}</td><td>${r.mode || ""}</td><td>${r.category || ""}</td><td class="r num" style="color:var(--grn)">${_inr(r.amount, true)}</td></tr>`);
+    inner = `<div class="card"><div class="cardhead"><h3>Payments — ${agentMonthLabel(month)}</h3><span class="lbl">total ${_inr(data.total || 0)}</span></div>
+      <div class="tablewrap"><table><thead><tr><th>Date</th><th>Receipt</th><th>Mode</th><th>Category</th><th class="r">Amount</th></tr></thead>
+      <tbody>${rows.join("") || `<tr><td colspan="5" style="color:var(--muted)">No payments this month</td></tr>`}</tbody></table></div>`; }
+  return agentScreen(inner, true);
+};
+
+/* ── Net Sales (month) ── */
+VIEWS.agent_netsales = () => {
+  if (!S.live.agent) { if (!S.live._agentLoading) fetchAgent(); return agentBackBar() + _agLoad; }
+  const month = agentCurMonth();
+  const data = agentGet("agNet_" + agentKey() + month, agentPath("/api/agent/netsales", "month=" + month));
+  let inner;
+  if (data === undefined) inner = _agLoad;
+  else { const t = data.total || {};
+    const rows = ((data.by_publication) || []).map(r => `<tr><td>${r.publication}</td><td class="r num">${_n(r.copies)}</td><td class="r num">${_inr(r.gross)}</td><td class="r num" style="color:var(--red)">${_inr(r.commission)}</td><td class="r num" style="font-weight:800">${_inr(r.net)}</td></tr>`);
+    inner = `<div class="grid kpis">
+        ${kpi("Copies", _n(t.copies), agentMonthLabel(month), "fl", "var(--blue-l)", "📦")}
+        ${kpi("Gross Value", _inr(t.gross), "", "fl", "var(--gold-l)", "🧾")}
+        ${kpi("Commission", _inr(t.commission), "", "fl", "var(--red-l)", "％")}
+        ${kpi("Net Sales", _inr(t.net), "", "fl", "var(--grn-l)", "📈")}</div>
+      <div class="card"><div class="cardhead"><h3>Net Sales by Publication — ${agentMonthLabel(month)}</h3></div>
+      <div class="tablewrap"><table><thead><tr><th>Publication</th><th class="r">Copies</th><th class="r">Gross</th><th class="r">Commission</th><th class="r">Net</th></tr></thead>
+      <tbody>${rows.join("") || `<tr><td colspan="5" style="color:var(--muted)">No sales this month</td></tr>`}</tbody></table></div></div>`; }
+  return agentScreen(inner, true);
+};
+
+/* ── Competitor Copies (report + history) ── */
+window.agentSubmitCompetitor = async () => {
+  const competitor = gv("agcp-name"), copies = gv("agcp-copies"), remarks = gv("agcp-remarks");
+  if (!competitor) { toast("Enter competitor name"); return; }
+  const r = await api.post(agentPath("/api/agent/competitor"), { competitor, copies, remarks });
+  if (r && r.ok) { toast("✓ Competitor report saved"); delete S.live["agCmp_" + agentKey()]; render(); }
+  else toast((r && r.detail) || "Could not submit");
+};
+VIEWS.agent_competitor = () => {
+  if (!S.live.agent) { if (!S.live._agentLoading) fetchAgent(); return agentBackBar() + _agLoad; }
+  const data = agentGet("agCmp_" + agentKey(), agentPath("/api/agent/competitor"));
+  const list = data === undefined ? _agLoad
+    : `<div class="tablewrap"><table><thead><tr><th>Date</th><th>Competitor</th><th class="r">Copies</th><th>Remarks</th></tr></thead>
+       <tbody>${(((data && data.rows) || []).map(r => `<tr><td>${r.date || ""}</td><td>${r.competitor || ""}</td><td class="r num">${_n(r.copies)}</td><td>${r.remarks || ""}</td></tr>`).join("")) || `<tr><td colspan="4" style="color:var(--muted)">No reports yet</td></tr>`}</tbody></table></div>`;
+  const form = `<div class="card pad">
+    <div class="lbl" style="margin-bottom:8px">Report Competitor Copies</div>
+    <div class="fld"><label>Competitor</label><input id="agcp-name" placeholder="e.g. Dainik Bhaskar"></div>
+    <div class="fld"><label>Estimated copies</label><input id="agcp-copies" type="number" inputmode="numeric" placeholder="0"></div>
+    <div class="fld"><label>Remarks</label><textarea id="agcp-remarks" placeholder="Area, notes…"></textarea></div>
+    <button class="btn pri block" onclick="agentSubmitCompetitor()">Submit report</button></div>`;
+  return agentScreen(`<div class="two">${form}<div class="card"><div class="cardhead"><h3>Recent Reports</h3></div>${list}</div></div>`, false);
+};
+
+/* ── Feedback ── */
+window.agentSubmitFeedback = async () => {
+  const category = gv("agfb-cat"), rating = gv("agfb-rating"), message = gv("agfb-msg");
+  if (!message) { toast("Please type your feedback"); return; }
+  const r = await api.post(agentPath("/api/agent/feedback"), { category, rating, message });
+  if (r && r.ok) { toast("✓ Feedback submitted — thank you"); go("app_agent"); }
+  else toast((r && r.detail) || "Could not submit");
+};
+VIEWS.agent_feedback = () => agentScreen(`<div class="card pad field-col">
+    <div class="lbl" style="margin-bottom:8px">Share Feedback</div>
+    <div class="fld"><label>Category</label><select id="agfb-cat"><option>Supply</option><option>Billing</option><option>Delivery</option><option>App</option><option>Other</option></select></div>
+    <div class="fld"><label>Rating</label><select id="agfb-rating"><option value="5">★★★★★ Excellent</option><option value="4">★★★★ Good</option><option value="3">★★★ Average</option><option value="2">★★ Poor</option><option value="1">★ Bad</option></select></div>
+    <div class="fld"><label>Message</label><textarea id="agfb-msg" placeholder="Tell us what's working or what needs attention…"></textarea></div>
+    <button class="btn pri block" onclick="agentSubmitFeedback()">Submit feedback</button></div>`, false);
+
+/* ── User Profile ── */
+VIEWS.agent_profile = () => {
+  if (!S.live.agent) { if (!S.live._agentLoading) fetchAgent(); return agentBackBar() + _agLoad; }
+  const ag = agentAgency() || {};
+  const row = (l, v) => `<div class="stat-pair"><span>${l}</span><span>${v || "—"}</span></div>`;
+  return agentScreen(`<div class="two">
+    <div class="card pad"><div class="lbl" style="margin-bottom:8px">Agency</div>
+      ${row("Name", ag.ag_name)}${row("Agency code", ag.agcd)}${row("Unit", (ag.unit_name || "") + " (" + ag.unit_code + ")")}
+      ${row("Class", ag.ag_class_name)}${row("Type", ag.ag_type_name)}${row("Depot", ag.dpcd)}</div>
+    <div class="card pad"><div class="lbl" style="margin-bottom:8px">Location & Contact</div>
+      ${row("City", ag.city_name)}${row("District", ag.dist_name)}${row("State", ag.state_name)}
+      ${row("Mobile", ag.mobile)}${row("Executive", ag.executive_name)}</div></div>`, false);
+};
+
+/* ── Make Payment (info only — no live payment processing) ── */
+VIEWS.agent_pay = () => {
+  if (!S.live.agent) { if (!S.live._agentLoading) fetchAgent(); return agentBackBar() + _agLoad; }
+  const sum = S.live.agent.summary || {};
+  return agentScreen(`<div class="field-col">
+    <div class="card pad" style="text-align:center">
+      <div class="lbl">Current Outstanding</div>
+      <div class="num" style="font-size:30px;font-weight:800;color:var(--red);margin:6px 0">${_inr(sum.outstanding)}</div>
+      <div class="lbl" style="color:var(--muted)">as of latest posting</div></div>
+    <div class="card pad" style="margin-top:13px">
+      <div class="lbl" style="margin-bottom:8px">How to pay</div>
+      <p style="font-size:13.5px;line-height:1.6;color:var(--ink)">Pay your outstanding via NEFT/RTGS to the Patrika circulation account, or hand over a cheque/UPI at your branch office. Quote your <b>agency code</b> in the payment reference so the receipt is matched to your account. Payments reflect in <b>Payment History</b> after the branch posts them.</p>
+      <div class="vz-alert" style="margin-top:10px"><span class="ai">ℹ️</span><span>Online payment from the app will be enabled once the payment gateway is integrated. This screen is informational for now.</span></div>
+    </div></div>`, false);
 };
 
 /* Remaining field apps still open their standalone prototype in an iframe (redesigned one-by-one). */
@@ -7319,8 +7498,14 @@ function sideHTML() {
     if (g.apps) html += g.apps.map(a => {
       const scr = "app_" + a.key;
       const nm = (APP_META[a.key] && APP_META[a.key].name) || a.label;
-      return `<button class="nav-item ${S.screen === scr ? "on" : ""}" onclick="go('${scr}')">
+      const inApp = a.key === "agent" && (S.screen === "app_agent" || String(S.screen).indexOf("agent_") === 0);
+      let h = `<button class="nav-item ${S.screen === scr ? "on" : ""}" onclick="go('${scr}')">
         <span class="nico" style="background:${a.tint}">${a.icon}</span><span>${nm}</span></button>`;
+      // When inside the Agent app, expand its feature modules in the sidebar for easy access
+      if (inApp && typeof AGENT_MODULES !== "undefined") {
+        h += `<div class="subnav">${AGENT_MODULES.map(m => `<button class="nav-item ${S.screen === m.screen ? "on" : ""}" onclick="go('${m.screen}')"><span>${m.icon} ${m.label}</span></button>`).join("")}</div>`;
+      }
+      return h;
     }).join("");
   }
   html += `<div class="side-foot">Patrika Vitran Suite · v1.0</div>`;
