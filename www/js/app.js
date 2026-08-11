@@ -1658,7 +1658,7 @@ function _supdSale(st) {
   const s = st.saleSummary;
   if (!s) return _cmdSkel() + _cmdSkel();
   if (s._err || s.no_data) return `<div class="card pad" style="color:var(--muted)">Supply data not loaded yet — run the supply sync first.</div>`;
-  const periodLabel = s.range ? `${s.from} → ${s.to}` : `${s.data_upto} vs ${s.prev_day || '—'}`;
+  const periodLabel = s.range ? `${s.cur_label} vs ${s.prev_label}` : `${s.data_upto} vs ${s.prev_day || '—'}`;
   const kpis = `<div class="vz-kgrid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr))">
     ${_saleKpi('agent', '🏢', 'Agent Sale', s.agent, true)}
     ${_saleKpi('cash', '🛵', 'Cash Sale', s.cash, true)}
@@ -1694,7 +1694,8 @@ function _supdDrillTable(dd, firstCol, cellFn, mode, total) {
     <td class="r num">${_supdN(r.supply)}</td><td class="r num" style="color:var(--muted)">${_supdN(r.prev_supply)}</td>
     <td class="r num" style="color:${r.growth_pct >= 0 ? 'var(--grn)' : 'var(--red)'}">${_supdPct(r.growth_pct)}</td>
     <td class="r num">${r.contribution_pct != null ? r.contribution_pct + '%' : '—'}</td></tr>`).join('');
-  return `<div class="card"><div class="cardhead"><h3>Total ${_supdN(total)} copies</h3><span class="lbl" style="color:var(--muted)">${rows.length} rows</span></div>
+  const periodNote = dd.range ? `<div class="lbl" style="padding:8px 16px 0;color:var(--muted)">Supply = ${dd.cur_label} &nbsp;·&nbsp; Prev = ${dd.prev_label}</div>` : '';
+  return `<div class="card"><div class="cardhead"><h3>Total ${_supdN(total)} copies</h3><span class="lbl" style="color:var(--muted)">${rows.length} rows</span></div>${periodNote}
     <div class="tablewrap"><table><thead><tr><th>${firstCol}</th><th></th><th class="r">Supply</th><th class="r">Prev</th><th class="r">Growth</th><th class="r">Share</th></tr></thead>
     <tbody>${body || `<tr><td colspan="6" style="color:var(--muted)">No data</td></tr>`}</tbody></table></div></div>`;
 }
