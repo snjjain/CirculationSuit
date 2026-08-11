@@ -1362,7 +1362,7 @@ function vzDonut(o) {
 
 /* ═══════════ Supply Management Dashboard ═══════════ */
 function _supdState() {
-  return S.live.supd || (S.live.supd = { tab: 'overview', state: '', unit: '', from: '', to: '', agentOrder: 'supply', trendGran: 'daily', trendDays: 30 });
+  return S.live.supd || (S.live.supd = { tab: 'sale', state: '', unit: '', from: '', to: '', agentOrder: 'supply', trendGran: 'daily', trendDays: 30, drillMode: null, drillState: '', drillUnit: '', drillBy: 'district' });
 }
 const _supdN = v => v == null ? '—' : Number(v).toLocaleString('en-IN');
 const _supdINR = v => v == null ? '—' : (Math.abs(v) >= 1e7 ? '₹' + (v / 1e7).toFixed(2) + ' Cr' : Math.abs(v) >= 1e5 ? '₹' + (v / 1e5).toFixed(2) + ' L' : '₹' + Math.round(v).toLocaleString('en-IN'));
@@ -1394,7 +1394,7 @@ window.supdUnit = u => {
   ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
   render();
 };
-const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
+const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2'].forEach(k => { st[k] = null; });
 // State dropdown: cascade the Unit list to that state (data refreshes when Apply is pressed)
 window.supdSetState = (v) => {
   const st = _supdState();
@@ -1627,10 +1627,106 @@ function _supdExceptions(st) {
     + `<div class="card pad" style="color:var(--muted);font-size:11.5px">🚶 "No DCR Visit" exceptions will appear once the DCR visit sync is added.</div>`;
 }
 
+/* ── Sale view: Agent Sale vs Cash Sale (default) + drill-downs with breadcrumbs ── */
+const _saleColor = m => m === 'agent' ? 'var(--blue)' : m === 'cash' ? 'var(--gold)' : 'var(--grn)';
+window.supdDrill = (mode, state, unit, unitName) => {
+  const st = _supdState();
+  st.drillMode = mode || null; st.drillState = state || ''; st.drillUnit = unit || ''; st.drillUnitName = unitName || '';
+  if (mode && !st.drillBy) st.drillBy = mode === 'agent' ? 'district' : 'center';
+  if (mode === 'agent' && (st.drillBy !== 'district' && st.drillBy !== 'executive')) st.drillBy = 'district';
+  if (mode === 'cash' && (st.drillBy !== 'center' && st.drillBy !== 'executive')) st.drillBy = 'center';
+  ['drillStates', 'drillBranches', 'drillL2'].forEach(k => { st[k] = null; });
+  render();
+};
+window.supdDrillBy = by => { const st = _supdState(); st.drillBy = by; st.drillL2 = null; render(); };
+
+function _saleKpi(mode, icon, label, data, clickable) {
+  const g = data.growth_pct, color = g == null ? 'var(--muted)' : g >= 0 ? 'var(--grn)' : 'var(--red)', arrow = g == null ? '' : g >= 0 ? '▲' : '▼';
+  return `<div class="card pad" ${clickable ? `onclick="supdDrill('${mode}')" role="button" style="cursor:pointer;border-left:4px solid ${_saleColor(mode)}"` : `style="border-left:4px solid ${_saleColor('total')}"`}>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+      <span class="lbl">${icon} ${label}</span>${clickable ? '<span class="lbl" style="color:var(--gold-d)">Drill →</span>' : ''}</div>
+    <div class="num" style="font-size:26px;font-weight:800;line-height:1.15">${_supdN(data.current)}</div>
+    <div style="display:flex;gap:12px;font-size:12px;margin-top:4px;flex-wrap:wrap">
+      <span style="color:var(--muted)">Prev: ${_supdN(data.previous)}</span>
+      <span style="color:${color};font-weight:700">${arrow} ${_supdN(Math.abs(data.diff))} (${_supdPct(g)})</span></div></div>`;
+}
+function _supdSale(st) {
+  const qs = _supdQS(st);
+  _supdFetch('saleSummary', '/api/supply-dash/sale-summary' + qs);
+  _supdFetch('agentStates', '/api/supply-dash/agent/states' + qs);
+  _supdFetch('cashStates', '/api/supply-dash/cash/states' + qs);
+  const s = st.saleSummary;
+  if (!s) return _cmdSkel() + _cmdSkel();
+  if (s._err || s.no_data) return `<div class="card pad" style="color:var(--muted)">Supply data not loaded yet — run the supply sync first.</div>`;
+  const periodLabel = s.range ? `${s.from} → ${s.to}` : `${s.data_upto} vs ${s.prev_day || '—'}`;
+  const kpis = `<div class="vz-kgrid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr))">
+    ${_saleKpi('agent', '🏢', 'Agent Sale', s.agent, true)}
+    ${_saleKpi('cash', '🛵', 'Cash Sale', s.cash, true)}
+    ${_saleKpi('total', '📊', 'Total Sale', s.total, false)}</div>`;
+  const aPct = Math.max(0, Math.min(100, s.agent_share_pct || 0)), cPct = 100 - aPct;
+  const split = `<div class="card pad" style="margin-top:13px"><div class="lbl" style="margin-bottom:8px">Agent vs Cash · ${periodLabel}</div>
+    <div style="display:flex;height:28px;border-radius:8px;overflow:hidden;min-width:0">
+      <div style="width:${aPct}%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;min-width:0">${aPct >= 12 ? 'Agent ' + s.agent_share_pct + '%' : ''}</div>
+      <div style="width:${cPct}%;background:var(--gold);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;min-width:0">${cPct >= 12 ? 'Cash ' + s.cash_share_pct + '%' : ''}</div></div></div>`;
+  const stateMini = (title, data, mode) => {
+    if (!data) return _cmdSkel();
+    const rows = (data.rows || []).slice(0, 6), max = Math.max(1, ...rows.map(r => r.supply));
+    return `<div class="card"><div class="cardhead"><h3>${title}</h3><span class="act" onclick="supdDrill('${mode}')" style="cursor:pointer">View all →</span></div>
+      <div style="padding:12px 16px">${rows.map(r => `<div class="vz-hrow" onclick="supdDrill('${mode}','${esc(r.state)}')" style="cursor:pointer;grid-template-columns:minmax(88px,130px) 1fr 76px">
+        <span class="hl">${esc(r.state)}</span>
+        <div class="ht"><div class="hb" style="width:${Math.round(r.supply / max * 100)}%;background:${_saleColor(mode)}"></div></div>
+        <span class="hv">${_supdN(r.supply)}</span></div>`).join('') || '<div class="lbl" style="color:var(--muted)">No data</div>'}</div></div>`;
+  };
+  return kpis + split + `<div class="two" style="margin-top:13px">${stateMini('Agent Sale by State', st.agentStates, 'agent')}${stateMini('Cash Sale by State', st.cashStates, 'cash')}</div>`;
+}
+function _supdBreadcrumb(st) {
+  const modeLabel = st.drillMode === 'agent' ? 'Agent Sale' : 'Cash Sale';
+  const link = (txt, fn, active) => `<span onclick="${fn}" style="cursor:pointer;color:${active ? 'var(--ink)' : 'var(--gold-d)'};font-weight:${active ? 700 : 500}">${txt}</span>`;
+  const parts = [link('Supply', "supdDrill(null)"), link(modeLabel, `supdDrill('${st.drillMode}')`, !st.drillState)];
+  if (st.drillState) parts.push(link(esc(st.drillState), `supdDrill('${st.drillMode}','${esc(st.drillState)}')`, !st.drillUnit));
+  if (st.drillUnit) parts.push(link(esc(st.drillUnitName || st.drillUnit), '', true));
+  return `<div style="font-size:12.5px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${parts.join('<span style="color:var(--muted)">›</span>')}</div>`;
+}
+function _supdDrillTable(dd, firstCol, cellFn, mode, total) {
+  const rows = dd.rows || [], max = Math.max(1, ...rows.map(r => r.supply));
+  const body = rows.map(r => `<tr>${cellFn(r)}
+    <td style="width:110px"><div class="bar"><i style="width:${Math.round(r.supply / max * 100)}%;background:${_saleColor(mode)}"></i></div></td>
+    <td class="r num">${_supdN(r.supply)}</td><td class="r num" style="color:var(--muted)">${_supdN(r.prev_supply)}</td>
+    <td class="r num" style="color:${r.growth_pct >= 0 ? 'var(--grn)' : 'var(--red)'}">${_supdPct(r.growth_pct)}</td>
+    <td class="r num">${r.contribution_pct != null ? r.contribution_pct + '%' : '—'}</td></tr>`).join('');
+  return `<div class="card"><div class="cardhead"><h3>Total ${_supdN(total)} copies</h3><span class="lbl" style="color:var(--muted)">${rows.length} rows</span></div>
+    <div class="tablewrap"><table><thead><tr><th>${firstCol}</th><th></th><th class="r">Supply</th><th class="r">Prev</th><th class="r">Growth</th><th class="r">Share</th></tr></thead>
+    <tbody>${body || `<tr><td colspan="6" style="color:var(--muted)">No data</td></tr>`}</tbody></table></div></div>`;
+}
+function _supdSaleDrill(st) {
+  const mode = st.drillMode, qs = _supdQS(st), amp = qs ? '&' : '?';
+  let body;
+  if (!st.drillState) {
+    _supdFetch('drillStates', `/api/supply-dash/${mode}/states` + qs);
+    const dd = st.drillStates;
+    body = !dd ? _cmdSkel() : _supdDrillTable(dd, 'State',
+      r => `<td><span onclick="supdDrill('${mode}','${esc(r.state)}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.state)}</span> <small style="color:var(--muted)">${r.branches} br</small></td>`, mode, dd.total);
+  } else if (!st.drillUnit) {
+    _supdFetch('drillBranches', `/api/supply-dash/${mode}/branches${qs}${amp}state=${encodeURIComponent(st.drillState)}`);
+    const dd = st.drillBranches;
+    body = !dd ? _cmdSkel() : _supdDrillTable(dd, 'Branch',
+      r => `<td><span onclick="supdDrill('${mode}','${esc(st.drillState)}','${esc(r.unit_code)}','${esc(r.branch)}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.branch)}</span></td>`, mode, dd.total);
+  } else {
+    const opts = mode === 'agent' ? [['district', '📍 District Wise'], ['executive', '👔 Executive Wise']] : [['center', '🏬 Center Wise'], ['executive', '👔 Executive Wise']];
+    const dqs = qs ? '&' + qs.slice(1) : '';
+    _supdFetch('drillL2', `/api/supply-dash/${mode}/branch/${encodeURIComponent(st.drillUnit)}?by=${st.drillBy}${dqs}`);
+    const dd = st.drillL2;
+    const toggle = `<div class="seg" style="margin-bottom:12px">${opts.map(([k, l]) => `<button class="${st.drillBy === k ? 'on' : ''}" onclick="supdDrillBy('${k}')">${l}</button>`).join('')}</div>`;
+    const colName = st.drillBy === 'district' ? 'District' : st.drillBy === 'center' ? 'Center' : 'Executive';
+    body = toggle + (!dd ? _cmdSkel() : _supdDrillTable(dd, colName, r => `<td>${esc(r.label)}</td>`, mode, dd.total));
+  }
+  return _supdBreadcrumb(st) + body;
+}
+
 VIEWS.supply_dash = () => {
   const st = _supdState();
   _supdFetch('filters', '/api/supply-dash/filters');
-  const tabs = [['overview', '📊 Overview'], ['branches', '🏢 Branches'], ['agents', '👤 Agents'],
+  const tabs = [['sale', '💰 Sale'], ['overview', '📊 Overview'], ['branches', '🏢 Branches'], ['agents', '👤 Agents'],
                 ['execs', '👔 Executives'], ['trend', '📈 Trends'], ['exceptions', '⚠️ Exceptions']];
   const allUnits  = (st.filters && st.filters.units)  || [];
   const states    = (st.filters && st.filters.states) || [];
@@ -1661,7 +1757,8 @@ VIEWS.supply_dash = () => {
   const tabBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
     ${tabs.map(([k, l]) => `<button class="btn ${st.tab === k ? 'pri' : ''}" onclick="supdTab('${k}')">${l}</button>`).join('')}
   </div>`;
-  const bodyMap = { overview: _supdOverview, branches: _supdBranches, agents: _supdAgents,
+  const bodyMap = { sale: (s) => s.drillMode ? _supdSaleDrill(s) : _supdSale(s),
+                    overview: _supdOverview, branches: _supdBranches, agents: _supdAgents,
                     execs: _supdExecs, trend: _supdTrend, exceptions: _supdExceptions };
   const dataNote = st.filters && st.filters.data_upto
     ? `<div style="font-size:11px;color:var(--muted);text-align:center;margin-top:8px">Agency/Credit sale data up to <b>${esc(String(st.filters.data_upto).slice(0, 10))}</b> · Hawker/Cash sale &amp; DCR visit data pending sync · 5-year history loading</div>`
