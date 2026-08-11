@@ -813,4 +813,32 @@ module.exports = function registerSupplyDash(ctx) {
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
+
+  // ════ CASH — Center × Edition pivot (editions as columns, Date 1 [prev] vs Date 2 [current]) ════
+  app.get('/api/supply-dash/cash/center-edition/:unit', async (req, res) => {
+    try {
+      const w = await saleWin(req);
+      if (!w) return res.json({ centers: [], editions: [] });
+      const unit = req.params.unit;
+      const { rows } = await q(`
+        SELECT COALESCE(NULLIF(h.hawker_center,''),'—') center,
+               COALESCE(NULLIF(h.edtn_name,''),'—') edition,
+               SUM(CASE WHEN h.supply_date = ? THEN h.sup_copies ELSE 0 END) cur,
+               SUM(CASE WHEN h.supply_date = ? THEN h.sup_copies ELSE 0 END) prv
+        FROM hawker_supply h WHERE h.loc_id = ? AND h.supply_date IN (?, ?)
+        GROUP BY center, edition`, [w.cF, w.pF, unit, w.cF, w.pF]);
+
+      const centers = {}, edSet = new Set();
+      rows.forEach(r => {
+        const al = editionAlias(r.edition); edSet.add(al);
+        const c = centers[r.center] = centers[r.center] || { center: r.center, cur: {}, prev: {}, cur_total: 0, prev_total: 0 };
+        c.cur[al] = (c.cur[al] || 0) + N(r.cur); c.prev[al] = (c.prev[al] || 0) + N(r.prv);
+        c.cur_total += N(r.cur); c.prev_total += N(r.prv);
+      });
+      const ORDER = ['CITY', 'Bold', 'City Dak', 'News Today', 'City Super', 'City Standard', 'Ujjain'];
+      const editions = [...edSet].sort((a, b) => { const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b); });
+      const out = Object.values(centers).map(c => ({ ...c, diff: c.cur_total - c.prev_total })).sort((a, b) => b.cur_total - a.cur_total);
+      res.json({ ...winMeta(w), unit_code: unit, editions, centers: out });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
 };

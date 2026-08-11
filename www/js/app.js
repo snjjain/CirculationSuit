@@ -1394,7 +1394,7 @@ window.supdUnit = u => {
   ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
   render();
 };
-const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'covidSummary', 'covidAgentStates', 'covidCashStates'].forEach(k => { st[k] = null; });
+const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'covidSummary', 'covidAgentStates', 'covidCashStates'].forEach(k => { st[k] = null; });
 // State dropdown: cascade the Unit list to that state (data refreshes when Apply is pressed)
 window.supdSetState = (v) => {
   const st = _supdState();
@@ -1634,11 +1634,11 @@ window.supdDrill = (mode, state, unit, unitName) => {
   st.drillMode = mode || null; st.drillState = state || ''; st.drillUnit = unit || ''; st.drillUnitName = unitName || ''; st.drillCenter = '';
   if (mode && !st.drillBy) st.drillBy = mode === 'agent' ? 'district' : 'center';
   if (mode === 'agent' && (st.drillBy !== 'district' && st.drillBy !== 'executive')) st.drillBy = 'district';
-  if (mode === 'cash' && !['center', 'edition', 'executive'].includes(st.drillBy)) st.drillBy = 'center';
-  ['drillStates', 'drillBranches', 'drillL2', 'drillHawkers'].forEach(k => { st[k] = null; });
+  if (mode === 'cash' && !['center', 'edition', 'matrix', 'executive'].includes(st.drillBy)) st.drillBy = 'center';
+  ['drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix'].forEach(k => { st[k] = null; });
   render();
 };
-window.supdDrillBy = by => { const st = _supdState(); st.drillBy = by; st.drillCenter = ''; st.drillL2 = null; st.drillHawkers = null; render(); };
+window.supdDrillBy = by => { const st = _supdState(); st.drillBy = by; st.drillCenter = ''; st.drillL2 = null; st.drillHawkers = null; st.drillMatrix = null; render(); };
 window.supdDrillCenter = center => { const st = _supdState(); st.drillCenter = center || ''; st.drillHawkers = null; render(); };
 
 function _saleKpi(mode, icon, label, data, clickable) {
@@ -1708,6 +1708,25 @@ function _supdDrillTable(dd, firstCol, cellFn, mode, total) {
     <div class="tablewrap"><table><thead><tr><th>${firstCol}</th><th></th><th class="r">Supply</th><th class="r">Prev</th><th class="r">Diff</th><th class="r">Growth</th><th class="r">Share</th></tr></thead>
     <tbody>${body || `<tr><td colspan="7" style="color:var(--muted)">No data</td></tr>`}${foot}</tbody></table></div></div>`;
 }
+function _cashMatrix(dd, unitName) {
+  const eds = dd.editions || [], centers = dd.centers || [];
+  const th2 = eds.map(e => `<th class="r">${esc(e)}</th>`).join('') + '<th class="r">Total</th>';
+  const cells = (obj, tot) => eds.map(e => `<td class="r num">${_supdN(obj[e] || 0)}</td>`).join('') + `<td class="r num" style="font-weight:700">${_supdN(tot)}</td>`;
+  const body = centers.map(c => `<tr>
+    <td>${esc(unitName || dd.unit_code)}</td><td><b>${esc(c.center)}</b></td>
+    ${cells(c.prev, c.prev_total)}${cells(c.cur, c.cur_total)}
+    <td class="r num" style="color:${c.diff > 0 ? 'var(--grn)' : c.diff < 0 ? 'var(--red)' : 'var(--muted)'};font-weight:700">${c.diff > 0 ? '+' : ''}${_supdN(c.diff)}</td></tr>`).join('');
+  const gp = {}, gc = {}; let gpt = 0, gct = 0;
+  centers.forEach(c => { eds.forEach(e => { gp[e] = (gp[e] || 0) + (c.prev[e] || 0); gc[e] = (gc[e] || 0) + (c.cur[e] || 0); }); gpt += c.prev_total; gct += c.cur_total; });
+  const gd = gct - gpt;
+  const foot = centers.length ? `<tr style="font-weight:800;background:var(--surf2);border-top:2px solid var(--brd)"><td></td><td>Total</td>${cells(gp, gpt)}${cells(gc, gct)}<td class="r num" style="color:${gd >= 0 ? 'var(--grn)' : 'var(--red)'}">${gd > 0 ? '+' : ''}${_supdN(gd)}</td></tr>` : '';
+  const edCols = eds.length + 1;
+  return `<div class="card"><div class="cardhead"><h3>Center × Edition</h3><span class="lbl" style="color:var(--muted)">Date 1 = ${dd.prev_label} · Date 2 = ${dd.cur_label}</span></div>
+    <div class="tablewrap"><table><thead>
+      <tr><th rowspan="2">Unit</th><th rowspan="2">Center</th><th colspan="${edCols}" style="text-align:center;border-left:2px solid var(--brd)">Date 1 · ${dd.prev_label}</th><th colspan="${edCols}" style="text-align:center;border-left:2px solid var(--brd)">Date 2 · ${dd.cur_label}</th><th rowspan="2" class="r">Diff</th></tr>
+      <tr>${th2}${th2}</tr></thead>
+      <tbody>${body || `<tr><td colspan="${edCols * 2 + 3}" style="color:var(--muted)">No data</td></tr>`}${foot}</tbody></table></div></div>`;
+}
 function _supdSaleDrill(st) {
   const mode = st.drillMode, qs = _supdQS(st), amp = qs ? '&' : '?';
   let body;
@@ -1730,17 +1749,23 @@ function _supdSaleDrill(st) {
   } else {
     const opts = mode === 'agent'
       ? [['district', '📍 District Wise'], ['executive', '👔 Executive Wise']]
-      : [['center', '🏬 Center Wise'], ['edition', '📰 Edition Wise'], ['executive', '👔 Executive Wise']];
-    const dqs = qs ? '&' + qs.slice(1) : '';
-    _supdFetch('drillL2', `/api/supply-dash/${mode}/branch/${encodeURIComponent(st.drillUnit)}?by=${st.drillBy}${dqs}`);
-    const dd = st.drillL2;
+      : [['center', '🏬 Center Wise'], ['edition', '📰 Edition Wise'], ['matrix', '🧮 Center × Edition'], ['executive', '👔 Executive Wise']];
     const toggle = `<div class="seg" style="margin-bottom:12px">${opts.map(([k, l]) => `<button class="${st.drillBy === k ? 'on' : ''}" onclick="supdDrillBy('${k}')">${l}</button>`).join('')}</div>`;
-    const colName = st.drillBy === 'district' ? 'District' : st.drillBy === 'center' ? 'Center' : st.drillBy === 'edition' ? 'Edition' : 'Executive';
-    // Cash Center Wise: each center drills into its hawkers
-    const cellFn = (mode === 'cash' && st.drillBy === 'center')
-      ? r => `<td><span onclick="supdDrillCenter('${esc(r.label).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.label)}</span></td>`
-      : r => `<td>${esc(r.label)}</td>`;
-    body = toggle + (!dd ? _cmdSkel() : _supdDrillTable(dd, colName, cellFn, mode, dd.total));
+    if (mode === 'cash' && st.drillBy === 'matrix') {
+      _supdFetch('drillMatrix', `/api/supply-dash/cash/center-edition/${encodeURIComponent(st.drillUnit)}${qs}`);
+      const dd = st.drillMatrix;
+      body = toggle + (!dd ? _cmdSkel() : _cashMatrix(dd, st.drillUnitName));
+    } else {
+      const dqs = qs ? '&' + qs.slice(1) : '';
+      _supdFetch('drillL2', `/api/supply-dash/${mode}/branch/${encodeURIComponent(st.drillUnit)}?by=${st.drillBy}${dqs}`);
+      const dd = st.drillL2;
+      const colName = st.drillBy === 'district' ? 'District' : st.drillBy === 'center' ? 'Center' : st.drillBy === 'edition' ? 'Edition' : 'Executive';
+      // Cash Center Wise: each center drills into its hawkers
+      const cellFn = (mode === 'cash' && st.drillBy === 'center')
+        ? r => `<td><span onclick="supdDrillCenter('${esc(r.label).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.label)}</span></td>`
+        : r => `<td>${esc(r.label)}</td>`;
+      body = toggle + (!dd ? _cmdSkel() : _supdDrillTable(dd, colName, cellFn, mode, dd.total));
+    }
   }
   return _supdBreadcrumb(st) + body;
 }
