@@ -3853,6 +3853,9 @@ require('./supply_dashboard')({ app, q, getScopeUnitCodes });
 // ── Taxi Delay Report ─────────────────────────────────────────────────────────
 require('./taxi_delay_report')({ app, q });
 
+// ── Agent (Agency) web app — live agent-scoped data ───────────────────────────
+require('./agent_app')({ app, q });
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 if (require.main === module) {
   app.listen(API_PORT, '0.0.0.0', () => {
