@@ -474,4 +474,271 @@ module.exports = function registerSupplyDash(ctx) {
       res.json({ data_upto: d.cur, insights });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  AGENT SALE (credit-sale active agencies) vs CASH SALE (hawker) analytics
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Publication → geography mapping (business rule, configurable — not hard-coded in queries).
+  const PUB_GEO = {
+    'RAJASTHAN PATRIKA':      { label: 'Rajasthan + National', core: ['RAJASTHAN'] },
+    'RAJASTHAN PATRIKA CITY': { label: 'Rajasthan + National', core: ['RAJASTHAN'] },
+    'PATRIKA':                { label: 'MP + Chhattisgarh',    core: ['MADHYA PRADESH', 'CHHATTISGARH'] },
+  };
+
+  // Agent Sale base = REGULAR supply to CREDIT-SALE + ACTIVE agencies only.
+  // DISTINCT (unit,agcd) prevents agency_master dpcd rows from fanning out supply_data.
+  const AGENT_JOIN = `JOIN (SELECT DISTINCT unit, agcd FROM agency_master
+      WHERE ag_class_name = 'CREDIT SALE' AND COALESCE(supply_stop_flag,'N') = 'N'
+        AND (suspend_date IS NULL OR suspend_date > CURDATE())) cm
+    ON cm.unit = s.unit_code AND cm.agcd = s.agcd`;
+  const AGENT_WHERE = `s.sup_type_code = 'S01'`; // REGULAR (excludes FREE / subscription)
+
+  // Unit → single home state (dominant state of that unit's agencies) — hawker_supply has no
+  // state column, and a unit supplies many states in supply_data, so we cannot join unit→state
+  // without double-counting. Cached 30 min. 43 units.
+  let _uhs = null, _uhsAt = 0;
+  async function unitHomeState() {
+    if (_uhs && Date.now() - _uhsAt < 30 * 60 * 1000) return _uhs;
+    const { rows } = await q(`SELECT unit, state_name, COUNT(*) c FROM agency_master
+      WHERE state_name IS NOT NULL AND state_name <> '' GROUP BY unit, state_name`);
+    const best = {};
+    rows.forEach(r => { const u = r.unit; if (!best[u] || N(r.c) > best[u].c) best[u] = { state: r.state_name, c: N(r.c) }; });
+    _uhs = {}; Object.keys(best).forEach(u => { _uhs[u] = best[u].state; });
+    _uhsAt = Date.now();
+    return _uhs;
+  }
+  const mkDelta = (cur, prev) => ({ current: cur, previous: prev, diff: cur - prev, growth_pct: r1(pct(cur, prev)) });
+
+  // ════ Agent + Cash + Total summary (current vs previous business day / period) ════
+  app.get('/api/supply-dash/sale-summary', async (req, res) => {
+    try {
+      const d = await refDates(req);
+      if (!d) return res.json({ no_data: true });
+      const sc2 = await scopeUnits(req);
+      const S = on(sc2, 's.unit_code'), Sh = on(sc2, 'h.loc_id');
+      const [agent, cash] = await Promise.all([
+        q(`SELECT s.supply_date sd, SUM(s.sup_copy) copies FROM supply_data s ${AGENT_JOIN}
+           WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${S} GROUP BY s.supply_date`,
+          [d.cur, d.prev || d.cur, ...sc2.params]),
+        q(`SELECT h.supply_date sd, SUM(h.sup_copies) copies FROM hawker_supply h
+           WHERE h.supply_date IN (?, ?)${Sh} GROUP BY h.supply_date`,
+          [d.cur, d.prev || d.cur, ...sc2.params]),
+      ]);
+      const pick = (rows, day) => N((rows.find(r => String(r.sd).slice(0, 10) === day) || {}).copies);
+      const aC = pick(agent.rows, d.cur), aP = pick(agent.rows, d.prev);
+      const cC = pick(cash.rows, d.cur), cP = pick(cash.rows, d.prev);
+      const totC = aC + cC;
+      res.json({
+        data_upto: d.cur, prev_day: d.prev, range: !!d.range, from: d.from || null, to: d.to || null,
+        agent: mkDelta(aC, aP), cash: mkDelta(cC, cP), total: mkDelta(totC, aP + cP),
+        agent_share_pct: totC ? r1(aC / totC * 100) : null,
+        cash_share_pct: totC ? r1(cC / totC * 100) : null,
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ════ AGENT drill — Level 1: state-wise ════
+  app.get('/api/supply-dash/agent/states', async (req, res) => {
+    try {
+      const d = await refDates(req);
+      if (!d) return res.json({ rows: [] });
+      const sc2 = await scopeUnits(req);
+      const S = on(sc2, 's.unit_code');
+      const { rows } = await q(`
+        SELECT state, SUM(cur) supply, SUM(prv) prev_supply,
+               COUNT(DISTINCT CASE WHEN cur > 0 THEN uc END) branches
+        FROM (SELECT s.state_name state, s.unit_code uc,
+                     SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
+                     SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
+              FROM supply_data s ${AGENT_JOIN}
+              WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${S}
+              GROUP BY s.state_name, s.unit_code) x
+        GROUP BY state ORDER BY supply DESC`,
+        [d.cur, d.prev || d.cur, d.cur, d.prev || d.cur, ...sc2.params]);
+      const total = rows.reduce((a, r) => a + N(r.supply), 0);
+      res.json({
+        data_upto: d.cur, total,
+        rows: rows.map(r => ({
+          state: r.state || '—', supply: N(r.supply), prev_supply: N(r.prev_supply), branches: N(r.branches),
+          net_change: N(r.supply) - N(r.prev_supply), growth_pct: r1(pct(N(r.supply), N(r.prev_supply))),
+          contribution_pct: total ? r1(N(r.supply) / total * 100) : null,
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ════ AGENT drill — branches (optionally within a state) ════
+  app.get('/api/supply-dash/agent/branches', async (req, res) => {
+    try {
+      const d = await refDates(req);
+      if (!d) return res.json({ rows: [] });
+      const sc2 = await scopeUnits(req);
+      const S = on(sc2, 's.unit_code');
+      const state = (req.query.state || '').trim();
+      const stCls = state ? ' AND s.state_name = ?' : '';
+      const { rows } = await q(`
+        SELECT unit_code, unit_name, SUM(cur) supply, SUM(prv) prev_supply,
+               COUNT(DISTINCT CASE WHEN cur > 0 THEN agcd END) agents
+        FROM (SELECT s.unit_code, s.unit_name, s.agcd,
+                     SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
+                     SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
+              FROM supply_data s ${AGENT_JOIN}
+              WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${S}${stCls}
+              GROUP BY s.unit_code, s.unit_name, s.agcd) x
+        GROUP BY unit_code, unit_name ORDER BY supply DESC`,
+        [d.cur, d.prev || d.cur, d.cur, d.prev || d.cur, ...sc2.params, ...(state ? [state] : [])]);
+      const total = rows.reduce((a, r) => a + N(r.supply), 0);
+      res.json({
+        data_upto: d.cur, state: state || null, total,
+        rows: rows.map((r, i) => ({
+          rank: i + 1, unit_code: r.unit_code, branch: r.unit_name, agents: N(r.agents),
+          supply: N(r.supply), prev_supply: N(r.prev_supply), net_change: N(r.supply) - N(r.prev_supply),
+          growth_pct: r1(pct(N(r.supply), N(r.prev_supply))), contribution_pct: total ? r1(N(r.supply) / total * 100) : null,
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ════ AGENT drill — Level 2: a branch by executive OR district ════
+  app.get('/api/supply-dash/agent/branch/:unit', async (req, res) => {
+    try {
+      const d = await refDates(req);
+      if (!d) return res.json({ rows: [] });
+      const unit = req.params.unit;
+      const sc2 = await scopeUnits(req);
+      if (sc2.clause === ' AND 1=0') return res.json({ rows: [] });
+      const by = req.query.by === 'executive' ? 'executive' : 'district';
+      let rows;
+      if (by === 'district') {
+        ({ rows } = await q(`
+          SELECT COALESCE(s.dist_name,'—') label,
+                 SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) supply,
+                 SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prev_supply,
+                 COUNT(DISTINCT s.agcd) agents
+          FROM supply_data s ${AGENT_JOIN}
+          WHERE ${AGENT_WHERE} AND s.unit_code = ? AND s.supply_date IN (?, ?)
+          GROUP BY label ORDER BY supply DESC`,
+          [d.cur, d.prev || d.cur, unit, d.cur, d.prev || d.cur]));
+      } else {
+        ({ rows } = await q(`
+          SELECT COALESCE(am.executive_name,'(no executive)') label,
+                 SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) supply,
+                 SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prev_supply,
+                 COUNT(DISTINCT s.agcd) agents
+          FROM supply_data s ${AGENT_JOIN}
+          LEFT JOIN (SELECT unit, agcd, MAX(executive_name) executive_name FROM agency_master GROUP BY unit, agcd) am
+            ON am.unit = s.unit_code AND am.agcd = s.agcd
+          WHERE ${AGENT_WHERE} AND s.unit_code = ? AND s.supply_date IN (?, ?)
+          GROUP BY label ORDER BY supply DESC`,
+          [d.cur, d.prev || d.cur, unit, d.cur, d.prev || d.cur]));
+      }
+      const total = rows.reduce((a, r) => a + N(r.supply), 0);
+      res.json({
+        data_upto: d.cur, unit_code: unit, by, total,
+        rows: rows.map(r => ({
+          label: r.label, agents: N(r.agents), supply: N(r.supply), prev_supply: N(r.prev_supply),
+          net_change: N(r.supply) - N(r.prev_supply), growth_pct: r1(pct(N(r.supply), N(r.prev_supply))),
+          contribution_pct: total ? r1(N(r.supply) / total * 100) : null,
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ════ CASH drill — Level 1: state-wise (unit home-state) ════
+  app.get('/api/supply-dash/cash/states', async (req, res) => {
+    try {
+      const d = await refDates(req);
+      if (!d) return res.json({ rows: [] });
+      const sc2 = await scopeUnits(req);
+      const S = on(sc2, 'h.loc_id');
+      const [uhs, agg] = await Promise.all([
+        unitHomeState(),
+        q(`SELECT h.loc_id, SUM(CASE WHEN h.supply_date = ? THEN h.sup_copies ELSE 0 END) cur,
+                  SUM(CASE WHEN h.supply_date = ? THEN h.sup_copies ELSE 0 END) prv,
+                  COUNT(DISTINCT h.hawker_id) hawkers
+           FROM hawker_supply h WHERE h.supply_date IN (?, ?)${S}
+           GROUP BY h.loc_id`, [d.cur, d.prev || d.cur, d.cur, d.prev || d.cur, ...sc2.params]),
+      ]);
+      const byState = {};
+      agg.rows.forEach(r => {
+        const st = uhs[r.loc_id] || '—';
+        const o = byState[st] = byState[st] || { state: st, supply: 0, prev_supply: 0, branches: 0 };
+        o.supply += N(r.cur); o.prev_supply += N(r.prv); if (N(r.cur) > 0) o.branches += 1;
+      });
+      const out = Object.values(byState).sort((a, b) => b.supply - a.supply);
+      const total = out.reduce((a, r) => a + r.supply, 0);
+      res.json({
+        data_upto: d.cur, total,
+        rows: out.map(r => ({
+          state: r.state, supply: r.supply, prev_supply: r.prev_supply, branches: r.branches,
+          net_change: r.supply - r.prev_supply, growth_pct: r1(pct(r.supply, r.prev_supply)),
+          contribution_pct: total ? r1(r.supply / total * 100) : null,
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ════ CASH drill — branches (optionally within a home-state) ════
+  app.get('/api/supply-dash/cash/branches', async (req, res) => {
+    try {
+      const d = await refDates(req);
+      if (!d) return res.json({ rows: [] });
+      const sc2 = await scopeUnits(req);
+      const S = on(sc2, 'h.loc_id');
+      const state = (req.query.state || '').trim();
+      const [uhs, agg] = await Promise.all([
+        unitHomeState(),
+        q(`SELECT h.loc_id, MAX(h.unit_name) unit_name,
+                  SUM(CASE WHEN h.supply_date = ? THEN h.sup_copies ELSE 0 END) cur,
+                  SUM(CASE WHEN h.supply_date = ? THEN h.sup_copies ELSE 0 END) prv,
+                  COUNT(DISTINCT h.hawker_id) hawkers, COUNT(DISTINCT h.hwk_cent_code) centers
+           FROM hawker_supply h WHERE h.supply_date IN (?, ?)${S}
+           GROUP BY h.loc_id`, [d.cur, d.prev || d.cur, d.cur, d.prev || d.cur, ...sc2.params]),
+      ]);
+      let rows = agg.rows.map(r => ({ ...r, state: uhs[r.loc_id] || '—' }));
+      if (state) rows = rows.filter(r => r.state === state);
+      rows.sort((a, b) => N(b.cur) - N(a.cur));
+      const total = rows.reduce((a, r) => a + N(r.cur), 0);
+      res.json({
+        data_upto: d.cur, state: state || null, total,
+        rows: rows.map((r, i) => ({
+          rank: i + 1, unit_code: r.loc_id, branch: r.unit_name, state: r.state,
+          hawkers: N(r.hawkers), centers: N(r.centers), supply: N(r.cur), prev_supply: N(r.prv),
+          net_change: N(r.cur) - N(r.prv), growth_pct: r1(pct(N(r.cur), N(r.prv))),
+          contribution_pct: total ? r1(N(r.cur) / total * 100) : null,
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ════ CASH drill — Level 2: a branch by executive OR center ════
+  app.get('/api/supply-dash/cash/branch/:unit', async (req, res) => {
+    try {
+      const d = await refDates(req);
+      if (!d) return res.json({ rows: [] });
+      const unit = req.params.unit;
+      const by = req.query.by === 'executive' ? 'executive' : 'center';
+      const groupCol = by === 'executive'
+        ? `COALESCE(NULLIF(h.field_officer_name,''), NULLIF(h.center_incharge_name,''), '(no executive)')`
+        : `COALESCE(NULLIF(h.hawker_center,''), '—')`;
+      const { rows } = await q(`
+        SELECT ${groupCol} label,
+               SUM(CASE WHEN h.supply_date = ? THEN h.sup_copies ELSE 0 END) supply,
+               SUM(CASE WHEN h.supply_date = ? THEN h.sup_copies ELSE 0 END) prev_supply,
+               COUNT(DISTINCT h.hawker_id) hawkers
+        FROM hawker_supply h WHERE h.loc_id = ? AND h.supply_date IN (?, ?)
+        GROUP BY label ORDER BY supply DESC`,
+        [d.cur, d.prev || d.cur, unit, d.cur, d.prev || d.cur]);
+      const total = rows.reduce((a, r) => a + N(r.supply), 0);
+      res.json({
+        data_upto: d.cur, unit_code: unit, by, total,
+        rows: rows.map(r => ({
+          label: r.label, hawkers: N(r.hawkers), supply: N(r.supply), prev_supply: N(r.prev_supply),
+          net_change: N(r.supply) - N(r.prev_supply), growth_pct: r1(pct(N(r.supply), N(r.prev_supply))),
+          contribution_pct: total ? r1(N(r.supply) / total * 100) : null,
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
 };
