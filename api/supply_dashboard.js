@@ -30,12 +30,14 @@ module.exports = function registerSupplyDash(ctx) {
   const r1 = v => v == null ? null : Math.round(v * 10) / 10;
 
   // ── Scope: unit filter from role headers + optional explicit unit_code ──────
-  async function scopeUnits(req) {
+  async function scopeUnits(req, opts = {}) {
     const personCode = req.headers['x-person-code'] || '';
     const hl = parseInt(req.headers['x-hierarchy-level'] || '1', 10);
     const allowed = await getScopeUnitCodes(personCode, hl); // null = all
     const want  = (req.query.unit_code  || '').trim();
-    const state = (req.query.state_name || '').trim();
+    // Sale views resolve the state filter by branch HOME state (post-aggregation), so they ask
+    // scopeUnits to ignore the supply-row state_name resolution to avoid cross-state unit leakage.
+    const state = opts.ignoreState ? '' : (req.query.state_name || '').trim();
     // Explicit unit selection is the most specific — use it directly.
     if (want) {
       if (allowed && !allowed.includes(want)) return { clause: ' AND 1=0', params: [] };
@@ -535,18 +537,23 @@ module.exports = function registerSupplyDash(ctx) {
     try {
       const w = await saleWin(req);
       if (!w) return res.json({ no_data: true });
-      const sc2 = await scopeUnits(req);
+      const sc2 = await scopeUnits(req, { ignoreState: true });
+      const stF = (req.query.state_name || req.query.state || '').trim();
+      let hs = null;
+      if (stF) { const uhs = await unitHomeState(); hs = Object.keys(uhs).filter(u => uhs[u] === stF); }
+      const hsS = hs ? ` AND s.unit_code IN (${hs.map(() => '?').join(',') || "''"})` : '';
+      const hsH = hs ? ` AND h.loc_id IN (${hs.map(() => '?').join(',') || "''"})` : '';
       const S = on(sc2, 's.unit_code'), Sh = on(sc2, 'h.loc_id');
       const [agent, cash] = await Promise.all([
         q(`SELECT SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) cur,
                   SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prv
            FROM supply_data s ${AGENT_JOIN}
-           WHERE ${AGENT_WHERE} AND s.supply_date BETWEEN ? AND ?${S}`,
-          [w.cF, w.cT, w.pF, w.pT, w.pF, w.cT, ...sc2.params]),
+           WHERE ${AGENT_WHERE} AND s.supply_date BETWEEN ? AND ?${S}${hsS}`,
+          [w.cF, w.cT, w.pF, w.pT, w.pF, w.cT, ...sc2.params, ...(hs || [])]),
         q(`SELECT SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) cur,
                   SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) prv
-           FROM hawker_supply h WHERE h.supply_date BETWEEN ? AND ?${Sh}`,
-          [w.cF, w.cT, w.pF, w.pT, w.pF, w.cT, ...sc2.params]),
+           FROM hawker_supply h WHERE h.supply_date BETWEEN ? AND ?${Sh}${hsH}`,
+          [w.cF, w.cT, w.pF, w.pT, w.pF, w.cT, ...sc2.params, ...(hs || [])]),
       ]);
       const aC = N(agent.rows[0] && agent.rows[0].cur), aP = N(agent.rows[0] && agent.rows[0].prv);
       const cC = N(cash.rows[0] && cash.rows[0].cur), cP = N(cash.rows[0] && cash.rows[0].prv);
@@ -564,7 +571,7 @@ module.exports = function registerSupplyDash(ctx) {
     try {
       const w = await saleWin(req);
       if (!w) return res.json({ rows: [] });
-      const sc2 = await scopeUnits(req);
+      const sc2 = await scopeUnits(req, { ignoreState: true });
       const S = on(sc2, 's.unit_code');
       const [uhs, agg] = await Promise.all([
         unitHomeState(),
@@ -581,7 +588,9 @@ module.exports = function registerSupplyDash(ctx) {
         const o = byState[st] = byState[st] || { state: st, supply: 0, prev_supply: 0, branches: 0 };
         o.supply += N(r.cur); o.prev_supply += N(r.prv); if (N(r.cur) > 0) o.branches += 1;
       });
-      const out = Object.values(byState).sort((a, b) => b.supply - a.supply);
+      let out = Object.values(byState).sort((a, b) => b.supply - a.supply);
+      const _stF = (req.query.state_name || req.query.state || '').trim();
+      if (_stF) out = out.filter(r => r.state === _stF);
       const total = out.reduce((a, r) => a + r.supply, 0);
       res.json({
         ...winMeta(w), total,
@@ -599,9 +608,9 @@ module.exports = function registerSupplyDash(ctx) {
     try {
       const w = await saleWin(req);
       if (!w) return res.json({ rows: [] });
-      const sc2 = await scopeUnits(req);
+      const sc2 = await scopeUnits(req, { ignoreState: true });
       const S = on(sc2, 's.unit_code');
-      const state = (req.query.state || '').trim();
+      const state = (req.query.state || req.query.state_name || '').trim();
       const [uhs, agg] = await Promise.all([
         unitHomeState(),
         q(`SELECT s.unit_code, MAX(s.unit_name) unit_name,
@@ -677,7 +686,7 @@ module.exports = function registerSupplyDash(ctx) {
     try {
       const w = await saleWin(req);
       if (!w) return res.json({ rows: [] });
-      const sc2 = await scopeUnits(req);
+      const sc2 = await scopeUnits(req, { ignoreState: true });
       const S = on(sc2, 'h.loc_id');
       const [uhs, agg] = await Promise.all([
         unitHomeState(),
@@ -693,7 +702,9 @@ module.exports = function registerSupplyDash(ctx) {
         const o = byState[st] = byState[st] || { state: st, supply: 0, prev_supply: 0, branches: 0 };
         o.supply += N(r.cur); o.prev_supply += N(r.prv); if (N(r.cur) > 0) o.branches += 1;
       });
-      const out = Object.values(byState).sort((a, b) => b.supply - a.supply);
+      let out = Object.values(byState).sort((a, b) => b.supply - a.supply);
+      const _stF = (req.query.state_name || req.query.state || '').trim();
+      if (_stF) out = out.filter(r => r.state === _stF);
       const total = out.reduce((a, r) => a + r.supply, 0);
       res.json({
         ...winMeta(w), total,
@@ -711,9 +722,9 @@ module.exports = function registerSupplyDash(ctx) {
     try {
       const w = await saleWin(req);
       if (!w) return res.json({ rows: [] });
-      const sc2 = await scopeUnits(req);
+      const sc2 = await scopeUnits(req, { ignoreState: true });
       const S = on(sc2, 'h.loc_id');
-      const state = (req.query.state || '').trim();
+      const state = (req.query.state || req.query.state_name || '').trim();
       const [uhs, agg] = await Promise.all([
         unitHomeState(),
         q(`SELECT h.loc_id, MAX(h.unit_name) unit_name,
