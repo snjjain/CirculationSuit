@@ -1394,7 +1394,7 @@ window.supdUnit = u => {
   ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
   render();
 };
-const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'covidSummary', 'covidAgentStates', 'covidCashStates'].forEach(k => { st[k] = null; });
+const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'covidSummary', 'covidAgentStates', 'covidCashStates'].forEach(k => { st[k] = null; });
 // State dropdown: cascade the Unit list to that state (data refreshes when Apply is pressed)
 window.supdSetState = (v) => {
   const st = _supdState();
@@ -1631,14 +1631,15 @@ function _supdExceptions(st) {
 const _saleColor = m => m === 'agent' ? 'var(--blue)' : m === 'cash' ? 'var(--gold)' : 'var(--grn)';
 window.supdDrill = (mode, state, unit, unitName) => {
   const st = _supdState();
-  st.drillMode = mode || null; st.drillState = state || ''; st.drillUnit = unit || ''; st.drillUnitName = unitName || '';
+  st.drillMode = mode || null; st.drillState = state || ''; st.drillUnit = unit || ''; st.drillUnitName = unitName || ''; st.drillCenter = '';
   if (mode && !st.drillBy) st.drillBy = mode === 'agent' ? 'district' : 'center';
   if (mode === 'agent' && (st.drillBy !== 'district' && st.drillBy !== 'executive')) st.drillBy = 'district';
-  if (mode === 'cash' && (st.drillBy !== 'center' && st.drillBy !== 'executive')) st.drillBy = 'center';
-  ['drillStates', 'drillBranches', 'drillL2'].forEach(k => { st[k] = null; });
+  if (mode === 'cash' && !['center', 'edition', 'executive'].includes(st.drillBy)) st.drillBy = 'center';
+  ['drillStates', 'drillBranches', 'drillL2', 'drillHawkers'].forEach(k => { st[k] = null; });
   render();
 };
-window.supdDrillBy = by => { const st = _supdState(); st.drillBy = by; st.drillL2 = null; render(); };
+window.supdDrillBy = by => { const st = _supdState(); st.drillBy = by; st.drillCenter = ''; st.drillL2 = null; st.drillHawkers = null; render(); };
+window.supdDrillCenter = center => { const st = _supdState(); st.drillCenter = center || ''; st.drillHawkers = null; render(); };
 
 function _saleKpi(mode, icon, label, data, clickable) {
   const g = data.growth_pct, color = g == null ? 'var(--muted)' : g >= 0 ? 'var(--grn)' : 'var(--red)', arrow = g == null ? '' : g >= 0 ? '▲' : '▼';
@@ -1684,20 +1685,28 @@ function _supdBreadcrumb(st) {
   const link = (txt, fn, active) => `<span onclick="${fn}" style="cursor:pointer;color:${active ? 'var(--ink)' : 'var(--gold-d)'};font-weight:${active ? 700 : 500}">${txt}</span>`;
   const parts = [link('Supply', "supdDrill(null)"), link(modeLabel, `supdDrill('${st.drillMode}')`, !st.drillState)];
   if (st.drillState) parts.push(link(esc(st.drillState), `supdDrill('${st.drillMode}','${esc(st.drillState)}')`, !st.drillUnit));
-  if (st.drillUnit) parts.push(link(esc(st.drillUnitName || st.drillUnit), '', true));
+  if (st.drillUnit) parts.push(link(esc(st.drillUnitName || st.drillUnit), st.drillCenter ? "supdDrillCenter('')" : '', !st.drillCenter));
+  if (st.drillCenter) parts.push(link(esc(st.drillCenter), '', true));
   return `<div style="font-size:12.5px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${parts.join('<span style="color:var(--muted)">›</span>')}</div>`;
 }
 function _supdDrillTable(dd, firstCol, cellFn, mode, total) {
   const rows = dd.rows || [], max = Math.max(1, ...rows.map(r => r.supply));
+  const diffCell = v => `<td class="r num" style="color:${v > 0 ? 'var(--grn)' : v < 0 ? 'var(--red)' : 'var(--muted)'}">${v > 0 ? '+' : ''}${_supdN(v)}</td>`;
   const body = rows.map(r => `<tr>${cellFn(r)}
-    <td style="width:110px"><div class="bar"><i style="width:${Math.round(r.supply / max * 100)}%;background:${_saleColor(mode)}"></i></div></td>
+    <td style="width:90px"><div class="bar"><i style="width:${Math.round(r.supply / max * 100)}%;background:${_saleColor(mode)}"></i></div></td>
     <td class="r num">${_supdN(r.supply)}</td><td class="r num" style="color:var(--muted)">${_supdN(r.prev_supply)}</td>
+    ${diffCell(r.net_change != null ? r.net_change : (r.supply - r.prev_supply))}
     <td class="r num" style="color:${r.growth_pct >= 0 ? 'var(--grn)' : 'var(--red)'}">${_supdPct(r.growth_pct)}</td>
     <td class="r num">${r.contribution_pct != null ? r.contribution_pct + '%' : '—'}</td></tr>`).join('');
+  const tS = rows.reduce((a, r) => a + (r.supply || 0), 0), tP = rows.reduce((a, r) => a + (r.prev_supply || 0), 0), tD = tS - tP;
+  const tG = tP ? Math.round((tD / Math.abs(tP)) * 1000) / 10 : null;
+  const foot = rows.length ? `<tr style="font-weight:800;background:var(--surf2);border-top:2px solid var(--brd)">
+    <td>Total</td><td></td><td class="r num">${_supdN(tS)}</td><td class="r num">${_supdN(tP)}</td>${diffCell(tD)}
+    <td class="r num" style="color:${tG >= 0 ? 'var(--grn)' : 'var(--red)'}">${_supdPct(tG)}</td><td class="r num">100%</td></tr>` : '';
   const periodNote = dd.range ? `<div class="lbl" style="padding:8px 16px 0;color:var(--muted)">Supply = ${dd.cur_label} &nbsp;·&nbsp; Prev = ${dd.prev_label}</div>` : '';
   return `<div class="card"><div class="cardhead"><h3>Total ${_supdN(total)} copies</h3><span class="lbl" style="color:var(--muted)">${rows.length} rows</span></div>${periodNote}
-    <div class="tablewrap"><table><thead><tr><th>${firstCol}</th><th></th><th class="r">Supply</th><th class="r">Prev</th><th class="r">Growth</th><th class="r">Share</th></tr></thead>
-    <tbody>${body || `<tr><td colspan="6" style="color:var(--muted)">No data</td></tr>`}</tbody></table></div></div>`;
+    <div class="tablewrap"><table><thead><tr><th>${firstCol}</th><th></th><th class="r">Supply</th><th class="r">Prev</th><th class="r">Diff</th><th class="r">Growth</th><th class="r">Share</th></tr></thead>
+    <tbody>${body || `<tr><td colspan="7" style="color:var(--muted)">No data</td></tr>`}${foot}</tbody></table></div></div>`;
 }
 function _supdSaleDrill(st) {
   const mode = st.drillMode, qs = _supdQS(st), amp = qs ? '&' : '?';
@@ -1712,14 +1721,26 @@ function _supdSaleDrill(st) {
     const dd = st.drillBranches;
     body = !dd ? _cmdSkel() : _supdDrillTable(dd, 'Branch',
       r => `<td><span onclick="supdDrill('${mode}','${esc(st.drillState)}','${esc(r.unit_code)}','${esc(r.branch)}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.branch)}</span></td>`, mode, dd.total);
+  } else if (mode === 'cash' && st.drillCenter) {
+    // Cash Level 3: hawker-wise within a center
+    const dqs = qs ? '&' + qs.slice(1) : '';
+    _supdFetch('drillHawkers', `/api/supply-dash/cash/branch/${encodeURIComponent(st.drillUnit)}?by=hawker&center=${encodeURIComponent(st.drillCenter)}${dqs}`);
+    const dd = st.drillHawkers;
+    body = !dd ? _cmdSkel() : _supdDrillTable(dd, 'Hawker', r => `<td>${esc(r.label)}</td>`, mode, dd.total);
   } else {
-    const opts = mode === 'agent' ? [['district', '📍 District Wise'], ['executive', '👔 Executive Wise']] : [['center', '🏬 Center Wise'], ['executive', '👔 Executive Wise']];
+    const opts = mode === 'agent'
+      ? [['district', '📍 District Wise'], ['executive', '👔 Executive Wise']]
+      : [['center', '🏬 Center Wise'], ['edition', '📰 Edition Wise'], ['executive', '👔 Executive Wise']];
     const dqs = qs ? '&' + qs.slice(1) : '';
     _supdFetch('drillL2', `/api/supply-dash/${mode}/branch/${encodeURIComponent(st.drillUnit)}?by=${st.drillBy}${dqs}`);
     const dd = st.drillL2;
     const toggle = `<div class="seg" style="margin-bottom:12px">${opts.map(([k, l]) => `<button class="${st.drillBy === k ? 'on' : ''}" onclick="supdDrillBy('${k}')">${l}</button>`).join('')}</div>`;
-    const colName = st.drillBy === 'district' ? 'District' : st.drillBy === 'center' ? 'Center' : 'Executive';
-    body = toggle + (!dd ? _cmdSkel() : _supdDrillTable(dd, colName, r => `<td>${esc(r.label)}</td>`, mode, dd.total));
+    const colName = st.drillBy === 'district' ? 'District' : st.drillBy === 'center' ? 'Center' : st.drillBy === 'edition' ? 'Edition' : 'Executive';
+    // Cash Center Wise: each center drills into its hawkers
+    const cellFn = (mode === 'cash' && st.drillBy === 'center')
+      ? r => `<td><span onclick="supdDrillCenter('${esc(r.label).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.label)}</span></td>`
+      : r => `<td>${esc(r.label)}</td>`;
+    body = toggle + (!dd ? _cmdSkel() : _supdDrillTable(dd, colName, cellFn, mode, dd.total));
   }
   return _supdBreadcrumb(st) + body;
 }

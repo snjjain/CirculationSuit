@@ -540,6 +540,19 @@ module.exports = function registerSupplyDash(ctx) {
   // cur/prev SUM over the windows; the last two params are always (w.pF, w.cT) for the WHERE span.
   const winMeta = w => ({ data_upto: w.data_upto, range: w.range, cur_label: w.cur_label, prev_label: w.prev_label });
 
+  // Cash Sale edition → display alias (configurable). Names normalised (uppercase, single spaces).
+  const _normEd = s => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  const EDITION_ALIAS = {};
+  [
+    ['CHAKSU - BASSI - KANOTA', 'City Dak'], ['CHOMU', 'City Dak'], ['DAUSA', 'City Dak'],
+    ['DUDU - PHULERA - PHAGI', 'City Dak'], ['KARAULI', 'City Dak'], ['KOTPUTALI', 'City Dak'], ['TONK', 'City Dak'],
+    ['VARIANT I', 'Bold'], ['VARIANT II', 'News Today'], ['VARIANT IIND', 'News Today'],
+    ['GOLDEN WITH X', 'City Super'], ['UJJAIN', 'Ujjain'], ['WITHOUT X', 'City Standard'],
+    ['AJMER CITY', 'CITY'], ['BHL ( CITY )', 'CITY'], ['BIKANER CITY', 'CITY'], ['JODHPUR CITY', 'CITY'],
+    ['SRI GANGANAGAR CITY', 'CITY'], ['CITY EDITION', 'CITY'], ['CITY', 'CITY'],
+  ].forEach(([k, v]) => { EDITION_ALIAS[_normEd(k)] = v; });
+  const editionAlias = name => (name ? (EDITION_ALIAS[_normEd(name)] || name) : '—');
+
   // ════ Agent + Cash + Total summary (current period vs previous equivalent period) ════
   app.get('/api/supply-dash/sale-summary', async (req, res) => {
     try {
@@ -764,21 +777,34 @@ module.exports = function registerSupplyDash(ctx) {
       const w = await saleWin(req);
       if (!w) return res.json({ rows: [] });
       const unit = req.params.unit;
-      const by = req.query.by === 'executive' ? 'executive' : 'center';
-      const groupCol = by === 'executive'
-        ? `COALESCE(NULLIF(h.field_officer_name,''), NULLIF(h.center_incharge_name,''), '(no executive)')`
-        : `COALESCE(NULLIF(h.hawker_center,''), '—')`;
-      const { rows } = await q(`
+      const by = ['executive', 'edition', 'hawker'].includes(req.query.by) ? req.query.by : 'center';
+      const center = (req.query.center || '').trim();
+      let groupCol, extraCls = '', extraP = [];
+      if (by === 'executive') groupCol = `COALESCE(NULLIF(h.field_officer_name,''), NULLIF(h.center_incharge_name,''), '(no executive)')`;
+      else if (by === 'edition') groupCol = `COALESCE(NULLIF(h.edtn_name,''), '—')`;
+      else if (by === 'hawker') { groupCol = `COALESCE(NULLIF(h.hawker_name,''), h.hawker_id, '—')`; if (center) { extraCls = ' AND h.hawker_center = ?'; extraP = [center]; } }
+      else groupCol = `COALESCE(NULLIF(h.hawker_center,''), '—')`;
+      let { rows } = await q(`
         SELECT ${groupCol} label,
                SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) supply,
                SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) prev_supply,
                COUNT(DISTINCT h.hawker_id) hawkers
-        FROM hawker_supply h WHERE h.loc_id = ? AND h.supply_date IN (?, ?)
+        FROM hawker_supply h WHERE h.loc_id = ?${extraCls} AND h.supply_date IN (?, ?)
         GROUP BY label ORDER BY supply DESC`,
-        [w.cF, w.cT, w.pF, w.pT, unit, w.cF, w.pF]);
+        [w.cF, w.cT, w.pF, w.pT, unit, ...extraP, w.cF, w.pF]);
+      // Edition Wise: map raw edition names to their display alias and re-aggregate by alias.
+      if (by === 'edition') {
+        const byAlias = {};
+        rows.forEach(r => {
+          const al = editionAlias(r.label);
+          const o = byAlias[al] = byAlias[al] || { label: al, supply: 0, prev_supply: 0, hawkers: 0 };
+          o.supply += N(r.supply); o.prev_supply += N(r.prev_supply); o.hawkers += N(r.hawkers);
+        });
+        rows = Object.values(byAlias).sort((a, b) => N(b.supply) - N(a.supply));
+      }
       const total = rows.reduce((a, r) => a + N(r.supply), 0);
       res.json({
-        ...winMeta(w), unit_code: unit, by, total,
+        ...winMeta(w), unit_code: unit, by, center: center || null, total,
         rows: rows.map(r => ({
           label: r.label, hawkers: N(r.hawkers), supply: N(r.supply), prev_supply: N(r.prev_supply),
           net_change: N(r.supply) - N(r.prev_supply), growth_pct: r1(pct(N(r.supply), N(r.prev_supply))),
