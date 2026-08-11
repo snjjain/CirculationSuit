@@ -186,13 +186,20 @@ td.r,th.r{text-align:right}
 .seg{display:inline-flex;background:var(--surf2);border:1px solid var(--brd);border-radius:10px;padding:2px;max-width:100%;overflow-x:auto}
 .seg button{padding:5px 13px;border-radius:8px;font-size:12px;font-weight:700;color:var(--muted);white-space:nowrap}
 .seg button.on{background:var(--gold);color:#fff}
-.applist{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:13px}
-.appcard{padding:18px;text-align:left;transition:transform .12s,border-color .12s;border:1px solid var(--brd2)}
-.appcard:hover{transform:translateY(-2px);border-color:var(--gold)}
-.appcard .aico{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:11px}
-.appcard b{font-size:15px;display:block}
-.appcard small{color:var(--muted);display:block;margin-top:3px;line-height:1.45;white-space:normal}
+.applist{display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:13px}
+.appcard{position:relative;display:flex;flex-direction:column;padding:16px;text-align:left;transition:transform .12s,border-color .12s,box-shadow .12s;border:1px solid var(--brd2)}
+.appcard:hover{transform:translateY(-2px);border-color:var(--gold);box-shadow:0 6px 20px rgba(28,43,69,.10)}
+.appcard .app-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:11px}
+.appcard .aico{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;margin:0}
+.appcard .app-status{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--grn)}
+.appcard .app-status i{width:7px;height:7px;border-radius:50%;background:var(--grn);box-shadow:0 0 0 3px var(--grn-l)}
+.appcard b{font-size:15.5px;display:block;line-height:1.25}
+.appcard .app-aud{display:inline-block;margin-top:3px;font-size:11px;font-weight:700;color:var(--gold-d)}
+.appcard small{color:var(--muted);display:block;margin-top:6px;line-height:1.45;white-space:normal}
+.appcard .app-launch{margin-top:auto;padding-top:13px;font-size:12.5px;font-weight:800;color:var(--gold-d);display:inline-flex;align-items:center;gap:6px}
+.appcard:hover .app-launch{gap:9px}
 .tagrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+@media(max-width:400px){.applist{grid-template-columns:1fr}}
 
 /* Hero (home) */
 .hero{background:linear-gradient(135deg,var(--navy) 0%,#2A3F65 100%);border-radius:var(--r);color:#fff;padding:22px;margin-bottom:15px;position:relative;overflow:hidden}

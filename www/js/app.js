@@ -26,6 +26,15 @@ const APP_MENU = {
             sub: [["taxi_trips", "Today's Trips"], ["taxi_log", "Log Trip"], ["taxi_vehicles", "Vehicles"]] }
 };
 
+/* ---------- launcher display metadata: the app's short name + target audience (user type) ---------- */
+const APP_META = {
+  agent:  { name: "Agent App",  audience: "Circulation Agents" },
+  hawker: { name: "Hawker App", audience: "Hawkers" },
+  dcr:    { name: "DCR",        audience: "Circulation Staff" },
+  survey: { name: "Survey",     audience: "Surveyors & Team Leads" },
+  taxi:   { name: "Taxi",       audience: "Taxi Drivers" },
+};
+
 /* ---------- state & persistence ---------- */
 let S = { user: null, screen: "home", openGroups: {}, sideOpen: false, drill: {}, live: {}, range: null };
 const $ = s => document.querySelector(s);
@@ -316,36 +325,57 @@ const slaChip = st => chip(st === "crit" ? "crit" : st === "warn" ? "warn" : "go
 /* ═══════════ VIEWS ═══════════ */
 const VIEWS = {};
 
-/* ---- Home (module launcher, from suite reference) ---- */
+/* ---- Home (SSO app launcher) ----
+   Builds the set of applications this user may open — the dashboard(s) plus the field apps
+   in their assigned `modules` — gated by existing rights (dashboard flag + modules + perms).
+   Everything is DB-driven; nothing is hard-coded per user. */
+function _launcherAppCard(c) {
+  return `<button class="card appcard" onclick="go('${c.screen}')" aria-label="Open ${c.name}">
+      <div class="app-top">
+        <div class="aico" style="background:${c.tint}">${c.icon}</div>
+        <span class="app-status"><i></i>Live</span>
+      </div>
+      <b>${c.name}</b>
+      ${c.audience ? `<span class="app-aud">${c.audience}</span>` : ""}
+      <small>${c.desc}</small>
+      <div class="tagrow">${c.tags.slice(0, 3).map(t => chip("mut", t)).join("")}</div>
+      <span class="app-launch">Launch <span aria-hidden="true">→</span></span>
+    </button>`;
+}
 VIEWS.home = () => {
   const u = S.user, hl = u.hierarchyLevel || 99;
-  const apps = u.modules.map(k => {
-    const a = APP_MENU[k];
-    return `<button class="card appcard" onclick="go('${a.sub[0][0]}')">
-      <div class="aico" style="background:${a.tint}">${a.icon}</div>
-      <b>${a.label}</b><small>${a.desc}</small>
-      <div class="tagrow">${a.sub.map(s => chip("mut", s[1])).join("")}</div></button>`;
-  }).join("");
+  const cards = [];
+
+  // Dashboard application (management / field-ops), shown only when the user has dashboard rights
+  if (u.dashboard) {
+    cards.push(hl <= 4
+      ? { screen:"command", name:"Circulation Dashboard", audience:"Management & Circulation Staff", icon:"🗞️", tint:"var(--navy-l)",
+          desc:"Command centre — supply, collections, outstanding, transport, approvals & reports.", tags:["Command Centre","Collections","Reports"] }
+      : { screen:"routes",  name:"Field Operations", audience:"Field Staff", icon:"🗞️", tint:"var(--navy-l)",
+          desc:"Operational view — routes, deliveries, collections and complaints in your territory.", tags:["Routes","Collections","Complaints"] });
+  }
+
+  // Field applications from the user's assigned modules (respecting per-app view rights)
+  (u.modules || []).forEach(k => {
+    const a = APP_MENU[k]; if (!a) return;
+    if (typeof permAllows === "function" && permAllows(k, "view") === false) return;
+    const m = APP_META[k] || {};
+    cards.push({ screen:a.sub[0][0], name:m.name || a.label, audience:m.audience || "",
+      icon:a.icon, tint:a.tint, desc:a.desc, tags:a.sub.map(s => s[1]) });
+  });
+
   const stats = homeStats(u);
   const statsHtml = stats.map(([v, l]) => `<div><b class="num">${v}</b><small>${l}</small></div>`).join("");
-  const dashEntry = hl <= 4
-    ? { screen:"command", title:"Vitran — Circulation OS",
-        desc:"Command centre — pipeline, partners, collections, complaints, approvals and reports.",
-        tags: chip("mut","Command Centre")+chip("mut","Approvals")+chip("mut","Reports") }
-    : { screen:"routes",  title:"Field Operations Dashboard",
-        desc:"Operational view — routes, deliveries, collections and complaints in your territory.",
-        tags: chip("mut","Routes")+chip("mut","Collections")+chip("mut","Complaints") };
+  const grid = cards.length
+    ? `<div class="applist">${cards.map(_launcherAppCard).join("")}</div>`
+    : `<div class="card pad" style="color:var(--muted)">No applications have been assigned to your account yet. Please contact your administrator.</div>`;
+
   return `
     <div class="hero"><h2>Namaste, ${u.name.split(" ")[0]} 🙏</h2>
-      <p>${u.roleLabel} · ${u.scopeLabel} · Level ${hl} of 10</p>
+      <p>${u.roleLabel}${u.scopeLabel ? " · " + u.scopeLabel : ""} · Level ${hl} of 10</p>
       <div class="hstats">${statsHtml}</div></div>
-    ${u.dashboard ? `<div class="sb-lbl" style="padding-left:2px">Dashboard</div>
-      <div class="applist" style="margin-bottom:15px"><button class="card appcard" onclick="go('${dashEntry.screen}')">
-      <div class="aico" style="background:var(--navy-l)">🗞️</div><b>${dashEntry.title}</b>
-      <small>${dashEntry.desc}</small>
-      <div class="tagrow">${dashEntry.tags}</div></button></div>` : ""}
-    <div class="sb-lbl" style="padding-left:2px">Field Apps — User Input</div>
-    <div class="applist">${apps}</div>`;
+    <div class="sb-lbl" style="padding-left:2px">Your Applications</div>
+    ${grid}`;
 };
 
 /* ---- Dashboard: Command Centre ---- */
