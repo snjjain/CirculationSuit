@@ -1394,7 +1394,7 @@ window.supdUnit = u => {
   ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
   render();
 };
-const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2'].forEach(k => { st[k] = null; });
+const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'covidSummary', 'covidAgentStates', 'covidCashStates'].forEach(k => { st[k] = null; });
 // State dropdown: cascade the Unit list to that state (data refreshes when Apply is pressed)
 window.supdSetState = (v) => {
   const st = _supdState();
@@ -1724,10 +1724,58 @@ function _supdSaleDrill(st) {
   return _supdBreadcrumb(st) + body;
 }
 
+/* ── COVID-baseline comparison: user picks a date, compared to the fixed 18-Mar-2020 baseline ── */
+function _supdCovidQS(st) {
+  const p = ['covid=1'];
+  if (st.covidDate) p.push('date=' + st.covidDate);
+  if (st.state) p.push('state_name=' + encodeURIComponent(st.state));
+  if (st.unit) p.push('unit_code=' + encodeURIComponent(st.unit));
+  return '?' + p.join('&');
+}
+window.supdCovidDate = v => { const st = _supdState(); st.covidDate = v; ['covidSummary', 'covidAgentStates', 'covidCashStates'].forEach(k => { st[k] = null; }); render(); };
+function _covidKpi(icon, label, color, data) {
+  const g = data.growth_pct, c = g == null ? 'var(--muted)' : g >= 0 ? 'var(--grn)' : 'var(--red)', arrow = g == null ? '' : g >= 0 ? '▲' : '▼';
+  return `<div class="card pad" style="border-left:4px solid ${color}">
+    <span class="lbl">${icon} ${label}</span>
+    <div class="num" style="font-size:24px;font-weight:800;line-height:1.15">${_supdN(data.current)}</div>
+    <div style="display:flex;gap:12px;font-size:12px;margin-top:4px;flex-wrap:wrap">
+      <span style="color:var(--muted)">18-Mar-2020: ${_supdN(data.previous)}</span>
+      <span style="color:${c};font-weight:700">${arrow} ${_supdN(Math.abs(data.diff))} (${_supdPct(g)})</span></div></div>`;
+}
+function _covidStateMini(title, data) {
+  if (!data) return _cmdSkel();
+  const rows = (data.rows || []).slice(0, 10);
+  return `<div class="card"><div class="cardhead"><h3>${title}</h3></div>
+    <div class="tablewrap"><table><thead><tr><th>State</th><th class="r">Selected</th><th class="r">COVID</th><th class="r">Change</th></tr></thead>
+    <tbody>${rows.map(r => `<tr><td>${esc(r.state)}</td><td class="r num">${_supdN(r.supply)}</td><td class="r num" style="color:var(--muted)">${_supdN(r.prev_supply)}</td><td class="r num" style="color:${r.growth_pct >= 0 ? 'var(--grn)' : 'var(--red)'}">${_supdPct(r.growth_pct)}</td></tr>`).join('') || `<tr><td colspan="4" style="color:var(--muted)">No data</td></tr>`}</tbody></table></div></div>`;
+}
+function _supdCovid(st) {
+  const qs = _supdCovidQS(st);
+  _supdFetch('covidSummary', '/api/supply-dash/sale-summary' + qs);
+  _supdFetch('covidAgentStates', '/api/supply-dash/agent/states' + qs);
+  _supdFetch('covidCashStates', '/api/supply-dash/cash/states' + qs);
+  const s = st.covidSummary;
+  const maxDate = (st.filters && st.filters.data_upto) ? String(st.filters.data_upto).slice(0, 10) : '';
+  const curDate = st.covidDate || (s ? s.data_upto : maxDate);
+  const picker = `<div class="filters" style="margin-bottom:13px">
+    <span class="lbl" style="align-self:center">🦠 Compare date</span>
+    <input type="date" id="supd-covid-date" value="${curDate || ''}" ${maxDate ? `max="${maxDate}"` : ''} min="2020-03-18" onchange="supdCovidDate(this.value)" style="background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:7px 10px;font-size:12px;color:var(--fg)">
+    <span class="lbl" style="align-self:center;color:var(--muted)">vs fixed COVID baseline <b>18-Mar-2020</b></span></div>`;
+  if (!s) return picker + _cmdSkel();
+  if (s._err || s.no_data) return picker + `<div class="card pad" style="color:var(--muted)">No supply data for this date.</div>`;
+  const kpis = `<div class="vz-kgrid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr))">
+    ${_covidKpi('🏢', 'Agent Sale', 'var(--blue)', s.agent)}
+    ${_covidKpi('🛵', 'Cash Sale', 'var(--gold)', s.cash)}
+    ${_covidKpi('📊', 'Total Sale', 'var(--grn)', s.total)}</div>`;
+  return picker + kpis
+    + `<div class="lbl" style="margin:14px 0 6px;color:var(--muted)">${s.cur_label} vs 18-Mar-2020 (pre-COVID baseline)</div>
+    <div class="two">${_covidStateMini('Agent Sale by State', st.covidAgentStates)}${_covidStateMini('Cash Sale by State', st.covidCashStates)}</div>`;
+}
+
 VIEWS.supply_dash = () => {
   const st = _supdState();
   _supdFetch('filters', '/api/supply-dash/filters');
-  const tabs = [['sale', '💰 Sale'], ['overview', '📊 Overview'], ['branches', '🏢 Branches'], ['agents', '👤 Agents'],
+  const tabs = [['sale', '💰 Sale'], ['covid', '🦠 vs COVID'], ['overview', '📊 Overview'], ['branches', '🏢 Branches'], ['agents', '👤 Agents'],
                 ['execs', '👔 Executives'], ['trend', '📈 Trends'], ['exceptions', '⚠️ Exceptions']];
   const allUnits  = (st.filters && st.filters.units)  || [];
   const states    = (st.filters && st.filters.states) || [];
@@ -1758,7 +1806,7 @@ VIEWS.supply_dash = () => {
   const tabBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
     ${tabs.map(([k, l]) => `<button class="btn ${st.tab === k ? 'pri' : ''}" onclick="supdTab('${k}')">${l}</button>`).join('')}
   </div>`;
-  const bodyMap = { sale: (s) => s.drillMode ? _supdSaleDrill(s) : _supdSale(s),
+  const bodyMap = { sale: (s) => s.drillMode ? _supdSaleDrill(s) : _supdSale(s), covid: _supdCovid,
                     overview: _supdOverview, branches: _supdBranches, agents: _supdAgents,
                     execs: _supdExecs, trend: _supdTrend, exceptions: _supdExceptions };
   const dataNote = st.filters && st.filters.data_upto

@@ -519,7 +519,15 @@ module.exports = function registerSupplyDash(ctx) {
   //   default   → current = latest business day, previous = the day before.
   //   date range → current = To date (latest supply day in range), previous = From date
   //                (earliest supply day in range). So "01→06 Aug" reads as 06 Aug vs 01 Aug.
+  const COVID_DATE = '2020-03-18'; // fixed circulation baseline (pre-COVID)
   async function saleWin(req) {
+    // COVID comparison: fixed previous = 18-Mar-2020, current = the user-selected date.
+    if (req.query.covid === '1' || req.query.covid === 'true') {
+      const dateOk = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || ''));
+      let cur = dateOk ? req.query.date : null;
+      if (!cur) { const d0 = await refDates(req); cur = d0 ? d0.cur : COVID_DATE; }
+      return { range: true, covid: true, cF: cur, cT: cur, pF: COVID_DATE, pT: COVID_DATE, data_upto: cur, cur_label: cur, prev_label: COVID_DATE };
+    }
     const d = await refDates(req);
     if (!d) return null;
     if (d.range && d.from && d.to) {
@@ -548,12 +556,12 @@ module.exports = function registerSupplyDash(ctx) {
         q(`SELECT SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) cur,
                   SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prv
            FROM supply_data s ${AGENT_JOIN}
-           WHERE ${AGENT_WHERE} AND s.supply_date BETWEEN ? AND ?${S}${hsS}`,
-          [w.cF, w.cT, w.pF, w.pT, w.pF, w.cT, ...sc2.params, ...(hs || [])]),
+           WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${S}${hsS}`,
+          [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params, ...(hs || [])]),
         q(`SELECT SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) cur,
                   SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) prv
-           FROM hawker_supply h WHERE h.supply_date BETWEEN ? AND ?${Sh}${hsH}`,
-          [w.cF, w.cT, w.pF, w.pT, w.pF, w.cT, ...sc2.params, ...(hs || [])]),
+           FROM hawker_supply h WHERE h.supply_date IN (?, ?)${Sh}${hsH}`,
+          [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params, ...(hs || [])]),
       ]);
       const aC = N(agent.rows[0] && agent.rows[0].cur), aP = N(agent.rows[0] && agent.rows[0].prv);
       const cC = N(cash.rows[0] && cash.rows[0].cur), cP = N(cash.rows[0] && cash.rows[0].prv);
@@ -579,8 +587,8 @@ module.exports = function registerSupplyDash(ctx) {
                   SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) cur,
                   SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prv
            FROM supply_data s ${AGENT_JOIN}
-           WHERE ${AGENT_WHERE} AND s.supply_date BETWEEN ? AND ?${S}
-           GROUP BY s.unit_code`, [w.cF, w.cT, w.pF, w.pT, w.pF, w.cT, ...sc2.params]),
+           WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${S}
+           GROUP BY s.unit_code`, [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params]),
       ]);
       const byState = {};
       agg.rows.forEach(r => {
@@ -618,8 +626,8 @@ module.exports = function registerSupplyDash(ctx) {
                   SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prv,
                   COUNT(DISTINCT s.agcd) agents
            FROM supply_data s ${AGENT_JOIN}
-           WHERE ${AGENT_WHERE} AND s.supply_date BETWEEN ? AND ?${S}
-           GROUP BY s.unit_code`, [w.cF, w.cT, w.pF, w.pT, w.pF, w.cT, ...sc2.params]),
+           WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${S}
+           GROUP BY s.unit_code`, [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params]),
       ]);
       let rows = agg.rows.map(r => ({ ...r, state: uhs[r.unit_code] || '—' }));
       if (state) rows = rows.filter(r => r.state === state);
@@ -653,9 +661,9 @@ module.exports = function registerSupplyDash(ctx) {
                  SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prev_supply,
                  COUNT(DISTINCT s.agcd) agents
           FROM supply_data s ${AGENT_JOIN}
-          WHERE ${AGENT_WHERE} AND s.unit_code = ? AND s.supply_date BETWEEN ? AND ?
+          WHERE ${AGENT_WHERE} AND s.unit_code = ? AND s.supply_date IN (?, ?)
           GROUP BY label ORDER BY supply DESC`,
-          [w.cF, w.cT, w.pF, w.pT, unit, w.pF, w.cT]));
+          [w.cF, w.cT, w.pF, w.pT, unit, w.cF, w.pF]));
       } else {
         ({ rows } = await q(`
           SELECT COALESCE(am.executive_name,'(no executive)') label,
@@ -665,9 +673,9 @@ module.exports = function registerSupplyDash(ctx) {
           FROM supply_data s ${AGENT_JOIN}
           LEFT JOIN (SELECT unit, agcd, MAX(executive_name) executive_name FROM agency_master GROUP BY unit, agcd) am
             ON am.unit = s.unit_code AND am.agcd = s.agcd
-          WHERE ${AGENT_WHERE} AND s.unit_code = ? AND s.supply_date BETWEEN ? AND ?
+          WHERE ${AGENT_WHERE} AND s.unit_code = ? AND s.supply_date IN (?, ?)
           GROUP BY label ORDER BY supply DESC`,
-          [w.cF, w.cT, w.pF, w.pT, unit, w.pF, w.cT]));
+          [w.cF, w.cT, w.pF, w.pT, unit, w.cF, w.pF]));
       }
       const total = rows.reduce((a, r) => a + N(r.supply), 0);
       res.json({
@@ -693,8 +701,8 @@ module.exports = function registerSupplyDash(ctx) {
         q(`SELECT h.loc_id, SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) cur,
                   SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) prv,
                   COUNT(DISTINCT h.hawker_id) hawkers
-           FROM hawker_supply h WHERE h.supply_date BETWEEN ? AND ?${S}
-           GROUP BY h.loc_id`, [w.cF, w.cT, w.pF, w.pT, w.pF, w.cT, ...sc2.params]),
+           FROM hawker_supply h WHERE h.supply_date IN (?, ?)${S}
+           GROUP BY h.loc_id`, [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params]),
       ]);
       const byState = {};
       agg.rows.forEach(r => {
@@ -731,8 +739,8 @@ module.exports = function registerSupplyDash(ctx) {
                   SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) cur,
                   SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) prv,
                   COUNT(DISTINCT h.hawker_id) hawkers, COUNT(DISTINCT h.hwk_cent_code) centers
-           FROM hawker_supply h WHERE h.supply_date BETWEEN ? AND ?${S}
-           GROUP BY h.loc_id`, [w.cF, w.cT, w.pF, w.pT, w.pF, w.cT, ...sc2.params]),
+           FROM hawker_supply h WHERE h.supply_date IN (?, ?)${S}
+           GROUP BY h.loc_id`, [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params]),
       ]);
       let rows = agg.rows.map(r => ({ ...r, state: uhs[r.loc_id] || '—' }));
       if (state) rows = rows.filter(r => r.state === state);
@@ -765,9 +773,9 @@ module.exports = function registerSupplyDash(ctx) {
                SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) supply,
                SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) prev_supply,
                COUNT(DISTINCT h.hawker_id) hawkers
-        FROM hawker_supply h WHERE h.loc_id = ? AND h.supply_date BETWEEN ? AND ?
+        FROM hawker_supply h WHERE h.loc_id = ? AND h.supply_date IN (?, ?)
         GROUP BY label ORDER BY supply DESC`,
-        [w.cF, w.cT, w.pF, w.pT, unit, w.pF, w.cT]);
+        [w.cF, w.cT, w.pF, w.pT, unit, w.cF, w.pF]);
       const total = rows.reduce((a, r) => a + N(r.supply), 0);
       res.json({
         ...winMeta(w), unit_code: unit, by, total,
