@@ -1464,7 +1464,7 @@ app.post('/api/alerts/supply-issues', async (req, res) => {
   ) CHARACTER SET utf8mb4`);
   await q(`CREATE TABLE IF NOT EXISTS agency_outstanding (
     id            BIGINT AUTO_INCREMENT PRIMARY KEY,
-    period_label  VARCHAR(10)  NOT NULL,
+    period_label  VARCHAR(20)  NOT NULL,
     period_from   DATE,
     period_to     DATE,
     comp_code     VARCHAR(10),
@@ -3258,8 +3258,16 @@ app.get('/api/collection/billing-vs-collection', async (req, res) => {
       return { cls: '', p: [] };
     };
 
-    // bill_amt in agency_outstanding is CUMULATIVE (period_from is always Jan 1), so the
-    // billing FOR the month = this period's cumulative − the previous period's cumulative.
+    // Billing FOR the month. Preferred source: a "BILL-YYYY-MM" snapshot produced by running the
+    // ERP Party Outstanding report dated the FIRST of the NEXT month (from=to=01-<next>-YYYY).
+    // In that snapshot bill_amt is already the month's billing and matches the ERP report exactly
+    // (e.g. BILL-2026-07 → JAIPUR 7,653,837, all-India 113,542,947).
+    // Fallback for months without a snapshot: cumulative delta (this month − previous month),
+    // since a normal period pull's bill_amt is cumulative from Jan 1.
+    const billLabel = `BILL-${billMonth}`;
+    const snapChk = await q(`SELECT 1 FROM agency_outstanding WHERE period_label = ? LIMIT 1`, [billLabel]);
+    const useSnap = snapChk.rows.length > 0;
+
     let prevMonth = null;
     if (/^\d{4}-\d{2}$/.test(billMonth)) {
       const [yy, mm] = billMonth.split('-').map(Number);
@@ -3272,12 +3280,18 @@ app.get('/api/collection/billing-vs-collection', async (req, res) => {
     const prevM = prevMonth || '__none__';
 
     const bw = unitCl('unit_code'), cw = unitCl('unit_code');
+    const billingQ = useSnap
+      ? q(`SELECT unit_code, MAX(unit_name) unit_name, SUM(bill_amt) billing
+             FROM agency_outstanding WHERE period_label = ?${bw.cls}
+             GROUP BY unit_code`, [billLabel, ...bw.p])
+      : q(`SELECT unit_code, MAX(unit_name) unit_name,
+                  SUM(CASE WHEN period_label = ? THEN bill_amt ELSE 0 END)
+                - SUM(CASE WHEN period_label = ? THEN bill_amt ELSE 0 END) billing
+             FROM agency_outstanding WHERE period_label IN (?, ?)${bw.cls}
+             GROUP BY unit_code`, [billMonth, prevM, billMonth, prevM, ...bw.p]);
+
     const [billing, collection, stmap] = await Promise.all([
-      q(`SELECT unit_code, MAX(unit_name) unit_name,
-                SUM(CASE WHEN period_label = ? THEN bill_amt ELSE 0 END)
-              - SUM(CASE WHEN period_label = ? THEN bill_amt ELSE 0 END) billing
-         FROM agency_outstanding WHERE period_label IN (?, ?)${bw.cls}
-         GROUP BY unit_code`, [billMonth, prevM, billMonth, prevM, ...bw.p]),
+      billingQ,
       q(`SELECT unit_code, MAX(state_name) state_name, MAX(branch_name) unit_name,
                 -SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) collection
          FROM agency_collection
@@ -3315,6 +3329,7 @@ app.get('/api/collection/billing-vs-collection', async (req, res) => {
 
     const tb = states.reduce((a, s) => a + s.billing, 0), tc = states.reduce((a, s) => a + s.collection, 0);
     res.json({ bill_month: billMonth, coll_from: from, coll_to: to, states, units,
+      bill_source: useSnap ? 'erp_snapshot' : 'cumulative_delta',
       total_billing: tb, total_collection: tc, total_outstanding: tb - tc,
       total_pct: tb ? Math.round(tc / tb * 1000) / 10 : null });
   } catch (e) { res.status(500).json({ detail: String(e) }); }

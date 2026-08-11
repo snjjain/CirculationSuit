@@ -184,7 +184,7 @@ function rowToParams(f, periodLabel, periodFrom, periodTo) {
 async function ensureTable(conn) {
   await conn.execute(`CREATE TABLE IF NOT EXISTS agency_outstanding (
     id                 BIGINT AUTO_INCREMENT PRIMARY KEY,
-    period_label       VARCHAR(10)   NOT NULL,
+    period_label       VARCHAR(20)   NOT NULL,
     period_from        DATE,
     period_to          DATE,
     comp_code          VARCHAR(10),
