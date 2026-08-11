@@ -2086,8 +2086,20 @@ window.aiDraft = async (idx, channel) => {
   if (!d) { toast('Draft failed — is the API running?'); return; }
 
   if (channel === 'email') {
-    const toPre = (d.recipients || []).map(r => r.email).join(', ');
-    const who   = (d.recipients || []).map(r => `${r.person_name || r.role_label} (${r.unit_name || r.unit_code})`).join(', ');
+    // One email per person: dedupe recipient addresses, and group each person's branches
+    // (a user with rights over several branches gets a single mail listing all of them).
+    const recs = d.recipients || [];
+    const emails = [], seenEmail = new Set();
+    recs.forEach(r => { const e = (r.email || '').trim(); if (e && !seenEmail.has(e.toLowerCase())) { seenEmail.add(e.toLowerCase()); emails.push(e); } });
+    const toPre = emails.join(', ');
+    const byPerson = {};
+    recs.forEach(r => {
+      const key = (r.email || r.person_name || r.role_label || '').toLowerCase();
+      const p = byPerson[key] = byPerson[key] || { name: r.person_name || r.role_label || r.email || 'Recipient', units: [] };
+      const u = r.unit_name || r.unit_code;
+      if (u && !p.units.includes(u)) p.units.push(u);
+    });
+    const who = Object.values(byPerson).map(p => `${p.name}${p.units.length ? ' (' + p.units.join(', ') + ')' : ''}`).join('; ');
     const m = modal(`
       <h3>✉ Send Email — Review &amp; Edit</h3>
       <p class="mint">${who ? 'Configured recipients: ' + esc(who) : '<span style="color:var(--gold)">No emails configured for the target units — add them in the Email Config tab, or type addresses below.</span>'}</p>
@@ -2100,7 +2112,9 @@ window.aiDraft = async (idx, channel) => {
       </div>`);
     m.querySelector('[data-cancel]').onclick = () => m.remove();
     m.querySelector('[data-send]').onclick = async () => {
-      const to = m.querySelector('[data-k=to]').value.split(',').map(s => s.trim()).filter(Boolean);
+      const _rawTo = m.querySelector('[data-k=to]').value.split(',').map(s => s.trim()).filter(Boolean);
+      const _seenT = new Set();
+      const to = _rawTo.filter(e => { const k = e.toLowerCase(); if (_seenT.has(k)) return false; _seenT.add(k); return true; });
       const subject = m.querySelector('[data-k=subject]').value.trim();
       const body = m.querySelector('[data-k=body]').value;
       if (!to.length) { toast('Enter at least one email address'); return; }

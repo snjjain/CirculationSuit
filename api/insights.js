@@ -603,7 +603,11 @@ module.exports = function registerInsights(ctx) {
   app.post('/api/insights/send-email', async (req, res) => {
     try {
       const { to, cc, subject, body, insight_key, module: mod, priority, created_by } = req.body || {};
-      const list = (Array.isArray(to) ? to : [to]).filter(e => e && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+      const _seenTo = new Set();
+      const list = (Array.isArray(to) ? to : [to])
+        .map(e => String(e || '').trim())
+        .filter(e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e))
+        .filter(e => { const k = e.toLowerCase(); if (_seenTo.has(k)) return false; _seenTo.add(k); return true; }); // one email per address
       if (!list.length) return res.status(400).json({ detail: 'valid to[] required' });
       if (!subject || !body) return res.status(400).json({ detail: 'subject and body required' });
 
