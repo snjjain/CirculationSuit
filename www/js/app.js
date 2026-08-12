@@ -954,6 +954,13 @@ function _cmdLoad() {
       .then(d => { c.sv = d; c._svLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._svLoading = false; c.sv = { _err: true }; if (S.screen === 'command') render(); });
   }
+  if (!c.sup && !c._supLoading) {
+    c._supLoading = true;
+    fetch(_cmdBase() + '/api/supply-dash/sale-summary', { headers: api.h() })
+      .then(r => r.json())
+      .then(d => { c.sup = d; c._supLoading = false; if (S.screen === 'command') render(); })
+      .catch(() => { c._supLoading = false; c.sup = { _err: true }; if (S.screen === 'command') render(); });
+  }
 }
 
 function _cmdSkel() {
@@ -1017,7 +1024,7 @@ function _cmdModuleCard({ icon, title, period, onClick, kpis, footer, error, loa
 VIEWS.command = () => {
   _cmdLoad();
   const c = S.live.cmd || {};
-  const ou = c.ou, co = c.co, si = c.si, sv = c.sv;
+  const ou = c.ou, co = c.co, si = c.si, sv = c.sv, sup = c.sup;
 
   /* ── Agency Outstanding — point-in-time balance, never a period sum ── */
   let ouKpis, ouFooter;
@@ -1095,6 +1102,9 @@ VIEWS.command = () => {
 
   /* ── Top KPI strip data ─────────────────────────────────── */
   const strip = [
+    { val: sup && !sup._err && !sup.no_data ? (Number(sup.total.current) || 0).toLocaleString('en-IN') : (c._supLoading ? '…' : '—'),
+      lbl: 'Supply Today · Agent+Cash', icon: '📦', color: 'var(--blue)',
+      sub: sup && !sup._err && !sup.no_data ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + ' · Cash ' + (Number(sup.cash.current) || 0).toLocaleString('en-IN') : '' },
     { val: ou && !ou._err ? _cmdFmtC(ou.total_outstanding)      : (c._ouLoading ? '…' : '—'),
       lbl: 'Outstanding · As on Today', icon: '💰', color: 'var(--red)',
       sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies' : '' },
@@ -1111,10 +1121,24 @@ VIEWS.command = () => {
 
   /* ── Pending modules ────────────────────────────────────── */
   const pending = [
-    { icon:'📦', title:'Supply & Distribution', desc:'Print-to-door pipeline, unit-wise dispatch, wastage %' },
     { icon:'🛵', title:'Hawker Operations',      desc:'Route coverage, reader database, earnings, missed drops' },
     { icon:'🚚', title:'Vehicle Tracking',       desc:'Delays, breakdowns, real-time location, compliance' },
   ];
+
+  /* ── Supply (Agent + Cash), current vs previous business day ─────────── */
+  let supKpis, supFooter, supBadge;
+  if (sup && !sup._err && !sup.no_data) {
+    const cp = n => (Number(n) || 0).toLocaleString('en-IN');
+    const g = sup.total.growth_pct;
+    supKpis = [
+      [cp(sup.total.current) + ' cp', 'Total Supply · ' + sup.data_upto, 'var(--ink)'],
+      [cp(sup.agent.current) + ' cp', 'Agent Sale (' + (sup.agent_share_pct != null ? sup.agent_share_pct + '%' : '—') + ')', 'var(--blue)'],
+      [cp(sup.cash.current) + ' cp', 'Cash Sale (' + (sup.cash_share_pct != null ? sup.cash_share_pct + '%' : '—') + ')', 'var(--gold)'],
+      [(g >= 0 ? '+' : '') + (g != null ? g : 0) + '%', 'Day-over-Day', g >= 0 ? 'var(--grn)' : 'var(--red)'],
+    ];
+    supFooter = `Prev day <b>${cp(sup.total.previous)}</b> cp · change <b style="color:${sup.total.diff >= 0 ? 'var(--grn)' : 'var(--red)'}">${sup.total.diff >= 0 ? '+' : ''}${cp(sup.total.diff)}</b> · ${sup.cur_label} vs ${sup.prev_label}`;
+    supBadge = cp(sup.total.current) + ' copies';
+  }
 
   return pagehead('Command Centre', 'Live data summary · ' + TODAY) + `
     <style>
@@ -1124,8 +1148,8 @@ VIEWS.command = () => {
       @keyframes _cmdPulse{0%,100%{opacity:1}50%{opacity:.45}}
     </style>
 
-    <!-- Top 4-KPI summary strip -->
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">
+    <!-- Top KPI summary strip -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px;margin-bottom:14px">
       ${strip.map(s => `
         <div class="_cmd-strip-item" style="border-left:4px solid ${s.color}">
           <div style="display:flex;align-items:center;gap:6px">
@@ -1138,8 +1162,15 @@ VIEWS.command = () => {
       `).join('')}
     </div>
 
-    <!-- 2×2 main card grid -->
+    <!-- main card grid -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+      ${_cmdModuleCard({
+        icon:'📦', title:'Supply', period:'Agent + Cash · ' + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…'),
+        onClick:"go('supply_dash')", accent:'var(--blue)',
+        kpis: supKpis, footer: supFooter,
+        loading: !sup && c._supLoading, error: sup?._err,
+        badge: supBadge, badgeColor: 'var(--blue)',
+      })}
       ${_cmdModuleCard({
         icon:'💰', title:'Agency Outstanding', period:'Balance as on today',
         onClick:"go('outstanding')", accent:'var(--red)',
