@@ -21,6 +21,10 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
   const R1 = v => v == null ? null : Math.round(Number(v) * 10) / 10;
   const p2 = n => String(n).padStart(2, '0');
 
+  // In-memory cache for execMetrics results (shared across kpis/ranking/list for same params)
+  const _mCache = new Map();
+  const CACHE_TTL = 60000; // 60 seconds
+
   function defaultDates() {
     const now = new Date();
     return {
@@ -68,6 +72,11 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
 
   // Core: run all 4 queries in parallel and merge into an exec-keyed map
   async function execMetrics(from, to, unitList) {
+    // Cache key: same params → same result (shared by kpis/ranking/list)
+    const cacheKey = `${from}|${to}|${unitList === null ? '__all__' : [...unitList].sort().join(',')}`;
+    const hit = _mCache.get(cacheKey);
+    if (hit && (Date.now() - hit.ts) < CACHE_TTL) return hit.data;
+
     const amCl  = unitCl('am.unit',  unitList);   // agency_master scope
     const am2Cl = unitCl('am2.unit', unitList);    // agency_master scope for collection join
     const ouCl  = unitCl('unit_code', unitList);   // agency_outstanding scope
@@ -121,7 +130,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
     collection.rows.forEach(r  => { colMap[r.executive_code] = N(r.total_collection); });
     outstanding.rows.forEach(r => { ouMap[r.exec_code]       = N(r.total_outstanding); });
 
-    return base.rows.map(r => {
+    const data = base.rows.map(r => {
       const sup  = supMap[r.executive_code] || 0;
       const col  = colMap[r.executive_code] || 0;
       const ou   = ouMap[r.executive_code]  || 0;
@@ -140,6 +149,14 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
         collection_pct:    pct,
       };
     });
+
+    _mCache.set(cacheKey, { data, ts: Date.now() });
+    // Prune entries older than 2× TTL to keep map bounded
+    if (_mCache.size > 50) {
+      const cutoff = Date.now() - CACHE_TTL * 2;
+      for (const [k, v] of _mCache) if (v.ts < cutoff) _mCache.delete(k);
+    }
+    return data;
   }
 
   // ══ FILTERS ══
@@ -154,7 +171,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
         q(`SELECT DISTINCT unit_state_nm state FROM agency_master
            WHERE unit_state_nm IS NOT NULL AND unit_state_nm != ''${sc.cl}
            ORDER BY unit_state_nm`, sc.p),
-        q(`SELECT DISTINCT unit unit_code, MAX(unit_name) unit_name FROM agency_master
+        q(`SELECT DISTINCT unit unit_code, MAX(unit_name) unit_name, MAX(unit_state_nm) state_nm FROM agency_master
            WHERE 1=1${sc.cl} GROUP BY unit ORDER BY unit_name`, sc.p),
         q('SELECT MIN(supply_date) min_date, MAX(supply_date) max_date FROM supply_data'),
       ]);

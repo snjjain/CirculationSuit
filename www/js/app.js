@@ -5383,12 +5383,23 @@ function epQS(extra) {
   return '?' + p.toString();
 }
 
+// Save live filter DOM values back to st.filters before any render() wipes them
+function epSnapshotFilters() {
+  const g = id => { const el = document.getElementById(id); return el ? el.value : null; };
+  const f = epState().filters;
+  const from = g('ep-from'), to = g('ep-to'), state = g('ep-state'), unit = g('ep-unit');
+  if (from  !== null) f.from      = from;
+  if (to    !== null) f.to        = to;
+  if (state !== null) f.state     = state;
+  if (unit  !== null) f.unit_code = unit;
+}
+
 function epFetch(key, path, extra) {
   const st = epState();
   if (st._loading[key] || st[key]) return;
   st._loading[key] = true;
   api.get(epApi(path) + epQS(extra))
-    .then(d => { if (d) st[key] = d; st._loading[key] = false; if (S.screen === 'exec_perf') render(); })
+    .then(d => { epSnapshotFilters(); if (d) st[key] = d; st._loading[key] = false; if (S.screen === 'exec_perf') render(); })
     .catch(() => { st._loading[key] = false; });
 }
 
@@ -5474,6 +5485,7 @@ window.epClearFilters = () => {
   render();
 };
 
+window.epStateChange = v => { epSnapshotFilters(); epState().filters.state = v; epState().filters.unit_code = ''; render(); };
 window.epSortList = (col, dir) => { const st = epState(); st.listSort = col; st.listSortDir = dir; st.list = null; st._listKey = ''; render(); };
 window.epListPage = p => { const st = epState(); st.listPage = p; st.list = null; st._listKey = ''; render(); };
 window.epSearchList = (() => {
@@ -5489,20 +5501,24 @@ function epFilterPanel() {
   if (!st.filterOpts && !st._loading.filterOpts) {
     st._loading.filterOpts = true;
     api.get(epApi('filters'))
-      .then(d => { if (d) st.filterOpts = d; st._loading.filterOpts = false; if (S.screen === 'exec_perf') render(); })
+      .then(d => { epSnapshotFilters(); if (d) st.filterOpts = d; st._loading.filterOpts = false; if (S.screen === 'exec_perf') render(); })
       .catch(() => { st._loading.filterOpts = false; });
   }
   const opts = st.filterOpts || { states: [], units: [] };
   const hasFilter = f.state || f.unit_code;
 
-  const sel = (id, items, val, placeholder, isObj) =>
-    `<select id="${id}" class="inp" style="font-size:12px;padding:5px 6px">
-       <option value="">${placeholder}</option>
-       ${items.map(i => {
-         const v = isObj ? i.unit_code : i, l = isObj ? i.unit_name : i;
-         return `<option value="${esc(v)}" ${val === v ? 'selected' : ''}>${esc(l)}</option>`;
-       }).join('')}
-     </select>`;
+  // Units cascade: show only units belonging to selected state (if any)
+  const visibleUnits = f.state ? (opts.units || []).filter(u => u.state_nm === f.state) : (opts.units || []);
+
+  const selState = `<select id="ep-state" class="inp" style="font-size:12px;padding:5px 6px" onchange="epStateChange(this.value)">
+    <option value="">🗺 All States</option>
+    ${(opts.states || []).map(s => `<option value="${esc(s)}" ${f.state === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}
+  </select>`;
+
+  const selUnit = `<select id="ep-unit" class="inp" style="font-size:12px;padding:5px 6px">
+    <option value="">All Units${f.state ? ' in ' + esc(f.state) : ''}</option>
+    ${visibleUnits.map(u => `<option value="${esc(u.unit_code)}" ${f.unit_code === u.unit_code ? 'selected' : ''}>${esc(u.unit_name)}</option>`).join('')}
+  </select>`;
 
   return `<div class="card" style="padding:10px 14px;margin-bottom:12px">
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
@@ -5510,8 +5526,8 @@ function epFilterPanel() {
       <input id="ep-from" type="date" class="inp" value="${esc(f.from)}" style="font-size:12px;padding:5px 8px">
       <span style="color:var(--muted);font-size:12px">to</span>
       <input id="ep-to" type="date" class="inp" value="${esc(f.to)}" style="font-size:12px;padding:5px 8px">
-      ${sel('ep-state', opts.states, f.state, '🗺 All States', false)}
-      ${sel('ep-unit',  opts.units,  f.unit_code, 'All Units', true)}
+      ${selState}
+      ${selUnit}
       <button class="btn pri sm" onclick="epApplyFilters()">Apply</button>
       ${hasFilter ? `<button class="btn sm" onclick="epClearFilters()">✕ Clear</button>` : ''}
       <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
@@ -5604,7 +5620,7 @@ function epExecTable() {
     if (!st._loading.list) {
       st._loading.list = true; st._listKey = qs;
       api.get(epApi('list') + qs)
-        .then(d => { if (d) st.list = d; st._loading.list = false; if (S.screen === 'exec_perf') render(); })
+        .then(d => { epSnapshotFilters(); if (d) st.list = d; st._loading.list = false; if (S.screen === 'exec_perf') render(); })
         .catch(() => { st._loading.list = false; });
     }
     if (!st.list) return `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px">Loading executives…</div>`;
