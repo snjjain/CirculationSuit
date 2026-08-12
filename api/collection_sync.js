@@ -376,10 +376,49 @@ async function syncBatch(conn, fromDate, toDate) {
   }
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── runSync — programmatic entry point (used by server.js API endpoint) ───────
+async function runSync(opts = {}) {
+  const onLog = opts.onLog || log;
+
+  function yesterday() {
+    const d = new Date(); d.setDate(d.getDate() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+  function today() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+
+  const fromDate = opts.from || yesterday();
+  const toDate   = opts.to   || today();
+
+  onLog(`=== Collection sync | ${fromDate} → ${toDate} ===`);
+
+  const conn = await mysql.createConnection(MYSQL_CONFIG);
+  try {
+    await ensureSchema(conn);
+    const batches = monthBatches(fromDate, toDate);
+    onLog(`Processing ${batches.length} batch(es)…`);
+    let totalInserted = 0, totalFetched = 0;
+    for (const b of batches) {
+      const r = await syncBatch(conn, b.from, b.to);
+      totalInserted += r.inserted;
+      totalFetched  += r.fetched;
+    }
+    onLog(`=== Collection sync complete — fetched: ${totalFetched}, inserted: ${totalInserted} ===`);
+    return { totalFetched, totalInserted, batches: batches.length };
+  } catch (err) {
+    onLog(`FATAL: ${err.message}`);
+    try { await conn.rollback(); } catch (_) {}
+    throw err;
+  } finally {
+    try { await conn.end(); } catch (_) {}
+  }
+}
+
+// ── Main (CLI) ────────────────────────────────────────────────────────────────
 async function main() {
   const { fromDate, toDate } = getDateRange();
-  const isRange = fromDate !== toDate;
   log(`=== Collection sync started | range: ${fromDate} → ${toDate} ===`);
 
   for (const k of ['ORA_HOST', 'ORA_SERVICE', 'ORA_USER', 'ORA_PASSWORD']) {
@@ -390,33 +429,12 @@ async function main() {
     process.exit(1);
   }
 
-  const conn = await mysql.createConnection(MYSQL_CONFIG);
-  try {
-    await ensureSchema(conn);
-
-    if (!isRange) {
-      // Single date — daily sync
-      await syncBatch(conn, fromDate, toDate);
-    } else {
-      // Range — process month by month to keep memory bounded
-      const batches = monthBatches(fromDate, toDate);
-      log(`Processing ${batches.length} monthly batch(es)...`);
-      let totalInserted = 0;
-      for (const b of batches) {
-        const r = await syncBatch(conn, b.from, b.to);
-        totalInserted += r.inserted;
-      }
-      log(`Total rows inserted: ${totalInserted}`);
-    }
-
-    log(`=== Collection sync complete ===`);
-  } catch (err) {
+  await runSync({ from: fromDate, to: toDate }).catch(err => {
     log(`FATAL: ${err.message}`);
-    try { await conn.rollback(); } catch (_) {}
     process.exitCode = 1;
-  } finally {
-    try { await conn.end(); } catch (_) {}
-  }
+  });
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { runSync };

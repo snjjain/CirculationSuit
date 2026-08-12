@@ -3327,6 +3327,70 @@ function scheduleDcrSync() {
 scheduleDcrSync();
 
 // ════════════════════════════════════════════════════════════════════════════
+// COLLECTION SYNC — API + DAILY SCHEDULER (06:10)
+// ════════════════════════════════════════════════════════════════════════════
+const collSync = require('./collection_sync');
+
+const collSyncState = {
+  running: false, lastStarted: null, lastCompleted: null,
+  lastStatus: 'never', lastResult: null, lastError: null, log: [],
+};
+
+function startCollSync(opts = {}) {
+  if (collSyncState.running) return { started: false, reason: 'already running' };
+  collSyncState.running = true;
+  collSyncState.lastStarted = new Date().toISOString();
+  collSyncState.lastStatus = 'running';
+  collSyncState.log = [];
+  collSyncState.lastError = null;
+
+  collSync.runSync({
+    ...opts,
+    onLog: line => {
+      collSyncState.log.push(line);
+      if (collSyncState.log.length > 1000) collSyncState.log.shift();
+    },
+  }).then(result => {
+    collSyncState.running = false;
+    collSyncState.lastCompleted = new Date().toISOString();
+    collSyncState.lastStatus = 'success';
+    collSyncState.lastResult = result;
+    console.log(`[collection-sync] Done — inserted: ${result.totalInserted}`);
+  }).catch(err => {
+    collSyncState.running = false;
+    collSyncState.lastCompleted = new Date().toISOString();
+    collSyncState.lastStatus = 'error';
+    collSyncState.lastError = err.message;
+    console.error('[collection-sync] Error:', err.message);
+  });
+
+  return { started: true };
+}
+
+// POST /api/sync/collection  — body: { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
+app.post('/api/sync/collection', (req, res) => {
+  const opts = {};
+  if (req.body && req.body.from) opts.from = req.body.from;
+  if (req.body && req.body.to)   opts.to   = req.body.to;
+  const result = startCollSync(opts);
+  if (!result.started) return res.status(409).json({ error: result.reason });
+  res.json({ ok: true, message: 'Collection sync started', startedAt: collSyncState.lastStarted });
+});
+
+// GET /api/sync/collection/status
+app.get('/api/sync/collection/status', (req, res) => {
+  res.json({
+    running:       collSyncState.running,
+    lastStarted:   collSyncState.lastStarted,
+    lastCompleted: collSyncState.lastCompleted,
+    status:        collSyncState.lastStatus,
+    result:        collSyncState.lastResult,
+    error:         collSyncState.lastError,
+    recentLog:     collSyncState.log.slice(-100),
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
 // COLLECTION DASHBOARD ENDPOINTS
 // ════════════════════════════════════════════════════════════════════════════
 
