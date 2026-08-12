@@ -21,8 +21,11 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
   const R1 = v => v == null ? null : Math.round(Number(v) * 10) / 10;
   const p2 = n => String(n).padStart(2, '0');
 
-  // In-memory cache for execMetrics results (shared across kpis/ranking/list for same params)
-  const _mCache = new Map();
+  // In-memory cache + in-flight dedup for execMetrics
+  // Cache: completed results (60s TTL)
+  // Inflight: pending Promises — simultaneous requests with same key share one DB round-trip
+  const _mCache   = new Map();
+  const _mInflight = new Map();
   const CACHE_TTL = 60000; // 60 seconds
 
   function defaultDates() {
@@ -74,9 +77,16 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
   async function execMetrics(from, to, unitList) {
     // Cache key: same params → same result (shared by kpis/ranking/list)
     const cacheKey = `${from}|${to}|${unitList === null ? '__all__' : [...unitList].sort().join(',')}`;
+
+    // 1. Completed cache hit
     const hit = _mCache.get(cacheKey);
     if (hit && (Date.now() - hit.ts) < CACHE_TTL) return hit.data;
 
+    // 2. In-flight dedup: if same key is already being fetched, share that promise
+    if (_mInflight.has(cacheKey)) return _mInflight.get(cacheKey);
+
+    // 3. New fetch — wrap in a promise so simultaneous callers all wait on the same one
+    const fetchPromise = (async () => {
     const amCl  = unitCl('am.unit',  unitList);   // agency_master scope
     const am2Cl = unitCl('am2.unit', unitList);    // agency_master scope for collection join
     const ouCl  = unitCl('unit_code', unitList);   // agency_outstanding scope
@@ -150,13 +160,21 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       };
     });
 
-    _mCache.set(cacheKey, { data, ts: Date.now() });
-    // Prune entries older than 2× TTL to keep map bounded
-    if (_mCache.size > 50) {
-      const cutoff = Date.now() - CACHE_TTL * 2;
-      for (const [k, v] of _mCache) if (v.ts < cutoff) _mCache.delete(k);
-    }
-    return data;
+      // Only include executives who had activity (supply or collection) in this period
+      const activeData = data.filter(r => r.total_supply > 0 || r.total_collection > 0);
+
+      _mCache.set(cacheKey, { data: activeData, ts: Date.now() });
+      _mInflight.delete(cacheKey);
+      // Prune entries older than 2× TTL to keep map bounded
+      if (_mCache.size > 50) {
+        const cutoff = Date.now() - CACHE_TTL * 2;
+        for (const [k, v] of _mCache) if (v.ts < cutoff) _mCache.delete(k);
+      }
+      return activeData;
+    })();
+
+    _mInflight.set(cacheKey, fetchPromise);
+    return fetchPromise;
   }
 
   // ══ FILTERS ══
