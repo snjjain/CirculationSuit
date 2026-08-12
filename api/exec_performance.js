@@ -86,21 +86,25 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
          GROUP BY am.executive_code
          ORDER BY exec_name`, amCl.p),
 
-      // Supply in date range
+      // Supply — join to DISTINCT (unit,agcd) to avoid DPCD fan-out from agency_master
       q(`SELECT am.executive_code, SUM(sd.sup_copy) total_supply
          FROM supply_data sd
-         JOIN agency_master am ON sd.unit_code = am.unit AND sd.agcd = am.agcd
+         JOIN (SELECT DISTINCT unit, agcd, executive_code
+               FROM agency_master
+               WHERE executive_code IS NOT NULL AND executive_code != ''${amCl.cl}
+              ) am ON sd.unit_code = am.unit AND sd.agcd = am.agcd
          WHERE sd.supply_date BETWEEN ? AND ?
-           AND am.executive_code IS NOT NULL AND am.executive_code != ''${amCl.cl}
          GROUP BY am.executive_code`, [from, to, ...amCl.p]),
 
-      // Collection in date range (amount is NEGATIVE — negate to get positive)
+      // Collection — same DISTINCT join to avoid DPCD fan-out
       q(`SELECT am2.executive_code,
                 -SUM(CASE WHEN ac.amount < 0 THEN ac.amount ELSE 0 END) total_collection
          FROM agency_collection ac
-         JOIN agency_master am2 ON am2.unit = ac.unit_code AND am2.agcd = ac.ag_code
+         JOIN (SELECT DISTINCT unit, agcd, executive_code
+               FROM agency_master
+               WHERE executive_code IS NOT NULL AND executive_code != ''${am2Cl.cl}
+              ) am2 ON am2.unit = ac.unit_code AND am2.agcd = ac.ag_code
          WHERE ac.is_valid = 1 AND ac.coll_date BETWEEN ? AND ?
-           AND am2.executive_code IS NOT NULL AND am2.executive_code != ''${am2Cl.cl}
          GROUP BY am2.executive_code`, [from, to, ...am2Cl.p]),
 
       // Outstanding — always CURRENT period snapshot
@@ -277,30 +281,36 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
            FROM agency_master WHERE executive_code = ?
            GROUP BY executive_code`, [execCode]),
 
+        // Use DISTINCT join to avoid DPCD fan-out (agency_master has 1 row per delivery point)
         q(`SELECT SUM(sd.sup_copy) total
            FROM supply_data sd
-           JOIN agency_master am ON sd.unit_code = am.unit AND sd.agcd = am.agcd
-           WHERE am.executive_code = ? AND sd.supply_date BETWEEN ? AND ?`, [execCode, from, to]),
+           JOIN (SELECT DISTINCT unit, agcd FROM agency_master WHERE executive_code = ?) am
+             ON sd.unit_code = am.unit AND sd.agcd = am.agcd
+           WHERE sd.supply_date BETWEEN ? AND ?`, [execCode, from, to]),
 
         q(`SELECT -SUM(CASE WHEN ac.amount < 0 THEN ac.amount ELSE 0 END) total
            FROM agency_collection ac
-           JOIN agency_master am ON am.unit = ac.unit_code AND am.agcd = ac.ag_code
-           WHERE am.executive_code = ? AND ac.is_valid = 1 AND ac.coll_date BETWEEN ? AND ?`,
+           JOIN (SELECT DISTINCT unit, agcd FROM agency_master WHERE executive_code = ?) am
+             ON am.unit = ac.unit_code AND am.agcd = ac.ag_code
+           WHERE ac.is_valid = 1 AND ac.coll_date BETWEEN ? AND ?`,
           [execCode, from, to]),
 
         q(`SELECT SUM(ao.cl_amt) total FROM agency_outstanding ao
            WHERE ao.exec_code = ? AND ao.period_label = 'CURRENT'`, [execCode]),
 
-        // Agency list: base info + metrics
-        q(`SELECT am.agcd ag_code, am.unit unit_code, am.unit_name, am.ag_name,
-                  am.ag_type_name, am.ag_class_name, am.city_name, am.dist_name,
-                  am.supply_stop_flag, am.suspend_date, am.mobile_no1,
-                  COALESCE(s.total_supply, 0) total_supply,
-                  COALESCE(c.total_collection, 0) total_collection,
-                  COALESCE(o.cl_amt, 0) total_outstanding,
-                  CASE WHEN (COALESCE(c.total_collection, 0) + COALESCE(o.cl_amt, 0)) > 0
-                       THEN ROUND(COALESCE(c.total_collection,0) /
-                            (COALESCE(c.total_collection,0) + COALESCE(o.cl_amt,0)) * 100, 1)
+        // Agency list: one row per AGCD (GROUP BY unit+agcd) — DPCDs are aggregated, not expanded
+        q(`SELECT am.agcd ag_code, am.unit unit_code,
+                  MAX(am.unit_name) unit_name, MAX(am.ag_name) ag_name,
+                  MAX(am.ag_type_name) ag_type_name, MAX(am.ag_class_name) ag_class_name,
+                  MAX(am.city_name) city_name, MAX(am.dist_name) dist_name,
+                  MAX(am.supply_stop_flag) supply_stop_flag, MAX(am.suspend_date) suspend_date,
+                  MAX(am.mobile_no1) mobile_no1,
+                  MAX(COALESCE(s.total_supply, 0)) total_supply,
+                  MAX(COALESCE(c.total_collection, 0)) total_collection,
+                  MAX(COALESCE(o.total_outstanding, 0)) total_outstanding,
+                  CASE WHEN (MAX(COALESCE(c.total_collection, 0)) + MAX(COALESCE(o.total_outstanding, 0))) > 0
+                       THEN ROUND(MAX(COALESCE(c.total_collection,0)) /
+                            (MAX(COALESCE(c.total_collection,0)) + MAX(COALESCE(o.total_outstanding,0))) * 100, 1)
                        ELSE 0 END collection_pct
            FROM agency_master am
            LEFT JOIN (
@@ -315,11 +325,13 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
              GROUP BY unit_code, ag_code
            ) c ON c.unit_code = am.unit AND c.ag_code = am.agcd
            LEFT JOIN (
-             SELECT unit_code, ag_code, cl_amt
+             SELECT unit_code, ag_code, SUM(cl_amt) total_outstanding
              FROM agency_outstanding WHERE period_label = 'CURRENT'
+             GROUP BY unit_code, ag_code
            ) o ON o.unit_code = am.unit AND o.ag_code = am.agcd
            WHERE am.executive_code = ?
-           ORDER BY COALESCE(s.total_supply, 0) DESC`, [from, to, from, to, execCode]),
+           GROUP BY am.unit, am.agcd
+           ORDER BY total_supply DESC`, [from, to, from, to, execCode]),
       ]);
 
       const ei         = execInfo.rows[0] || {};
