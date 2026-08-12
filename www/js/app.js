@@ -8,6 +8,7 @@ const DASH_MENU = [
   ["supply_dash", "Supply Dashboard",      "📦"],
   ["collections", "Collections",         "₹"],
   ["outstanding",   "Agency Outstanding",  "💰"],
+  ["exec_perf",     "Executive Performance", "👤"],
   ["short_payment", "Short Payment",      "📋"],
   ["transport",     "Taxi Dashboard",     "🚕"],
   ["survey_dash", "Survey Intelligence", "📊"],
@@ -5353,6 +5354,493 @@ VIEWS.outstanding = () => {
 };
 
 /* ════════════════════════════════════════════════════════
+   EXECUTIVE PERFORMANCE DASHBOARD
+   Supply · Collection · Outstanding by executive
+   Navigation: List → Executive Detail → Agency Detail
+   ════════════════════════════════════════════════════════ */
+
+// ── State ────────────────────────────────────────────────────────────────────
+const epState = () => S.live.ep || (S.live.ep = {
+  filters: { from: monthStartISO(), to: todayISO(), state: '', unit_code: '', metric: 'collection_pct', top_n: 10 },
+  filterOpts: null, kpis: null, ranking: null,
+  list: null, listPage: 1, listSearch: '', listSort: 'collection_pct', listSortDir: 'desc', _listKey: '',
+  drillExec: '', drillExecName: '', drillExecData: null,
+  drillAgency: '', drillUnitCode: '', drillAgencyName: '', drillAgencyData: null,
+  _loading: {},
+});
+
+// ── API helpers ───────────────────────────────────────────────────────────────
+function epApi(path) { return `${location.origin}/api/exec-perf/${path}`; }
+
+function epQS(extra) {
+  const f = epState().filters;
+  const p = new URLSearchParams();
+  if (f.from)      p.set('from',      f.from);
+  if (f.to)        p.set('to',        f.to);
+  if (f.state)     p.set('state',     f.state);
+  if (f.unit_code) p.set('unit_code', f.unit_code);
+  if (extra) Object.entries(extra).forEach(([k, v]) => { if (v != null && v !== '') p.set(k, String(v)); });
+  return '?' + p.toString();
+}
+
+function epFetch(key, path, extra) {
+  const st = epState();
+  if (st._loading[key] || st[key]) return;
+  st._loading[key] = true;
+  api.get(epApi(path) + epQS(extra))
+    .then(d => { if (d) st[key] = d; st._loading[key] = false; if (S.screen === 'exec_perf') render(); })
+    .catch(() => { st._loading[key] = false; });
+}
+
+function epClearCache() {
+  const f = epState().filters;
+  const opts = epState().filterOpts;
+  S.live.ep = null; epState();
+  S.live.ep.filters = f;
+  S.live.ep.filterOpts = opts;
+}
+
+// ── Formatters ────────────────────────────────────────────────────────────────
+const epFmtN = v => (!v && v !== 0) ? '—' : Number(v).toLocaleString('en-IN');
+const epFmtC = v => {
+  if (!v && v !== 0) return '—';
+  const n = Number(v);
+  if (Math.abs(n) >= 1e7) return '₹' + (n / 1e7).toFixed(2) + ' Cr';
+  if (Math.abs(n) >= 1e5) return '₹' + (n / 1e5).toFixed(2) + ' L';
+  return '₹' + Math.round(n).toLocaleString('en-IN');
+};
+const epPct = v => (!v && v !== 0) ? '—' : `${Number(v).toFixed(1)}%`;
+const epPctColor = v => {
+  if (!v && v !== 0) return 'var(--muted)';
+  const n = Number(v);
+  return n >= 80 ? 'var(--grn)' : n >= 50 ? 'var(--gold)' : 'var(--red)';
+};
+const epMetricLabel = m => ({ supply: 'Supply (Copies)', collection: 'Collection (₹)', collection_pct: 'Collection %', outstanding: 'Outstanding (₹)' }[m] || m);
+const epMetricVal = (r, m) => m === 'supply' ? epFmtN(r.total_supply) : m === 'collection' ? epFmtC(r.total_collection) : m === 'collection_pct' ? epPct(r.collection_pct) : epFmtC(r.total_outstanding);
+const epMetricColor = (r, m) => m === 'collection_pct' ? epPctColor(r.collection_pct) : m === 'outstanding' ? 'var(--red)' : m === 'collection' ? 'var(--grn)' : 'var(--ink)';
+
+// ── Drill / navigation functions (window-scoped for inline onclick) ───────────
+window.epDrillExec = (code, name) => {
+  if (!code) return;
+  const st = epState();
+  st.drillExec = code; st.drillExecName = name || code;
+  st.drillExecData = null; st.drillAgency = ''; st.drillAgencyData = null;
+  render();
+  const f = st.filters;
+  api.get(epApi(`executive/${encodeURIComponent(code)}`) + `?from=${f.from}&to=${f.to}`)
+    .then(d => { if (d) { epState().drillExecData = d; } if (S.screen === 'exec_perf') render(); });
+};
+
+window.epDrillAgency = (unitCode, agCode, agName) => {
+  if (!agCode) return;
+  const st = epState();
+  st.drillAgency = agCode; st.drillUnitCode = unitCode; st.drillAgencyName = agName || agCode;
+  st.drillAgencyData = null;
+  render();
+  const f = st.filters;
+  api.get(epApi(`agency/${encodeURIComponent(unitCode)}/${encodeURIComponent(agCode)}`) + `?from=${f.from}&to=${f.to}`)
+    .then(d => { if (d) { epState().drillAgencyData = d; } if (S.screen === 'exec_perf') render(); });
+};
+
+window.epBack = () => {
+  const st = epState();
+  if (st.drillAgency) { st.drillAgency = ''; st.drillAgencyData = null; }
+  else { st.drillExec = ''; st.drillExecData = null; }
+  render();
+};
+window.epHome = () => { const st = epState(); st.drillExec = ''; st.drillExecData = null; st.drillAgency = ''; st.drillAgencyData = null; render(); };
+
+window.epSetMetric = v => { epState().filters.metric = v; epState().ranking = null; render(); };
+window.epSetTopN   = v => { epState().filters.top_n = parseInt(v, 10); epState().ranking = null; render(); };
+
+window.epApplyFilters = () => {
+  const st = epState();
+  const f  = Object.assign({}, st.filters);
+  const g  = id => { const el = document.getElementById(id); return el ? el.value : null; };
+  if (g('ep-from') != null) f.from      = g('ep-from');
+  if (g('ep-to')   != null) f.to        = g('ep-to');
+  if (g('ep-state')!= null) f.state     = g('ep-state');
+  if (g('ep-unit') != null) f.unit_code = g('ep-unit');
+  epClearCache();
+  S.live.ep.filters = f;
+  render();
+};
+window.epClearFilters = () => {
+  const st = epState();
+  const metric = st.filters.metric;
+  const top_n  = st.filters.top_n;
+  epClearCache();
+  S.live.ep.filters = { from: monthStartISO(), to: todayISO(), state: '', unit_code: '', metric, top_n };
+  render();
+};
+
+window.epSortList = (col, dir) => { const st = epState(); st.listSort = col; st.listSortDir = dir; st.list = null; st._listKey = ''; render(); };
+window.epListPage = p => { const st = epState(); st.listPage = p; st.list = null; st._listKey = ''; render(); };
+window.epSearchList = (() => {
+  let t;
+  return v => { const st = epState(); clearTimeout(t); t = setTimeout(() => { st.listSearch = v; st.list = null; st._listKey = ''; st.listPage = 1; render(); }, 380); };
+})();
+
+// ── Filter panel ──────────────────────────────────────────────────────────────
+function epFilterPanel() {
+  const st = epState();
+  const f  = st.filters;
+
+  if (!st.filterOpts && !st._loading.filterOpts) {
+    st._loading.filterOpts = true;
+    api.get(epApi('filters'))
+      .then(d => { if (d) st.filterOpts = d; st._loading.filterOpts = false; if (S.screen === 'exec_perf') render(); })
+      .catch(() => { st._loading.filterOpts = false; });
+  }
+  const opts = st.filterOpts || { states: [], units: [] };
+  const hasFilter = f.state || f.unit_code;
+
+  const sel = (id, items, val, placeholder, isObj) =>
+    `<select id="${id}" class="inp" style="font-size:12px;padding:5px 6px">
+       <option value="">${placeholder}</option>
+       ${items.map(i => {
+         const v = isObj ? i.unit_code : i, l = isObj ? i.unit_name : i;
+         return `<option value="${esc(v)}" ${val === v ? 'selected' : ''}>${esc(l)}</option>`;
+       }).join('')}
+     </select>`;
+
+  return `<div class="card" style="padding:10px 14px;margin-bottom:12px">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <span style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Period</span>
+      <input id="ep-from" type="date" class="inp" value="${esc(f.from)}" style="font-size:12px;padding:5px 8px">
+      <span style="color:var(--muted);font-size:12px">to</span>
+      <input id="ep-to" type="date" class="inp" value="${esc(f.to)}" style="font-size:12px;padding:5px 8px">
+      ${sel('ep-state', opts.states, f.state, '🗺 All States', false)}
+      ${sel('ep-unit',  opts.units,  f.unit_code, 'All Units', true)}
+      <button class="btn pri sm" onclick="epApplyFilters()">Apply</button>
+      ${hasFilter ? `<button class="btn sm" onclick="epClearFilters()">✕ Clear</button>` : ''}
+      <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:11px;color:var(--muted)">Rank by</span>
+        <select class="inp" style="font-size:12px;padding:5px 6px" onchange="epSetMetric(this.value)">
+          <option value="supply"         ${f.metric === 'supply'         ? 'selected' : ''}>Supply (Copies)</option>
+          <option value="collection"     ${f.metric === 'collection'     ? 'selected' : ''}>Collection (₹)</option>
+          <option value="collection_pct" ${f.metric === 'collection_pct' ? 'selected' : ''}>Collection %</option>
+          <option value="outstanding"    ${f.metric === 'outstanding'    ? 'selected' : ''}>Outstanding (₹)</option>
+        </select>
+        <span style="font-size:11px;color:var(--muted)">Top</span>
+        <select class="inp" style="font-size:12px;padding:5px 6px" onchange="epSetTopN(this.value)">
+          ${[5, 10, 15, 20].map(n => `<option value="${n}" ${f.top_n == n ? 'selected' : ''}>${n}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── KPI grid ──────────────────────────────────────────────────────────────────
+function epKpiGrid() {
+  const st = epState();
+  const f  = st.filters;
+  epFetch('kpis', 'kpis');
+  if (!st.kpis) return `<div style="height:80px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px">Loading KPIs…</div>`;
+  const k = st.kpis;
+  return `<div class="vz-kgrid" style="margin-bottom:16px">
+    ${vzKpi({ icon: '👤', label: 'Executives',       value: epFmtN(k.exec_count),        status: 'info', sub: `${epFmtN(k.agency_count)} agencies` })}
+    ${vzKpi({ icon: '📦', label: 'Supply (Copies)',  value: epFmtN(k.total_supply),       status: 'info', sub: `${esc(k.from)} – ${esc(k.to)}` })}
+    ${vzKpi({ icon: '₹',  label: 'Collection',       value: epFmtC(k.total_collection),   status: 'good', sub: 'Period total' })}
+    ${vzKpi({ icon: '⚠',  label: 'Outstanding',      value: epFmtC(k.total_outstanding),  status: 'bad',  sub: 'Current balance' })}
+  </div>`;
+}
+
+// ── Ranking cards ─────────────────────────────────────────────────────────────
+function epRankingCards() {
+  const st = epState();
+  const f  = st.filters;
+  epFetch('ranking', 'ranking', { metric: f.metric, top_n: f.top_n });
+  if (!st.ranking) return `<div style="height:100px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px">Loading rankings…</div>`;
+
+  const { top = [], bottom = [], total = 0, metric } = st.ranking;
+  const ml = epMetricLabel(metric);
+
+  const rankRow = (r, i, isGood) => {
+    const dotC = isGood ? 'var(--grn)' : 'var(--red)';
+    const val  = epMetricVal(r, metric);
+    const vc   = epMetricColor(r, metric);
+    return `<div class="rowbtn" onclick="epDrillExec('${esc(r.executive_code)}','${esc(r.exec_name)}')"
+      style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid var(--brd2);cursor:pointer">
+      <div style="width:22px;height:22px;background:${dotC};color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0">${i + 1}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(r.exec_name)}">${esc(r.exec_name || '—')}</div>
+        <div style="font-size:10.5px;color:var(--muted)">${esc(r.main_unit_name || r.units || '')} · ${epFmtN(r.agency_count)} ag.</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:13px;font-weight:700;color:${vc}">${val}</div>
+        ${metric !== 'collection_pct' ? `<div style="font-size:10px;color:${epPctColor(r.collection_pct)}">${epPct(r.collection_pct)} coll.</div>` : ''}
+      </div>
+    </div>`;
+  };
+
+  const topTitle = metric === 'outstanding' ? '⚠ Most Outstanding' : '🏆 Top ' + f.top_n + ' · ' + ml;
+  const topSub   = metric === 'outstanding' ? 'Highest risk — needs attention' : 'Higher is better';
+  const botTitle = metric === 'outstanding' ? '✅ Lowest Outstanding' : '⚠ Bottom ' + f.top_n + ' · ' + ml;
+  const botSub   = metric === 'outstanding' ? 'Safest accounts' : 'Needs attention';
+  const topTC    = metric === 'outstanding' ? 'var(--red)' : 'var(--grn)';
+  const botTC    = metric === 'outstanding' ? 'var(--grn)' : 'var(--red)';
+
+  const card = (rows, title, sub, tc, isGood) =>
+    `<div class="card" style="padding:14px 16px">
+      <div style="font-size:11.5px;font-weight:800;color:${tc};text-transform:uppercase;letter-spacing:.04em;margin-bottom:1px">${title}</div>
+      <div style="font-size:10.5px;color:var(--muted);margin-bottom:10px">${sub}</div>
+      ${rows.length ? rows.map((r, i) => rankRow(r, i, isGood)).join('') : `<div style="font-size:12px;color:var(--muted);padding:16px 0;text-align:center">No data in this period</div>`}
+    </div>`;
+
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px">
+    ${card(top,    topTitle, topSub, topTC, metric !== 'outstanding')}
+    ${card(bottom, botTitle, botSub, botTC, metric === 'outstanding')}
+  </div>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:14px;text-align:right">${total} executives ranked · min supply filter: ${f.top_n > 0 ? 'off' : 'on'}</div>`;
+}
+
+// ── Full executive table ───────────────────────────────────────────────────────
+function epExecTable() {
+  const st  = epState();
+  const qs  = epQS({ sort: st.listSort, dir: st.listSortDir, search: st.listSearch, page: st.listPage, per_page: 50 });
+
+  if (!st.list || st._listKey !== qs) {
+    if (!st._loading.list) {
+      st._loading.list = true; st._listKey = qs;
+      api.get(epApi('list') + qs)
+        .then(d => { if (d) st.list = d; st._loading.list = false; if (S.screen === 'exec_perf') render(); })
+        .catch(() => { st._loading.list = false; });
+    }
+    if (!st.list) return `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px">Loading executives…</div>`;
+  }
+
+  const data  = st.list;
+  const rows  = data.rows || [];
+  const total = data.total || 0;
+  const pages = data.total_pages || 1;
+  const page  = st.listPage;
+  const sort  = st.listSort;
+  const dir   = st.listSortDir;
+
+  const th = (col, label, right) => {
+    const active  = sort === col;
+    const nextDir = (active && dir === 'desc') ? 'asc' : 'desc';
+    const arrow   = active ? (dir === 'desc' ? ' ↓' : ' ↑') : '';
+    return `<th${right ? ' class="r"' : ''} style="cursor:pointer;user-select:none;white-space:nowrap;${active ? 'color:var(--chart-1)' : ''}" onclick="epSortList('${col}','${nextDir}')">${label}${arrow}</th>`;
+  };
+
+  const pager = pages > 1
+    ? `<div style="display:flex;gap:6px;margin:10px 16px;justify-content:center;align-items:center;flex-wrap:wrap">
+         ${page > 1     ? `<button class="btn sm" onclick="epListPage(${page - 1})">← Prev</button>` : ''}
+         <span style="font-size:12px;color:var(--muted)">Page ${page} of ${pages} · ${total} executives</span>
+         ${page < pages ? `<button class="btn sm" onclick="epListPage(${page + 1})">Next →</button>` : ''}
+       </div>`
+    : `<div style="font-size:11px;color:var(--muted);margin:8px 16px">${total} executives</div>`;
+
+  return `<div class="card" style="overflow:hidden;margin-bottom:16px">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <div>
+        <div style="font-weight:700;font-size:13px">All Executives</div>
+        <div style="font-size:10.5px;color:var(--muted)">Click a row to view agencies</div>
+      </div>
+      <div style="flex:1;min-width:180px">
+        <input class="inp" placeholder="Search executive or unit…" value="${esc(st.listSearch || '')}"
+          style="font-size:12px;padding:5px 8px;width:100%" oninput="epSearchList(this.value)">
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:32px">#</th>
+            ${th('exec_name',      'Executive',    false)}
+            <th>Unit</th>
+            ${th('agencies',       'Agencies',     true)}
+            ${th('supply',         'Supply',       true)}
+            ${th('collection',     'Collection',   true)}
+            ${th('collection_pct', 'Coll %',       true)}
+            ${th('outstanding',    'Outstanding',  true)}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((r, i) => `<tr class="rowbtn" onclick="epDrillExec('${esc(r.executive_code)}','${esc(r.exec_name || '')}')" style="${i % 2 ? 'background:var(--surface-2)' : ''}">
+            <td style="color:var(--muted);font-size:11px">${r.rank || i + 1}</td>
+            <td>
+              <div style="font-weight:600;font-size:13px">${esc(r.exec_name || '—')}</div>
+              <div style="font-size:10.5px;color:var(--muted)">${esc(r.state_name || '')}${r.executive_code ? ' · ' + esc(r.executive_code) : ''}</div>
+            </td>
+            <td style="font-size:12px;color:var(--muted)">${esc(r.main_unit_name || r.units || '—')}</td>
+            <td class="r">${epFmtN(r.agency_count)}</td>
+            <td class="r" style="font-weight:600">${epFmtN(r.total_supply)}</td>
+            <td class="r" style="color:var(--grn);font-weight:600">${epFmtC(r.total_collection)}</td>
+            <td class="r" style="color:${epPctColor(r.collection_pct)};font-weight:700">${epPct(r.collection_pct)}</td>
+            <td class="r" style="color:var(--red);font-weight:600">${epFmtC(r.total_outstanding)}</td>
+          </tr>`).join('')}
+          ${!rows.length ? `<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--muted)">No executives found for this period / filter</td></tr>` : ''}
+        </tbody>
+      </table>
+    </div>
+    ${pager}
+  </div>`;
+}
+
+// ── Main (list) view ──────────────────────────────────────────────────────────
+function epMainView() {
+  return pagehead('Executive Performance', 'Supply · Collection · Outstanding by executive · click any row to drill down') +
+    epFilterPanel() + epKpiGrid() + epRankingCards() + epExecTable();
+}
+
+// ── Executive detail view ─────────────────────────────────────────────────────
+function epExecDetailView() {
+  const st = epState();
+  const data = st.drillExecData;
+
+  const bc = `<div style="font-size:12px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <span onclick="epHome()" style="cursor:pointer;color:var(--chart-1);font-weight:500">Executive Performance</span>
+    <span style="color:var(--muted)">›</span>
+    <span style="color:var(--ink);font-weight:700">${esc(st.drillExecName)}</span>
+  </div>`;
+
+  if (!data) return pagehead('Executive Performance', '') +
+    `<button class="btn sm" onclick="epBack()" style="margin-bottom:12px">← Back</button>` + bc +
+    `<div style="padding:24px;text-align:center;color:var(--muted)">Loading…</div>`;
+
+  const { exec, agencies = [] } = data;
+  const pct = exec.collection_pct || 0;
+
+  const kpis = `<div class="vz-kgrid" style="margin-bottom:16px">
+    ${vzKpi({ icon: '🏢', label: 'Agencies',        value: epFmtN(exec.agency_count),       status: 'info', sub: esc(exec.units || '') })}
+    ${vzKpi({ icon: '📦', label: 'Supply (Period)', value: epFmtN(exec.total_supply),        status: 'info', sub: `${esc(data.from)} – ${esc(data.to)}` })}
+    ${vzKpi({ icon: '₹',  label: 'Collection',      value: epFmtC(exec.total_collection),    status: 'good', sub: 'Period total' })}
+    ${vzKpi({ icon: '⚠',  label: 'Outstanding',     value: epFmtC(exec.total_outstanding),   status: pct >= 80 ? 'good' : pct >= 50 ? 'warn' : 'bad', sub: `${epPct(pct)} recovery rate` })}
+  </div>`;
+
+  const agTable = `<div class="card" style="overflow:hidden">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;gap:8px">
+      <div style="font-weight:700;font-size:13px">Agencies (${agencies.length})</div>
+      <div style="font-size:10.5px;color:var(--muted)">Click a row for agency detail</div>
+    </div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:32px">#</th>
+            <th>Agency</th>
+            <th>Type</th>
+            <th>City</th>
+            <th class="r">Supply</th>
+            <th class="r">Collection</th>
+            <th class="r">Coll %</th>
+            <th class="r">Outstanding</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${agencies.map((a, i) => `<tr class="rowbtn" onclick="epDrillAgency('${esc(a.unit_code)}','${esc(a.ag_code)}','${esc(a.ag_name || '')}')" style="${i % 2 ? 'background:var(--surface-2)' : ''}">
+            <td style="color:var(--muted);font-size:11px">${i + 1}</td>
+            <td>
+              <div style="font-weight:600;font-size:12.5px">${esc(a.ag_name || '—')}</div>
+              <div style="font-size:10.5px;color:var(--muted)">${esc(a.unit_name || '')} · ${esc(a.ag_code)}</div>
+            </td>
+            <td style="font-size:11.5px;color:var(--muted)">${esc(a.ag_type_name || '—')}</td>
+            <td style="font-size:11.5px;color:var(--muted)">${esc(a.city_name || '—')}</td>
+            <td class="r" style="font-weight:600">${epFmtN(a.total_supply)}</td>
+            <td class="r" style="color:var(--grn);font-weight:600">${epFmtC(a.total_collection)}</td>
+            <td class="r" style="color:${epPctColor(a.collection_pct)};font-weight:700">${epPct(a.collection_pct)}</td>
+            <td class="r" style="color:var(--red);font-weight:600">${epFmtC(a.total_outstanding)}</td>
+            <td><span class="chip ${a.status === 'Active' ? 'good' : a.status === 'Suspended' ? 'crit' : 'warn'}" style="font-size:9.5px">${esc(a.status)}</span></td>
+          </tr>`).join('')}
+          ${!agencies.length ? `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--muted)">No agencies found</td></tr>` : ''}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+
+  return pagehead('Executive Performance', '') +
+    `<button class="btn sm" onclick="epBack()" style="margin-bottom:10px">← Back</button>` +
+    bc + kpis + agTable;
+}
+
+// ── Agency detail view ────────────────────────────────────────────────────────
+function epAgencyDetailView() {
+  const st   = epState();
+  const data = st.drillAgencyData;
+
+  const bc = `<div style="font-size:12px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <span onclick="epHome()" style="cursor:pointer;color:var(--chart-1);font-weight:500">Executive Performance</span>
+    <span style="color:var(--muted)">›</span>
+    <span onclick="epBack()" style="cursor:pointer;color:var(--chart-1);font-weight:500">${esc(st.drillExecName)}</span>
+    <span style="color:var(--muted)">›</span>
+    <span style="color:var(--ink);font-weight:700">${esc(st.drillAgencyName)}</span>
+  </div>`;
+
+  if (!data) return pagehead('Executive Performance', '') +
+    `<button class="btn sm" onclick="epBack()" style="margin-bottom:12px">← Back</button>` + bc +
+    `<div style="padding:24px;text-align:center;color:var(--muted)">Loading…</div>`;
+
+  const { agency: ag, metrics: m, supply_history = [], collection_history = [] } = data;
+  const pct = m.collection_pct || 0;
+
+  const infoCard = `<div class="card" style="padding:16px;margin-bottom:12px">
+    <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
+      <div style="flex:1;min-width:200px">
+        <div style="font-size:16px;font-weight:800;margin-bottom:3px">${esc(ag.ag_name || '—')}</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px">${esc(ag.ag_type_name || '')}${ag.ag_class_name ? ' · ' + esc(ag.ag_class_name) : ''}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:16px">
+          ${[
+            ['Unit',      ag.unit_name || ag.unit_code],
+            ['City',      ag.city_name || ag.dist_name || '—'],
+            ['Mobile',    ag.mobile_no1 || '—'],
+            ['Executive', ag.executive_name || ag.executive_code || '—'],
+            ['Supply Start', ag.supply_start_dt || '—'],
+          ].map(([lbl, val]) => `<div>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">${lbl}</div>
+            <div style="font-size:13px;font-weight:600">${esc(String(val))}</div>
+          </div>`).join('')}
+        </div>
+      </div>
+      <span class="chip ${ag.status === 'Active' ? 'good' : ag.status === 'Suspended' ? 'crit' : 'warn'}" style="font-size:12px;padding:4px 12px">${esc(ag.status)}</span>
+    </div>
+  </div>`;
+
+  const kpis = `<div class="vz-kgrid" style="margin-bottom:16px">
+    ${vzKpi({ icon: '📦', label: 'Supply (Period)',   value: epFmtN(m.total_supply),       status: 'info', sub: `Avg ${epFmtN(m.avg_daily_supply)} copies/day` })}
+    ${vzKpi({ icon: '₹',  label: 'Collection',        value: epFmtC(m.total_collection),   status: 'good', sub: `${epFmtN(m.txn_count)} txn · Last: ${m.last_coll_date || '—'}` })}
+    ${vzKpi({ icon: '📊', label: 'Recovery %',        value: epPct(pct),                   status: pct >= 80 ? 'good' : pct >= 50 ? 'warn' : 'bad', sub: 'collection ÷ (collection + outstanding)' })}
+    ${vzKpi({ icon: '⚠',  label: 'Outstanding (Net)', value: epFmtC(m.total_outstanding),  status: m.total_outstanding > 0 ? 'bad' : 'good', sub: `Bill: ${epFmtC(m.bill_amt)} · Rec: ${epFmtC(m.rec_amt)}` })}
+  </div>`;
+
+  const histRow = (rows, cols, buildRow) => rows.length ? `<div style="overflow-x:auto"><table>
+    <thead><tr>${cols.map(([l, r]) => `<th${r ? ' class="r"' : ''}>${l}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map((r, i) => `<tr style="${i % 2 ? 'background:var(--surface-2)' : ''}">${buildRow(r)}</tr>`).join('')}</tbody>
+  </table></div>` : `<div style="padding:16px;color:var(--muted);font-size:12px;text-align:center">No data</div>`;
+
+  const supHist = `<div class="card" style="overflow:hidden;margin-bottom:12px">
+    <div style="padding:10px 14px;border-bottom:1px solid var(--brd2);font-weight:700;font-size:13px">Supply History — Last 6 Months</div>
+    ${histRow(supply_history,
+      [['Month', false], ['Supply Days', true], ['Total Supply', true], ['Avg / Day', true]],
+      r => `<td style="font-weight:600">${esc(r.month)}</td><td class="r">${epFmtN(r.supply_days)}</td><td class="r" style="font-weight:600">${epFmtN(r.total_supply)}</td><td class="r" style="color:var(--muted)">${r.supply_days > 0 ? epFmtN(Math.round(Number(r.total_supply) / Number(r.supply_days))) : '—'}</td>`
+    )}
+  </div>`;
+
+  const colHist = `<div class="card" style="overflow:hidden;margin-bottom:12px">
+    <div style="padding:10px 14px;border-bottom:1px solid var(--brd2);font-weight:700;font-size:13px">Collection History — Last 6 Months</div>
+    ${histRow(collection_history,
+      [['Month', false], ['Transactions', true], ['Amount Collected', true]],
+      r => `<td style="font-weight:600">${esc(r.month)}</td><td class="r" style="color:var(--muted)">${epFmtN(r.txn_count)}</td><td class="r" style="color:var(--grn);font-weight:600">${epFmtC(r.total_collection)}</td>`
+    )}
+  </div>`;
+
+  return pagehead('Executive Performance', '') +
+    `<button class="btn sm" onclick="epBack()" style="margin-bottom:10px">← Back</button>` +
+    bc + infoCard + kpis + supHist + colHist;
+}
+
+// ── VIEWS entry ───────────────────────────────────────────────────────────────
+VIEWS.exec_perf = () => {
+  const st = epState();
+  if (st.drillAgency) return epAgencyDetailView();
+  if (st.drillExec)   return epExecDetailView();
+  return epMainView();
+};
+
+/* ════════════════════════════════════════════════════════
    SHORT PAYMENT / BILL-WISE COLLECTION REPORT
    ════════════════════════════════════════════════════════ */
 
@@ -7880,7 +8368,7 @@ function navGroups() {
   if (u.dashboard) {
     const fieldIds = ["routes", "collections", "complaints", "partners"];
     // mgmtIds are always shown to hl≤4 regardless of saved navScreens (handles screens added after a user's navScreens was last saved)
-    const mgmtIds  = ["command", "ai_insights", "supply_dash"];
+    const mgmtIds  = ["command", "ai_insights", "supply_dash", "exec_perf"];
     const items = DASH_MENU
       .filter(([id]) => (hl <= 4 && mgmtIds.includes(id)) || (u.navScreens ? u.navScreens.includes(id) : (hl <= 4 || fieldIds.includes(id))))
       .filter(([id]) => permAllows(id, 'view') !== false)   // explicit rights-matrix deny hides the screen

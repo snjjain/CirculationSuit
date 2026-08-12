@@ -4134,6 +4134,9 @@ require('./agent_app')({ app, q });
 // ── DCR web app — circulation-staff agent/hawker visits (branch-scoped, writes to MySQL) ──
 require('./dcr_app')({ app, q, getScopeUnitCodes });
 
+// ── Executive Performance Dashboard ───────────────────────────────────────────
+require('./exec_performance')({ app, q, getScopeUnitCodes });
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 if (require.main === module) {
   app.listen(API_PORT, '0.0.0.0', () => {
