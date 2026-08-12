@@ -1425,7 +1425,7 @@ window.supdUnit = u => {
   ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
   render();
 };
-const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'execBreakdown', 'covidSummary', 'covidAgentStates', 'covidCashStates'].forEach(k => { st[k] = null; });
+const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'execBreakdown', 'covidSummary', 'covidAgentStates', 'covidCashStates', 'brStates', 'brBranches', 'brL2'].forEach(k => { st[k] = null; });
 // State dropdown: cascade the Unit list to that state (data refreshes when Apply is pressed)
 window.supdSetState = (v) => {
   const st = _supdState();
@@ -1470,6 +1470,7 @@ window.supdCSV = key => {
   a.click();
 };
 
+const _errCard = (msg) => `<div class="card pad" style="color:var(--muted)">${esc(msg || 'No data.')}</div>`;
 function _supdKpiCard(icon, label, value, sub, color) {
   return `<div class="_cmd-strip-item" style="${color ? `border-left:4px solid ${color}` : ''}">
     <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">${icon} ${label}</span>
@@ -1535,28 +1536,45 @@ function _supdOverview(st) {
   return hero + mid + insights;
 }
 
+// Branches tab: State (Rajasthan / MP / CG / National) → Unit → Executive, fully drillable.
+window.supdBrDrill = (state, unit, unitName) => {
+  const st = _supdState();
+  st.brState = state || ''; st.brUnit = unit || ''; st.brUnitName = unitName || '';
+  st.brStates = st.brBranches = st.brL2 = null;
+  render();
+};
+window.supdBrBy = by => { const st = _supdState(); st.brBy = by; st.brL2 = null; render(); };
+function _supdBrCrumb(st) {
+  const link = (txt, fn, active) => `<span onclick="${fn}" style="cursor:pointer;color:${active ? 'var(--ink)' : 'var(--gold-d)'};font-weight:${active ? 700 : 500}">${txt}</span>`;
+  const parts = [link('States', "supdBrDrill('')", !st.brState)];
+  if (st.brState) parts.push(link(esc(st.brState), `supdBrDrill('${esc(st.brState)}')`, !st.brUnit));
+  if (st.brUnit) parts.push(link(esc(st.brUnitName || st.brUnit), '', true));
+  return `<div style="font-size:12.5px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${parts.join('<span style="color:var(--muted)">›</span>')}</div>`;
+}
 function _supdBranches(st) {
-  _supdFetch('branches', '/api/supply-dash/branches' + _supdQS(st));
-  const d = st.branches;
-  if (!d) return _cmdSkel();
-  if (d._err || !d.rows || !d.rows.length) return `<div class="card pad" style="color:var(--muted)">No branch data.</div>`;
-  const hl = `<div class="vz-kgrid" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr))">
-    ${vzKpi({ icon: '🏆', label: 'Highest Supply', value: `<span style="font-size:16px">${esc(d.highest_supply || '—')}</span>`, status: 'info' })}
-    ${vzKpi({ icon: '📈', label: 'Highest Growth', value: `<span style="font-size:16px">${esc(d.highest_growth || '—')}</span>`, status: 'good' })}
-    ${vzKpi({ icon: '📉', label: 'Highest Reduction', value: `<span style="font-size:16px">${esc(d.highest_reduction || '—')}</span>`, status: 'bad' })}
-  </div>`;
-  const rows = d.rows.map(r => `<tr>
-    <td>${r.rank}</td><td><b>${esc(r.branch)}</b></td>
-    <td class="r num">${_supdN(r.agents)}</td>
-    <td class="r num">${_supdN(r.supply)}</td>
-    <td class="r num" style="color:var(--grn)">${_supdN(r.growth)}</td>
-    <td class="r num" style="color:var(--red)">${_supdN(r.reduction)}</td>
-    <td class="r num">${_supdDelta(r.net_change)}</td>
-    <td class="r num">${_supdPct(r.growth_pct)}</td></tr>`);
-  return hl
-    + `<div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="btn" onclick="supdCSV('branches')">⬇ Excel/CSV</button></div>`
-    + table(['#', 'Branch', '>Agents', '>Supply', '>Growth', '>Reduction', '>Net', '>%'], rows)
-    + `<div class="card pad" style="margin-top:12px">${_askChart({ type: 'bar', title: 'Net change by branch', labels: d.rows.slice(0, 14).map(r => r.branch), values: d.rows.slice(0, 14).map(r => r.net_change), value_label: 'net copies' })}</div>`;
+  const qs = _supdQS(st), amp = qs ? '&' : '?';
+  let body, csvKey;
+  if (!st.brState) {
+    _supdFetch('brStates', '/api/supply-dash/agent/states' + qs);
+    const dd = st.brStates; csvKey = 'brStates';
+    body = !dd ? _cmdSkel() : dd._err ? _errCard('No state data.') : _supdDrillTable(dd, 'State',
+      r => `<td><span onclick="supdBrDrill('${esc(r.state)}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.state)}</span> <small style="color:var(--muted)">${r.branches} units</small></td>`, 'agent', dd.total);
+  } else if (!st.brUnit) {
+    _supdFetch('brBranches', `/api/supply-dash/agent/branches${qs}${amp}state=${encodeURIComponent(st.brState)}`);
+    const dd = st.brBranches; csvKey = 'brBranches';
+    body = !dd ? _cmdSkel() : dd._err ? _errCard('No unit data.') : _supdDrillTable(dd, 'Unit',
+      r => `<td><span onclick="supdBrDrill('${esc(st.brState)}','${esc(r.unit_code)}','${esc(r.branch).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.branch)}</span> <small style="color:var(--muted)">${_supdN(r.agents)} ag</small></td>`, 'agent', dd.total);
+  } else {
+    const by = st.brBy || 'executive';
+    const opts = [['executive', '👔 Executive Wise'], ['district', '📍 District Wise']];
+    const toggle = `<div class="seg" style="margin-bottom:12px">${opts.map(([k, l]) => `<button class="${by === k ? 'on' : ''}" onclick="supdBrBy('${k}')">${l}</button>`).join('')}</div>`;
+    const dqs = qs ? '&' + qs.slice(1) : '';
+    _supdFetch('brL2', `/api/supply-dash/agent/branch/${encodeURIComponent(st.brUnit)}?by=${by}${dqs}`);
+    const dd = st.brL2; csvKey = 'brL2';
+    body = toggle + (!dd ? _cmdSkel() : dd._err ? _errCard('No data.') : _supdDrillTable(dd, by === 'district' ? 'District' : 'Executive', r => `<td>${esc(r.label)}</td>`, 'agent', dd.total));
+  }
+  const csv = `<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn" onclick="supdCSV('${csvKey}')">⬇ Excel/CSV</button></div>`;
+  return _supdBrCrumb(st) + csv + body;
 }
 
 function _supdAgents(st) {

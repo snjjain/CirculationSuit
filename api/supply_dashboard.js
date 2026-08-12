@@ -515,6 +515,10 @@ module.exports = function registerSupplyDash(ctx) {
   }
   const mkDelta = (cur, prev) => ({ current: cur, previous: prev, diff: cur - prev, growth_pct: r1(pct(cur, prev)) });
 
+  // State grouping for reports: the three core states stand alone; everything else → NATIONAL.
+  const SUPPLY_CORE = new Set(['RAJASTHAN', 'MADHYA PRADESH', 'CHHATTISGARH']);
+  const regionOf = s => { const u = String(s || '').toUpperCase(); return SUPPLY_CORE.has(u) ? u : 'NATIONAL'; };
+
   // Sale date windows. Both single-day and date-range are a TWO-DAY comparison, never a sum:
   //   default   → current = latest business day, previous = the day before.
   //   date range → current = To date (latest supply day in range), previous = From date
@@ -561,7 +565,7 @@ module.exports = function registerSupplyDash(ctx) {
       const sc2 = await scopeUnits(req, { ignoreState: true });
       const stF = (req.query.state_name || req.query.state || '').trim();
       let hs = null;
-      if (stF) { const uhs = await unitHomeState(); hs = Object.keys(uhs).filter(u => uhs[u] === stF); }
+      if (stF) { const uhs = await unitHomeState(); hs = Object.keys(uhs).filter(u => regionOf(uhs[u]) === regionOf(stF)); }
       const hsS = hs ? ` AND s.unit_code IN (${hs.map(() => '?').join(',') || "''"})` : '';
       const hsH = hs ? ` AND h.loc_id IN (${hs.map(() => '?').join(',') || "''"})` : '';
       const S = on(sc2, 's.unit_code'), Sh = on(sc2, 'h.loc_id');
@@ -605,13 +609,13 @@ module.exports = function registerSupplyDash(ctx) {
       ]);
       const byState = {};
       agg.rows.forEach(r => {
-        const st = uhs[r.uc] || '—';
+        const st = regionOf(uhs[r.uc] || '');
         const o = byState[st] = byState[st] || { state: st, supply: 0, prev_supply: 0, branches: 0 };
         o.supply += N(r.cur); o.prev_supply += N(r.prv); if (N(r.cur) > 0) o.branches += 1;
       });
       let out = Object.values(byState).sort((a, b) => b.supply - a.supply);
       const _stF = (req.query.state_name || req.query.state || '').trim();
-      if (_stF) out = out.filter(r => r.state === _stF);
+      if (_stF) out = out.filter(r => r.state === regionOf(_stF));
       const total = out.reduce((a, r) => a + r.supply, 0);
       res.json({
         ...winMeta(w), total,
@@ -642,8 +646,8 @@ module.exports = function registerSupplyDash(ctx) {
            WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${S}
            GROUP BY s.unit_code`, [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params]),
       ]);
-      let rows = agg.rows.map(r => ({ ...r, state: uhs[r.unit_code] || '—' }));
-      if (state) rows = rows.filter(r => r.state === state);
+      let rows = agg.rows.map(r => ({ ...r, state: regionOf(uhs[r.unit_code] || '') }));
+      if (state) rows = rows.filter(r => r.state === regionOf(state));
       rows.sort((a, b) => N(b.cur) - N(a.cur));
       const total = rows.reduce((a, r) => a + N(r.cur), 0);
       res.json({
@@ -719,13 +723,13 @@ module.exports = function registerSupplyDash(ctx) {
       ]);
       const byState = {};
       agg.rows.forEach(r => {
-        const st = uhs[r.loc_id] || '—';
+        const st = regionOf(uhs[r.loc_id] || '');
         const o = byState[st] = byState[st] || { state: st, supply: 0, prev_supply: 0, branches: 0 };
         o.supply += N(r.cur); o.prev_supply += N(r.prv); if (N(r.cur) > 0) o.branches += 1;
       });
       let out = Object.values(byState).sort((a, b) => b.supply - a.supply);
       const _stF = (req.query.state_name || req.query.state || '').trim();
-      if (_stF) out = out.filter(r => r.state === _stF);
+      if (_stF) out = out.filter(r => r.state === regionOf(_stF));
       const total = out.reduce((a, r) => a + r.supply, 0);
       res.json({
         ...winMeta(w), total,
@@ -755,8 +759,8 @@ module.exports = function registerSupplyDash(ctx) {
            FROM hawker_supply h WHERE h.supply_date IN (?, ?)${S}
            GROUP BY h.loc_id`, [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params]),
       ]);
-      let rows = agg.rows.map(r => ({ ...r, state: uhs[r.loc_id] || '—' }));
-      if (state) rows = rows.filter(r => r.state === state);
+      let rows = agg.rows.map(r => ({ ...r, state: regionOf(uhs[r.loc_id] || '') }));
+      if (state) rows = rows.filter(r => r.state === regionOf(state));
       rows.sort((a, b) => N(b.cur) - N(a.cur));
       const total = rows.reduce((a, r) => a + N(r.cur), 0);
       res.json({
