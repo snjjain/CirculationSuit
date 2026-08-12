@@ -3245,6 +3245,88 @@ function scheduleNextSync() {
 scheduleNextSync();
 
 // ════════════════════════════════════════════════════════════════════════════
+// DCR SYNC — API + 6 AM DAILY SCHEDULER
+// Tables: dcr_center_attendance, dcr_agency_visit
+// ════════════════════════════════════════════════════════════════════════════
+const dcrSync = require('./oracle_dcr_sync');
+
+const dcrSyncState = {
+  running: false, lastStarted: null, lastCompleted: null,
+  lastStatus: 'never', lastResult: null, lastError: null, log: [],
+};
+
+function startDcrSync(opts = {}) {
+  if (dcrSyncState.running) return { started: false, reason: 'already running' };
+  dcrSyncState.running = true;
+  dcrSyncState.lastStarted = new Date().toISOString();
+  dcrSyncState.lastStatus = 'running';
+  dcrSyncState.log = [];
+  dcrSyncState.lastError = null;
+
+  dcrSync.runSync({
+    ...opts,
+    onLog: line => {
+      dcrSyncState.log.push(line);
+      if (dcrSyncState.log.length > 1000) dcrSyncState.log.shift();
+    },
+  }).then(result => {
+    dcrSyncState.running = false;
+    dcrSyncState.lastCompleted = new Date().toISOString();
+    dcrSyncState.lastStatus = 'success';
+    dcrSyncState.lastResult = result;
+    console.log(`[dcr-sync] Done — attendance: ${result.totalAttn}, visits: ${result.totalVisit}`);
+  }).catch(err => {
+    dcrSyncState.running = false;
+    dcrSyncState.lastCompleted = new Date().toISOString();
+    dcrSyncState.lastStatus = 'error';
+    dcrSyncState.lastError = err.message;
+    console.error('[dcr-sync] Error:', err.message);
+  });
+
+  return { started: true };
+}
+
+// POST /api/sync/dcr  — manual trigger
+// Body: { backfill: true } | { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
+app.post('/api/sync/dcr', (req, res) => {
+  const opts = {};
+  if (req.body && req.body.backfill) opts.backfill = true;
+  if (req.body && req.body.from)     opts.from = req.body.from;
+  if (req.body && req.body.to)       opts.to   = req.body.to;
+  const result = startDcrSync(opts);
+  if (!result.started) return res.status(409).json({ error: result.reason });
+  res.json({ ok: true, message: 'DCR sync started', startedAt: dcrSyncState.lastStarted });
+});
+
+// GET /api/sync/dcr/status
+app.get('/api/sync/dcr/status', (req, res) => {
+  res.json({
+    running:       dcrSyncState.running,
+    lastStarted:   dcrSyncState.lastStarted,
+    lastCompleted: dcrSyncState.lastCompleted,
+    status:        dcrSyncState.lastStatus,
+    result:        dcrSyncState.lastResult,
+    error:         dcrSyncState.lastError,
+    recentLog:     dcrSyncState.log.slice(-100),
+  });
+});
+
+// 6 AM daily scheduler (different from outstanding at 7 AM)
+function scheduleDcrSync() {
+  const now  = new Date();
+  const next = new Date(now);
+  next.setHours(6, 0, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  setTimeout(() => {
+    console.log('[dcr-sync] 6 AM daily trigger firing');
+    startDcrSync({});
+    scheduleDcrSync();
+  }, next - now);
+  console.log(`[dcr-sync] Next auto-sync at ${next.toLocaleString('en-IN')}`);
+}
+scheduleDcrSync();
+
+// ════════════════════════════════════════════════════════════════════════════
 // COLLECTION DASHBOARD ENDPOINTS
 // ════════════════════════════════════════════════════════════════════════════
 
