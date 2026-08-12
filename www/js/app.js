@@ -72,7 +72,7 @@ window.clearDateRange = () => {
 /* ---------- REST API client (port 8001) — JWT bearer auth ---------- */
 let AUTH_TOKEN = null;   // set on login / restore; sent as Authorization: Bearer
 const api = {
-  get base() { return `${location.protocol}//${location.hostname}:8001`; },
+  get base() { return location.origin; },
   h() {
     const h = { "Content-Type": "application/json" };
     if (AUTH_TOKEN) h["Authorization"] = "Bearer " + AUTH_TOKEN;
@@ -922,7 +922,7 @@ Object.keys(APP_META).forEach(k => { if (!VIEWS["app_" + k]) VIEWS["app_" + k] =
 
 /* ---- Dashboard: Command Centre ---- */
 /* ── Command Centre helpers ─────────────────────────────── */
-function _cmdBase() { return `${location.protocol}//${location.hostname}:8001`; }
+function _cmdBase() { return location.origin; }
 
 function _cmdLoad() {
   const c = S.live.cmd || (S.live.cmd = {});
@@ -3585,7 +3585,7 @@ function colState() {
   });
 }
 
-function colApi() { return `${location.protocol}//${location.hostname}:8001/api/collection`; }
+function colApi() { return `${location.origin}/api/collection`; }
 
 function colQS(extra) {
   const f = colState().filters, p = new URLSearchParams();
@@ -4792,7 +4792,7 @@ window.ouDrillExec = (unit, unitName, exec) => {
   render();
 };
 
-function ouApi(path) { return `${location.protocol}//${location.hostname}:8001/api/outstanding/${path}`; }
+function ouApi(path) { return `${location.origin}/api/outstanding/${path}`; }
 
 function ouQS(extra = '') {
   const st = ouState();
@@ -4831,7 +4831,7 @@ function ouTriggerSync(monthly) {
   if (st._syncing) { toast('Sync already in progress…'); return; }
   st._syncing = true;
   toast(monthly ? 'Starting sync (CURRENT + monthly)…' : 'Starting sync (CURRENT)…');
-  fetch(`${location.protocol}//${location.hostname}:8001/api/sync/outstanding`, {
+  fetch(`${location.origin}/api/sync/outstanding`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ monthly }),
@@ -4843,7 +4843,7 @@ function ouTriggerSync(monthly) {
 }
 
 function ouPollSyncStatus() {
-  fetch(`${location.protocol}//${location.hostname}:8001/api/sync/outstanding/status`)
+  fetch(`${location.origin}/api/sync/outstanding/status`)
     .then(r => r.json()).then(d => {
       const st = ouState();
       if (d.running) {
@@ -5356,7 +5356,7 @@ VIEWS.outstanding = () => {
    SHORT PAYMENT / BILL-WISE COLLECTION REPORT
    ════════════════════════════════════════════════════════ */
 
-const spApi = path => `${location.protocol}//${location.hostname}:8001/api/shortpayment/${path}`;
+const spApi = path => `${location.origin}/api/shortpayment/${path}`;
 
 const spState = () => S.live.sp || (S.live.sp = {
   fromMonth: '', toMonth: '',
@@ -7630,7 +7630,7 @@ const SDV_REPORTS = [
 ];
 
 function sdvReportUrl(endpoint) {
-  return `${location.protocol}//${location.hostname}:8001` + sdvQS('/api/survey/report/' + endpoint);
+  return location.origin + sdvQS('/api/survey/report/' + endpoint);
 }
 
 function sdvFetchReport() {

@@ -1,9 +1,11 @@
 // Static file server for the www directory — serves on port 8123
+// Also proxies /api/* to the API server on port 8001 so only one port needs to be open
 const http = require('http');
 const fs   = require('fs');
 const path = require('path');
 
 const PORT   = parseInt(process.env.WWW_PORT || '8123', 10);
+const API_PORT = parseInt(process.env.API_PORT || '8001', 10);
 const WWW    = path.join(__dirname, '..', 'www');
 const MIME   = {
   '.html': 'text/html; charset=utf-8',
@@ -16,7 +18,29 @@ const MIME   = {
   '.webmanifest': 'application/manifest+json',
 };
 
+function proxyToApi(req, res) {
+  const options = {
+    hostname: '127.0.0.1',
+    port: API_PORT,
+    path: req.url,
+    method: req.method,
+    headers: { ...req.headers, host: `127.0.0.1:${API_PORT}` },
+  };
+  const proxy = http.request(options, proxyRes => {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    proxyRes.pipe(res, { end: true });
+  });
+  proxy.on('error', () => { res.writeHead(502); res.end('API unavailable'); });
+  req.pipe(proxy, { end: true });
+}
+
 http.createServer((req, res) => {
+  // Proxy all /api/ requests to the API server on port 8001
+  if (req.url.startsWith('/api/')) {
+    proxyToApi(req, res);
+    return;
+  }
+
   let urlPath = req.url.split('?')[0];
   if (urlPath === '/' || urlPath === '') urlPath = '/index.html';
 
