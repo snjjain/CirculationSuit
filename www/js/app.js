@@ -5720,6 +5720,29 @@ function epExecDetailView() {
   const { exec, agencies = [] } = data;
   const pct = exec.collection_pct || 0;
 
+  const chain = [
+    ['Edition Incharge',  exec.edtn_incharge_name,  exec.edtn_incharge],
+    ['Circ Incharge',     exec.circ_incharge_name,  exec.circ_incharge],
+    ['Zonal Head',        exec.zonal_head_name,      exec.zonal_head],
+    ['VP Circulation',    exec.vp_circulation_name,  exec.vp_circulation],
+  ].filter(([, name]) => name);
+
+  const execInfoCard = `<div class="card" style="padding:14px 16px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
+    <div style="flex:1;min-width:180px">
+      <div style="font-size:17px;font-weight:800;margin-bottom:2px">${esc(exec.exec_name || exec.executive_code)}</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">${esc(exec.exec_designation || exec.executive_code)} · ${esc(exec.units || exec.state_name || '')}</div>
+      ${chain.length ? `<div style="font-size:11.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Reports To</div>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px">
+        ${chain.map(([role, name], i) => `
+          ${i > 0 ? '<span style="color:var(--muted);font-size:11px">›</span>' : ''}
+          <div style="display:inline-flex;flex-direction:column;align-items:flex-start">
+            <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">${esc(role)}</span>
+            <span style="font-size:12.5px;font-weight:600">${esc(name)}</span>
+          </div>`).join('')}
+      </div>` : ''}
+    </div>
+  </div>`;
+
   const kpis = `<div class="vz-kgrid" style="margin-bottom:16px">
     ${vzKpi({ icon: '🏢', label: 'Agencies',        value: epFmtN(exec.agency_count),       status: 'info', sub: esc(exec.units || '') })}
     ${vzKpi({ icon: '📦', label: 'Supply (Period)', value: epFmtN(exec.total_supply),        status: 'info', sub: `${esc(data.from)} – ${esc(data.to)}` })}
@@ -5770,7 +5793,7 @@ function epExecDetailView() {
 
   return pagehead('Executive Performance', '') +
     `<button class="btn sm" onclick="epBack()" style="margin-bottom:10px">← Back</button>` +
-    bc + kpis + agTable;
+    bc + execInfoCard + kpis + agTable;
 }
 
 // ── Agency detail view ────────────────────────────────────────────────────────
