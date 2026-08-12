@@ -87,9 +87,9 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
 
     // 3. New fetch — wrap in a promise so simultaneous callers all wait on the same one
     const fetchPromise = (async () => {
-    const amCl  = unitCl('am.unit',  unitList);   // agency_master scope
-    const am2Cl = unitCl('am2.unit', unitList);    // agency_master scope for collection join
-    const ouCl  = unitCl('unit_code', unitList);   // agency_outstanding scope
+    const amCl   = unitCl('am.unit',   unitList);  // base query (alias am)
+    const subCl  = unitCl('unit',      unitList);  // subquery — no alias, plain column name
+    const ouCl   = unitCl('unit_code', unitList);  // agency_outstanding
 
     const [base, supply, collection, outstanding] = await Promise.all([
       // Base: active executives only (JOIN exec_master.is_active_pli='Y')
@@ -111,10 +111,10 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
          FROM supply_data sd
          JOIN (SELECT DISTINCT unit, agcd, executive_code
                FROM agency_master
-               WHERE executive_code IS NOT NULL AND executive_code != ''${amCl.cl}
+               WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}
               ) am ON sd.unit_code = am.unit AND sd.agcd = am.agcd
          WHERE sd.supply_date BETWEEN ? AND ?
-         GROUP BY am.executive_code`, [from, to, ...amCl.p]),
+         GROUP BY am.executive_code`, [from, to, ...subCl.p]),
 
       // Collection — same DISTINCT join to avoid DPCD fan-out
       q(`SELECT am2.executive_code,
@@ -122,10 +122,10 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
          FROM agency_collection ac
          JOIN (SELECT DISTINCT unit, agcd, executive_code
                FROM agency_master
-               WHERE executive_code IS NOT NULL AND executive_code != ''${am2Cl.cl}
+               WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}
               ) am2 ON am2.unit = ac.unit_code AND am2.agcd = ac.ag_code
          WHERE ac.is_valid = 1 AND ac.coll_date BETWEEN ? AND ?
-         GROUP BY am2.executive_code`, [from, to, ...am2Cl.p]),
+         GROUP BY am2.executive_code`, [from, to, ...subCl.p]),
 
       // Outstanding — always CURRENT period snapshot
       q(`SELECT exec_code, SUM(cl_amt) total_outstanding
