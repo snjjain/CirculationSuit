@@ -5370,7 +5370,7 @@ const epState = () => S.live.ep || (S.live.ep = {
 });
 
 // ── API helpers ───────────────────────────────────────────────────────────────
-function epApi(path) { return `${location.origin}/api/exec-perf/${path}`; }
+function epApi(path) { return `/api/exec-perf/${path}`; }
 
 function epQS(extra) {
   const f = epState().filters;
