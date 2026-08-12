@@ -4656,7 +4656,43 @@ const ouState = () => S.live.ou || (S.live.ou = {
   ageing: null, agencies: null, top: null, trend: null, unitSummary: null,
   topLimit: 10, topSort: 'outstanding', agSort: 'outstanding',
   agPage: 1, agSearch: '', agBucket: null, _loading: {},
+  drillState: '', drillUnit: '', drillUnitName: '', drStates: null, drUnits: null, drExecs: null,
 });
+
+// Outstanding region codes → friendly state names (data groups as RPPL/MP/CG/NATIONAL).
+const OU_STATE_LABEL = { RPPL: 'Rajasthan', RP: 'Rajasthan', MP: 'Madhya Pradesh', CG: 'Chhattisgarh', NATIONAL: 'National' };
+const ouStateLabel = s => OU_STATE_LABEL[String(s || '').toUpperCase()] || (s || 'Other');
+// Drill query string: keep the bar's non-geo filters, override state/unit with the drill's own.
+function ouDrillQS(extra) {
+  const f = ouState().filters, p = new URLSearchParams();
+  if (f.ag_status) p.set('ag_status', f.ag_status);
+  if (f.ag_type)   p.set('ag_type', f.ag_type);
+  if (f.zh_name)   p.set('zh_name', f.zh_name);
+  Object.entries(extra || {}).forEach(([k, v]) => { if (v) p.set(k, v); });
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
+function ouDrillGet(key, path, extra) {
+  const st = ouState();
+  if (st._loading[key] || st[key]) return;
+  st._loading[key] = true;
+  api.get('/api/outstanding/' + path + ouDrillQS(extra))
+    .then(d => { st[key] = d; st._loading[key] = false; if (S.screen === 'outstanding') render(); })
+    .catch(() => { st._loading[key] = false; if (S.screen === 'outstanding') render(); });
+}
+window.ouDrill = (state, unit, unitName) => {
+  const st = ouState();
+  st.drillState = state || ''; st.drillUnit = unit || ''; st.drillUnitName = unitName || '';
+  st.drUnits = st.drExecs = null;
+  render();
+};
+// Executive → jump to the Agencies tab, scoped to that unit + executive.
+window.ouDrillExec = (unit, unitName, exec) => {
+  const st = ouState();
+  st.filters = Object.assign({}, st.filters, { unit_code: unit, exec_name: exec });
+  st.agencies = null; st._agCacheKey = null; st.tab = 'agencies';
+  render();
+};
 
 function ouApi(path) { return `${location.protocol}//${location.hostname}:8001/api/outstanding/${path}`; }
 
@@ -4669,6 +4705,7 @@ function ouQS(extra = '') {
   if (f.ag_status) p.set('ag_status', f.ag_status);
   if (f.ag_type)   p.set('ag_type',   f.ag_type);
   if (f.zh_name)   p.set('zh_name',   f.zh_name);
+  if (f.exec_name) p.set('exec_name', f.exec_name);
   const base = p.toString();
   return (base || extra) ? '?' + [base, extra].filter(Boolean).join('&') : '';
 }
@@ -4738,7 +4775,7 @@ window.ouClickBucket = function(days) {
 
 window.ouClickUnit = function(unitCode) {
   const st = ouState();
-  st.filters = Object.assign({}, st.filters, { unit_code: unitCode });
+  st.filters = Object.assign({}, st.filters, { unit_code: unitCode, exec_name: '' });
   st.agencies = null;
   st.kpis = null;
   st.ageing = null;
@@ -4874,51 +4911,79 @@ function ouOverviewTab() {
       </div>
     </div>`;
 
-  // Unit-wise summary
-  const us = st.unitSummary;
-  const unitSection = !us ? spin : `
-    <div class="vz-sec" style="margin-bottom:12px">
-      <div class="sdv-sec-head" style="border-left-color:var(--chart-1)">
-        <div class="sdv-sec-title">Unit-wise Outstanding Summary</div>
-        <div class="sdv-sec-sub">Branch-level outstanding breakdown</div>
-      </div>
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px">
-          <thead><tr style="background:var(--navy);color:#fff">
-            ${['Unit','Zonal Head','Agencies','With O/S','Billing','Collected','Outstanding','Coll%'].map(h => `<th style="padding:6px 10px;text-align:left;white-space:nowrap">${h}</th>`).join('')}
-          </tr></thead>
-          <tbody>
-            ${(() => {
-              const stateLabel = s => s === 'RPPL' ? 'Rajasthan' : (s || 'Other');
-              const byState = {};
-              (us.rows || []).forEach(r => { const s = stateLabel(r.group_unit_name); if (!byState[s]) byState[s] = []; byState[s].push(r); });
-              const stateEntries = Object.entries(byState);
-              let html = '', ri = 0;
-              stateEntries.forEach(([state, srows]) => {
-                const sCl = srows.reduce((t, r) => t + Number(r.cl_amt || 0), 0);
-                html += '<tr style="background:var(--navy);color:#fff"><td colspan="8" style="padding:5px 10px;font-size:11px;font-weight:700;letter-spacing:.3px">📍 ' + esc(state) + ' &nbsp;·&nbsp; O/S: ' + ouFmtC(sCl) + ' &nbsp;·&nbsp; ' + srows.length + ' units</td></tr>';
-                srows.forEach(r => {
-                  const bg = (ri++ % 2) ? 'background:var(--surface-2);' : '';
-                  html += '<tr style="' + bg + 'cursor:pointer" onclick="ouClickUnit(\'' + r.unit_code + '\')" title="View agencies for ' + esc(r.unit_name || r.unit_code) + '">'
-                    + '<td style="padding:6px 10px;font-weight:600">' + esc(r.unit_name || r.unit_code) + '</td>'
-                    + '<td style="padding:6px 10px;color:var(--muted);font-size:11px">' + esc(r.zh_name || '—') + '</td>'
-                    + '<td style="padding:6px 10px">' + r.agencies + '</td>'
-                    + '<td style="padding:6px 10px">' + r.with_outstanding + '</td>'
-                    + '<td style="padding:6px 10px;font-variant-numeric:tabular-nums">' + ouFmtC(r.bill_amt) + '</td>'
-                    + '<td style="padding:6px 10px;font-variant-numeric:tabular-nums">' + ouFmtC(r.collected) + '</td>'
-                    + '<td style="padding:6px 10px;font-variant-numeric:tabular-nums;font-weight:700;color:' + (Number(r.cl_amt) > 0 ? 'var(--red)' : 'var(--grn)') + '">' + ouFmtC(r.cl_amt) + '</td>'
-                    + '<td style="padding:6px 10px">' + r.coll_pct + '%' + ouBar(Number(r.coll_pct), Number(r.coll_pct) >= 80 ? '#2ecc71' : '#e74c3c') + '</td>'
-                    + '</tr>';
-                });
-              });
-              return html;
-            })()}
-          </tbody>
-        </table>
-      </div>
-    </div>`;
+  return kpiGrid + agSection + ouDrillSection(st);
+}
 
-  return kpiGrid + agSection + unitSection;
+// State → Unit → Executive drill for the Outstanding dashboard.
+function ouDrillSection(st) {
+  const spin = `<span style="color:var(--muted)">Loading…</span>`;
+  const linkC = (txt, fn, active) => `<span onclick="${fn}" style="cursor:pointer;color:${active ? 'var(--ink)' : 'var(--chart-1)'};font-weight:${active ? 700 : 500}">${txt}</span>`;
+  const crumbs = [linkC('States', "ouDrill('')", !st.drillState)];
+  if (st.drillState) crumbs.push(linkC(esc(ouStateLabel(st.drillState)), `ouDrill('${esc(st.drillState)}')`, !st.drillUnit));
+  if (st.drillUnit) crumbs.push(linkC(esc(st.drillUnitName || st.drillUnit), '', true));
+  const bc = `<div style="font-size:12px;margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${crumbs.join('<span style="color:var(--muted)">›</span>')}</div>`;
+
+  // Which level / data / columns
+  let title, sub, data, firstCol, cellFn, clickHint;
+  if (!st.drillState) {
+    ouDrillGet('drStates', 'state-summary');
+    title = 'State-wise Outstanding'; sub = 'Rajasthan · Madhya Pradesh · Chhattisgarh · National — click a state to drill into units';
+    data = st.drStates; firstCol = 'State';
+    cellFn = r => `<td style="padding:6px 10px;font-weight:600;cursor:pointer;color:var(--chart-1)" onclick="ouDrill('${esc(r.state_code)}')">📍 ${esc(ouStateLabel(r.state_code))} <small style="color:var(--muted);font-weight:400">${r.units} units</small></td>`;
+  } else if (!st.drillUnit) {
+    ouDrillGet('drUnits', 'unit-summary', { state: st.drillState });
+    title = ouStateLabel(st.drillState) + ' — Units'; sub = 'Click a unit to see its executives';
+    data = st.drUnits; firstCol = 'Unit';
+    cellFn = r => `<td style="padding:6px 10px;font-weight:600;cursor:pointer;color:var(--chart-1)" onclick="ouDrill('${esc(st.drillState)}','${esc(r.unit_code)}','${esc((r.unit_name || r.unit_code)).replace(/'/g, "\\'")}')">${esc(r.unit_name || r.unit_code)} <small style="color:var(--muted);font-weight:400">${esc(r.zh_name || '')}</small></td>`;
+  } else {
+    ouDrillGet('drExecs', 'exec-summary', { unit_code: st.drillUnit });
+    title = esc(st.drillUnitName || st.drillUnit) + ' — Executives'; sub = 'Click an executive to open their agencies';
+    data = st.drExecs; firstCol = 'Executive';
+    cellFn = r => `<td style="padding:6px 10px;font-weight:600;cursor:pointer;color:var(--chart-1)" onclick="ouDrillExec('${esc(st.drillUnit)}','${esc((st.drillUnitName || st.drillUnit)).replace(/'/g, "\\'")}','${esc(r.exec_name).replace(/'/g, "\\'")}')">👔 ${esc(r.exec_name)}</td>`;
+  }
+
+  const rows = (data && data.rows) || [];
+  let bodyHtml;
+  if (!data) bodyHtml = `<tr><td colspan="7" style="padding:16px;text-align:center">${spin}</td></tr>`;
+  else if (!rows.length) bodyHtml = `<tr><td colspan="7" style="padding:16px;text-align:center;color:var(--muted)">No data</td></tr>`;
+  else {
+    let ri = 0;
+    bodyHtml = rows.map(r => {
+      const bg = (ri++ % 2) ? 'background:var(--surface-2);' : '';
+      return `<tr style="${bg}">${cellFn(r)}
+        <td style="padding:6px 10px">${r.agencies}</td>
+        <td style="padding:6px 10px">${r.with_outstanding}</td>
+        <td style="padding:6px 10px;font-variant-numeric:tabular-nums">${ouFmtC(r.bill_amt)}</td>
+        <td style="padding:6px 10px;font-variant-numeric:tabular-nums">${ouFmtC(r.collected)}</td>
+        <td style="padding:6px 10px;font-variant-numeric:tabular-nums;font-weight:700;color:${Number(r.cl_amt) > 0 ? 'var(--red)' : 'var(--grn)'}">${ouFmtC(r.cl_amt)}</td>
+        <td style="padding:6px 10px">${r.coll_pct}%${ouBar(Number(r.coll_pct), Number(r.coll_pct) >= 80 ? '#2ecc71' : '#e74c3c')}</td></tr>`;
+    }).join('');
+    // Totals
+    const T = rows.reduce((a, r) => ({ ag: a.ag + Number(r.agencies || 0), wo: a.wo + Number(r.with_outstanding || 0), bill: a.bill + Number(r.bill_amt || 0), col: a.col + Number(r.collected || 0), cl: a.cl + Number(r.cl_amt || 0) }), { ag: 0, wo: 0, bill: 0, col: 0, cl: 0 });
+    const tPct = T.bill > 0 ? (T.col / T.bill * 100).toFixed(1) : '0.0';
+    bodyHtml += `<tr style="font-weight:800;background:var(--navy);color:#fff">
+      <td style="padding:6px 10px">Total</td><td style="padding:6px 10px">${T.ag}</td><td style="padding:6px 10px">${T.wo}</td>
+      <td style="padding:6px 10px;font-variant-numeric:tabular-nums">${ouFmtC(T.bill)}</td>
+      <td style="padding:6px 10px;font-variant-numeric:tabular-nums">${ouFmtC(T.col)}</td>
+      <td style="padding:6px 10px;font-variant-numeric:tabular-nums">${ouFmtC(T.cl)}</td>
+      <td style="padding:6px 10px">${tPct}%</td></tr>`;
+  }
+
+  return `<div class="vz-sec" style="margin-bottom:12px">
+    <div class="sdv-sec-head" style="border-left-color:var(--chart-1)">
+      <div class="sdv-sec-title">${esc(title)}</div>
+      <div class="sdv-sec-sub">${esc(sub)}</div>
+    </div>
+    ${bc}
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px">
+        <thead><tr style="background:var(--navy);color:#fff">
+          ${[firstCol, 'Agencies', 'With O/S', 'Billing', 'Collected', 'Outstanding', 'Coll%'].map(h => `<th style="padding:6px 10px;text-align:left;white-space:nowrap">${h}</th>`).join('')}
+        </tr></thead>
+        <tbody>${bodyHtml}</tbody>
+      </table>
+    </div>
+  </div>`;
 }
 
 // ── Tab: Agencies ───────────────────────────────────────────
@@ -4928,7 +4993,7 @@ function ouAgenciesTab() {
   const qExtra = `sort=${sort}&page=${page}&limit=50${st.agSearch ? '&search=' + encodeURIComponent(st.agSearch) : ''}${bucket ? '&bucket=' + encodeURIComponent(bucket) : ''}`;
 
   // Bust cache when sort/page/search/bucket changes
-  const cacheKey = `agencies_${sort}_${page}_${st.agSearch}_${bucket||''}`;
+  const cacheKey = `agencies_${sort}_${page}_${st.agSearch}_${bucket||''}_${st.filters.exec_name||''}_${st.filters.unit_code||''}`;
   if (st._agCacheKey !== cacheKey) { st.agencies = null; st._agCacheKey = cacheKey; }
   if (!st.agencies) ouFetch('agencies', 'agencies', qExtra);
 
@@ -4942,12 +5007,18 @@ function ouAgenciesTab() {
     <span onclick="ouState().agBucket=null;ouState().agencies=null;render()" style="cursor:pointer;opacity:.7;font-size:14px;line-height:1" title="Clear bucket filter">✕</span>
   </div>` : '';
 
+  const execChip = st.filters.exec_name ? `<div style="display:inline-flex;align-items:center;gap:5px;background:var(--chart-1);color:#fff;border-radius:14px;padding:3px 10px;font-size:11px;font-weight:600">
+    👔 ${esc(st.filters.exec_name)}
+    <span onclick="ouState().filters.exec_name='';ouState().agencies=null;ouState()._agCacheKey=null;render()" style="cursor:pointer;opacity:.8;font-size:14px;line-height:1" title="Clear executive filter">✕</span>
+  </div>` : '';
+
   const controls = `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
     <div style="flex:1;min-width:160px">
       <input class="inp" placeholder="Search agency / city…" value="${esc(st.agSearch||'')}" style="font-size:12px;padding:5px 8px;width:100%"
         oninput="ouState().agSearch=this.value;ouState().agencies=null;ouState().agPage=1;if(S.screen==='outstanding')render()">
     </div>
     ${bucketChip}
+    ${execChip}
     <div style="display:flex;gap:4px;flex-wrap:wrap">
       ${sortBtn('outstanding','Highest Outstanding')}
       ${sortBtn('collection','Lowest Collection %')}

@@ -2593,6 +2593,7 @@ function ouFilters(query, alias = 'ao') {
   if (query.ag_type)    { cls.push(`${p}ag_type = ?`);    params.push(query.ag_type); }
   if (query.zh_name)    { cls.push(`${p}zh_name = ?`);    params.push(query.zh_name); }
   if (query.exec_code)  { cls.push(`${p}exec_code = ?`);  params.push(query.exec_code); }
+  if (query.exec_name)  { cls.push(`${p}exec_name = ?`);  params.push(query.exec_name); }
   if (query.search) {
     cls.push(`(${p}ag_name LIKE ? OR ${p}ag_code LIKE ? OR ${p}city_name LIKE ?)`);
     const like = `%${query.search}%`;
@@ -2850,6 +2851,53 @@ app.get('/api/outstanding/unit-summary', async (req, res) => {
       GROUP BY unit_code
       HAVING SUM(bill_amt) > 0
       ORDER BY group_unit_name ASC, zh_name ASC, cl_amt DESC
+    `, [...params, ...sc.params]);
+    res.json({ rows: rows.rows });
+  } catch (e) { res.status(500).json({ detail: String(e) }); }
+});
+
+// GET /api/outstanding/state-summary — Level 1 of the State → Unit → Executive drill.
+// group_unit_name already carries the region code (RPPL / MP / CG / NATIONAL).
+app.get('/api/outstanding/state-summary', async (req, res) => {
+  try {
+    const { clause, params } = ouFilters(req.query);
+    const sc = await getOuScopeFilter(req);
+    const rows = await q(`
+      SELECT COALESCE(group_unit_name,'—') state_code,
+        COUNT(DISTINCT unit_code) units,
+        COUNT(*) agencies, COUNT(CASE WHEN cl_amt>0 THEN 1 END) with_outstanding,
+        SUM(bill_amt) bill_amt,
+        SUM(CASE WHEN rec_amt > bill_amt*10 AND rec_amt > 1000000 THEN 0 ELSE rec_amt END+other_cr) collected,
+        SUM(cl_amt) cl_amt,
+        CASE WHEN SUM(bill_amt)>0 THEN ROUND(SUM(CASE WHEN rec_amt > bill_amt*10 AND rec_amt > 1000000 THEN 0 ELSE rec_amt END+other_cr)/SUM(bill_amt)*100,1) ELSE 0 END coll_pct
+      FROM agency_outstanding ao
+      WHERE period_label='CURRENT' ${clause}${sc.clause}
+      GROUP BY group_unit_name
+      HAVING SUM(bill_amt) > 0 OR SUM(cl_amt) <> 0
+      ORDER BY cl_amt DESC
+    `, [...params, ...sc.params]);
+    res.json({ rows: rows.rows });
+  } catch (e) { res.status(500).json({ detail: String(e) }); }
+});
+
+// GET /api/outstanding/exec-summary — Level 3: executives within a unit (or state).
+app.get('/api/outstanding/exec-summary', async (req, res) => {
+  try {
+    const { clause, params } = ouFilters(req.query);
+    const sc = await getOuScopeFilter(req);
+    const rows = await q(`
+      SELECT COALESCE(NULLIF(exec_name,''),'(no executive)') exec_name,
+        MAX(unit_name) unit_name, MAX(unit_code) unit_code,
+        COUNT(*) agencies, COUNT(CASE WHEN cl_amt>0 THEN 1 END) with_outstanding,
+        SUM(bill_amt) bill_amt,
+        SUM(CASE WHEN rec_amt > bill_amt*10 AND rec_amt > 1000000 THEN 0 ELSE rec_amt END+other_cr) collected,
+        SUM(cl_amt) cl_amt,
+        CASE WHEN SUM(bill_amt)>0 THEN ROUND(SUM(CASE WHEN rec_amt > bill_amt*10 AND rec_amt > 1000000 THEN 0 ELSE rec_amt END+other_cr)/SUM(bill_amt)*100,1) ELSE 0 END coll_pct
+      FROM agency_outstanding ao
+      WHERE period_label='CURRENT' ${clause}${sc.clause}
+      GROUP BY exec_name
+      HAVING SUM(bill_amt) > 0 OR SUM(cl_amt) <> 0
+      ORDER BY cl_amt DESC
     `, [...params, ...sc.params]);
     res.json({ rows: rows.rows });
   } catch (e) { res.status(500).json({ detail: String(e) }); }
