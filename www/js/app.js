@@ -1923,6 +1923,8 @@ function _aiLoadCfg(force) {
 }
 
 window.aiTab = t => { _aiState().tab = t; render(); };
+window.aiFilterModule = v => { _aiState().fltModule = v || ''; render(); };
+window.aiFilterPri = v => { _aiState().fltPriority = v || ''; render(); };
 window.aiRefresh = () => { _aiLoad(true); render(); };
 
 /* ═══════════ Ask AI (chat) ═══════════ */
@@ -2339,18 +2341,38 @@ VIEWS.ai_insights = () => {
   else if (st._err) body = `<div class="card pad" style="color:var(--red)">Failed to load insights. <a href="#" onclick="aiRefresh();return false" style="color:var(--acc)">Retry</a></div>`;
   else if (!d) body = _cmdSkel() + _cmdSkel() + _cmdSkel();
   else {
-    const list = d.insights || [];
+    const all = d.insights || [];
     const counts = { P1: 0, P2: 0, P3: 0 };
-    list.forEach(i => counts[i.priority] = (counts[i.priority] || 0) + 1);
-    const strip = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">
-      ${['P1', 'P2', 'P3'].map(p => `<div class="_cmd-strip-item" style="border-left:4px solid ${_AI_PRI[p][0]}">
+    all.forEach(i => counts[i.priority] = (counts[i.priority] || 0) + 1);
+    const fMod = st.fltModule || '', fPri = st.fltPriority || '';
+    const MOD_LABEL = { outstanding: 'Outstanding', collection: 'Collections', short_payment: 'Short Payment', taxi: 'Taxi', app_usage: 'App Usage', survey: 'Survey', digital: 'Digital' };
+    const modules = [...new Set(all.map(i => i.module).filter(Boolean))].sort();
+    const priRank = { P1: 0, P2: 1, P3: 2 };
+    const list = all.filter(i => (!fMod || i.module === fMod) && (!fPri || i.priority === fPri))
+      .sort((a, b) => (priRank[a.priority] ?? 9) - (priRank[b.priority] ?? 9));
+    // Priority strip — click a tile to filter to that priority (click again to clear)
+    const strip = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
+      ${['P1', 'P2', 'P3'].map(p => `<div class="_cmd-strip-item" role="button" onclick="aiFilterPri('${fPri === p ? '' : p}')" style="cursor:pointer;border-left:4px solid ${_AI_PRI[p][0]}${fPri === p ? ';box-shadow:0 0 0 2px ' + _AI_PRI[p][0] : ''}">
         <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600">${_AI_PRI[p][1]}</span>
         <div style="font-size:24px;font-weight:800;color:${_AI_PRI[p][0]}">${counts[p] || 0}</div>
       </div>`).join('')}
     </div>`;
-    body = strip + (list.length
-      ? list.map((i, idx) => _aiCard(i, idx)).join('')
-      : `<div class="card pad" style="text-align:center;color:var(--grn);padding:34px">✓ Nothing needs your attention right now — all monitored KPIs look normal for your scope.</div>`)
+    const selSty = 'background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:7px 10px;font-size:12px;color:var(--fg)';
+    const filterBar = `<div class="filters" style="margin-bottom:12px;align-items:center">
+      <span class="lbl" style="align-self:center">Module</span>
+      <select onchange="aiFilterModule(this.value)" style="${selSty}">
+        <option value="">All modules</option>
+        ${modules.map(m => `<option value="${m}" ${fMod === m ? 'selected' : ''}>${MOD_LABEL[m] || m}</option>`).join('')}
+      </select>
+      ${fPri ? `<span class="chip" style="background:${_AI_PRI[fPri][0]}22;color:${_AI_PRI[fPri][0]}">${_AI_PRI[fPri][1]}</span>` : ''}
+      ${(fMod || fPri) ? `<button class="btn sm" onclick="aiFilterModule('');aiFilterPri('')">✕ Clear</button>` : ''}
+      <span class="lbl" style="align-self:center;color:var(--muted);margin-left:auto">${list.length} of ${all.length} · sorted by priority</span>
+    </div>`;
+    body = strip + filterBar + (list.length
+      ? list.map(i => _aiCard(i, all.indexOf(i))).join('')
+      : (all.length
+        ? `<div class="card pad" style="text-align:center;color:var(--muted);padding:28px">No insights match this filter. <a href="#" onclick="aiFilterModule('');aiFilterPri('');return false" style="color:var(--acc)">Clear</a></div>`
+        : `<div class="card pad" style="text-align:center;color:var(--grn);padding:34px">✓ Nothing needs your attention right now — all monitored KPIs look normal for your scope.</div>`))
       + (d.generated_at ? `<div style="font-size:11px;color:var(--muted);text-align:center;margin-top:6px">Generated ${esc(String(d.generated_at).slice(0, 16).replace('T', ' '))} UTC${d.cached ? ' · cached (max 10 min old)' : ''} · computed from live database values</div>` : '');
   }
 
