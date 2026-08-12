@@ -3580,6 +3580,87 @@ app.get('/api/collection/agency-behavior', async (req, res) => {
   } catch (e) { res.status(500).json({ detail: String(e) }); }
 });
 
+// ── Collection: State → Unit → Executive drill ────────────────────────────────
+// Core states stand alone; every other state collapses into NATIONAL.
+const COL_REGION_CASE = `CASE WHEN UPPER(state_name) IN ('RAJASTHAN','MADHYA PRADESH','CHHATTISGARH') THEN UPPER(state_name) ELSE 'NATIONAL' END`;
+function colRegionWhere(region) {
+  const r = String(region || '').toUpperCase();
+  if (!r) return { clause: '', params: [] };
+  if (r === 'NATIONAL') return { clause: ` AND (state_name IS NULL OR UPPER(state_name) NOT IN ('RAJASTHAN','MADHYA PRADESH','CHHATTISGARH'))`, params: [] };
+  return { clause: ` AND UPPER(state_name) = ?`, params: [r] };
+}
+// Agency → executive map (main-agency rows of the agency master).
+const COL_EXEC_JOIN = `LEFT JOIN (SELECT unit, agcd, MAX(executive_name) executive_name FROM agency_master GROUP BY unit, agcd) am ON am.unit = ac.unit_code AND am.agcd = ac.ag_code`;
+
+// GET /api/collection/state-summary — Level 1
+app.get('/api/collection/state-summary', async (req, res) => {
+  try {
+    const sc = await getColScopeFilter(req);
+    const { clause: rc, params: rp } = colFilters(req.query);
+    const clause = rc + sc.clause, params = [...rp, ...sc.params];
+    const { rows } = await q(`
+      SELECT ${COL_REGION_CASE} region,
+             -COALESCE(SUM(amount),0) amount, COUNT(*) txn,
+             COUNT(DISTINCT ag_code) agencies, COUNT(DISTINCT branch_name) units
+      FROM agency_collection
+      WHERE is_valid=1 ${clause}
+      GROUP BY region ORDER BY amount DESC`, params);
+    res.json({ rows });
+  } catch (e) { res.status(500).json({ detail: String(e) }); }
+});
+
+// GET /api/collection/unit-summary?state=REGION — Level 2 (units within a region)
+app.get('/api/collection/unit-summary', async (req, res) => {
+  try {
+    const sc = await getColScopeFilter(req);
+    const { clause: rc, params: rp } = colFilters(req.query);
+    const rw = colRegionWhere(req.query.region);
+    const clause = rc + rw.clause + sc.clause, params = [...rp, ...rw.params, ...sc.params];
+    const { rows } = await q(`
+      SELECT branch_name unit_name, MAX(unit_code) unit_code, MAX(state_name) state_name,
+             -COALESCE(SUM(amount),0) amount, COUNT(*) txn, COUNT(DISTINCT ag_code) agencies
+      FROM agency_collection
+      WHERE is_valid=1 AND branch_name IS NOT NULL ${clause}
+      GROUP BY branch_name ORDER BY amount DESC`, params);
+    res.json({ rows });
+  } catch (e) { res.status(500).json({ detail: String(e) }); }
+});
+
+// GET /api/collection/exec-summary?branch=UNIT — Level 3 (executives within a unit)
+app.get('/api/collection/exec-summary', async (req, res) => {
+  try {
+    const sc = await getColScopeFilter(req, 'ac');
+    const { clause: rc, params: rp } = colFilters(req.query);
+    const clause = rc + sc.clause, params = [...rp, ...sc.params];
+    const { rows } = await q(`
+      SELECT COALESCE(NULLIF(am.executive_name,''),'(no executive)') exec_name,
+             -COALESCE(SUM(ac.amount),0) amount, COUNT(*) txn, COUNT(DISTINCT ac.ag_code) agencies
+      FROM agency_collection ac ${COL_EXEC_JOIN}
+      WHERE ac.is_valid=1 ${clause}
+      GROUP BY exec_name ORDER BY amount DESC`, params);
+    res.json({ rows });
+  } catch (e) { res.status(500).json({ detail: String(e) }); }
+});
+
+// GET /api/collection/exec-agencies?branch=UNIT&exec=NAME — Level 4 (an executive's agencies)
+app.get('/api/collection/exec-agencies', async (req, res) => {
+  try {
+    const sc = await getColScopeFilter(req, 'ac');
+    const { clause: rc, params: rp } = colFilters(req.query);
+    const exec = String(req.query.exec || '').trim();
+    const clause = rc + sc.clause, params = [...rp, ...sc.params, exec];
+    const { rows } = await q(`
+      SELECT ac.ag_code, MAX(ac.ag_name) ag_name,
+             -COALESCE(SUM(ac.amount),0) amount, COUNT(*) txn,
+             MAX(ac.coll_date) last_date, DATEDIFF(CURDATE(), MAX(ac.coll_date)) days_since
+      FROM agency_collection ac ${COL_EXEC_JOIN}
+      WHERE ac.is_valid=1 ${clause}
+        AND COALESCE(NULLIF(am.executive_name,''),'(no executive)') = ?
+      GROUP BY ac.ag_code ORDER BY amount DESC LIMIT 300`, params);
+    res.json({ rows });
+  } catch (e) { res.status(500).json({ detail: String(e) }); }
+});
+
 // ── Agency Master ─────────────────────────────────────────────────────────────
 
 app.get('/api/agency-master/filters', async (req, res) => {

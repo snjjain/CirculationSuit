@@ -3600,6 +3600,34 @@ function colQS(extra) {
   const s = p.toString(); return s ? '?' + s : '';
 }
 
+// ── Collections State → Unit → Executive → Agency drill ──────────────────────
+const COL_REGION_LABEL = { RAJASTHAN: 'Rajasthan', 'MADHYA PRADESH': 'Madhya Pradesh', CHHATTISGARH: 'Chhattisgarh', NATIONAL: 'National' };
+const colRegionLabel = s => COL_REGION_LABEL[String(s || '').toUpperCase()] || (s || '—');
+// Drill keeps the date range + payment category; geo (region/unit) comes from the drill itself.
+function colGeoQS(extra) {
+  const f = colState().filters, p = new URLSearchParams();
+  if (f.from) p.set('from', f.from);
+  if (f.to) p.set('to', f.to);
+  if (f.payment_cat) p.set('payment_cat', f.payment_cat);
+  if (extra) Object.entries(extra).forEach(([k, v]) => { if (v) p.set(k, v); });
+  const s = p.toString(); return s ? '?' + s : '';
+}
+function colGeoGet(key, path, extra) {
+  const st = colState();
+  if (st['_l_' + key] || st[key]) return;
+  st['_l_' + key] = true;
+  fetch(colApi() + '/' + path + colGeoQS(extra), { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st[key] = d; st['_l_' + key] = false; if (S.screen === 'collections' && st.tab === 'geo') render(); })
+    .catch(() => { st['_l_' + key] = false; if (S.screen === 'collections' && st.tab === 'geo') render(); });
+}
+window.colDrill = (region, unit, unitName, exec) => {
+  const st = colState();
+  st.drillRegion = region || ''; st.drillUnit = unit || ''; st.drillUnitName = unitName || ''; st.drillExec = exec || '';
+  st.geoUnits = st.geoExecs = st.geoAgencies = null;
+  render();
+};
+
 async function colFetch() {
   const st = colState();
   st.loading = true; st.error = null; render();
@@ -3781,6 +3809,75 @@ function colOverviewTab() {
         <tbody>${top5||'<tr><td colspan="5" style="text-align:center;color:var(--muted)">No data</td></tr>'}</tbody>
       </table></div>
     </div>
+  </div>`;
+}
+
+// Collections: State → Unit → Executive → Agency drill.
+function colGeoTab() {
+  const st = colState();
+  const spin = '<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--muted)">Loading…</td></tr>';
+  const linkC = (txt, fn, active) => `<span onclick="${fn}" style="cursor:pointer;color:${active ? 'var(--ink)' : 'var(--chart-1)'};font-weight:${active ? 700 : 500}">${txt}</span>`;
+  const crumbs = [linkC('States', "colDrill('')", !st.drillRegion)];
+  if (st.drillRegion) crumbs.push(linkC(esc(colRegionLabel(st.drillRegion)), `colDrill('${esc(st.drillRegion)}')`, !st.drillUnit));
+  if (st.drillUnit) crumbs.push(linkC(esc(st.drillUnitName || st.drillUnit), `colDrill('${esc(st.drillRegion)}','${esc(st.drillUnit)}','${esc((st.drillUnitName || '').replace(/'/g, "\\'"))}')`, !st.drillExec));
+  if (st.drillExec) crumbs.push(linkC(esc(st.drillExec), '', true));
+  const bc = `<div style="font-size:12px;margin:4px 0 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${crumbs.join('<span style="color:var(--muted)">›</span>')}</div>`;
+
+  let title, sub, data, cols, rowFn;
+  const un = (st.drillUnitName || '').replace(/'/g, "\\'");
+  if (!st.drillRegion) {
+    colGeoGet('geoStates', 'state-summary');
+    title = 'State-wise Collection'; sub = 'Rajasthan · Madhya Pradesh · Chhattisgarh · National — click a state to drill in';
+    data = st.geoStates; cols = ['State', '>Units', '>Agencies', '>Txn', '>Collection'];
+    rowFn = r => `<td style="cursor:pointer;color:var(--chart-1);font-weight:600" onclick="colDrill('${esc(r.region)}')">📍 ${esc(colRegionLabel(r.region))}</td>
+      <td class="r num">${(r.units||0)}</td><td class="r num">${(r.agencies||0).toLocaleString()}</td><td class="r num">${(r.txn||0).toLocaleString()}</td><td class="r num">${colFmtC(r.amount)}</td>`;
+  } else if (!st.drillUnit) {
+    colGeoGet('geoUnits', 'unit-summary', { region: st.drillRegion });
+    title = colRegionLabel(st.drillRegion) + ' — Units'; sub = 'Click a unit to see its executives';
+    data = st.geoUnits; cols = ['Unit', '>Agencies', '>Txn', '>Collection'];
+    rowFn = r => `<td style="cursor:pointer;color:var(--chart-1);font-weight:600" onclick="colDrill('${esc(st.drillRegion)}','${esc(r.unit_code||r.unit_name)}','${esc((r.unit_name||'').replace(/'/g, "\\'"))}')">${esc(r.unit_name)}</td>
+      <td class="r num">${(r.agencies||0).toLocaleString()}</td><td class="r num">${(r.txn||0).toLocaleString()}</td><td class="r num">${colFmtC(r.amount)}</td>`;
+  } else if (!st.drillExec) {
+    colGeoGet('geoExecs', 'exec-summary', { branch: st.drillUnitName || st.drillUnit });
+    title = esc(st.drillUnitName || st.drillUnit) + ' — Executives'; sub = 'Click an executive to see their agencies';
+    data = st.geoExecs; cols = ['Executive', '>Agencies', '>Txn', '>Collection'];
+    rowFn = r => `<td style="cursor:pointer;color:var(--chart-1);font-weight:600" onclick="colDrill('${esc(st.drillRegion)}','${esc(st.drillUnit)}','${un}','${esc(r.exec_name).replace(/'/g, "\\'")}')">👔 ${esc(r.exec_name)}</td>
+      <td class="r num">${(r.agencies||0).toLocaleString()}</td><td class="r num">${(r.txn||0).toLocaleString()}</td><td class="r num">${colFmtC(r.amount)}</td>`;
+  } else {
+    colGeoGet('geoAgencies', 'exec-agencies', { branch: st.drillUnitName || st.drillUnit, exec: st.drillExec });
+    title = esc(st.drillExec) + ' — Agencies'; sub = esc(st.drillUnitName || st.drillUnit) + ' · collection by agency';
+    data = st.geoAgencies; cols = ['Agency', '>Last Paid', '>Txn', '>Collection'];
+    rowFn = r => `<td style="font-weight:600">${esc(r.ag_name || r.ag_code)}<small style="display:block;color:var(--muted);font-weight:400">${esc(r.ag_code)}</small></td>
+      <td class="r" style="font-size:11px;color:var(--muted)">${r.last_date ? String(r.last_date).slice(0,10) : '—'}${r.days_since!=null?` · ${r.days_since}d`:''}</td><td class="r num">${(r.txn||0).toLocaleString()}</td><td class="r num">${colFmtC(r.amount)}</td>`;
+  }
+
+  const rows = (data && data.rows) || [];
+  const nc = cols.length;
+  let body;
+  if (!data) body = spin.replace('colspan="5"', `colspan="${nc}"`);
+  else if (!rows.length) body = `<tr><td colspan="${nc}" style="text-align:center;padding:16px;color:var(--muted)">No data</td></tr>`;
+  else {
+    body = rows.map(r => `<tr>${rowFn(r)}</tr>`).join('');
+    // Totals — built to match each level's column layout exactly
+    const tAmt = rows.reduce((a, r) => a + Number(r.amount || 0), 0);
+    const tTxn = rows.reduce((a, r) => a + Number(r.txn || 0), 0);
+    const tAg  = rows.reduce((a, r) => a + Number(r.agencies || 0), 0);
+    const tUnits = rows.reduce((a, r) => a + Number(r.units || 0), 0);
+    const numCell = v => `<td class="r num">${v}</td>`;
+    let midCells;
+    if (!st.drillRegion)      midCells = numCell(tUnits) + numCell(tAg.toLocaleString()) + numCell(tTxn.toLocaleString());   // State
+    else if (st.drillExec)    midCells = `<td></td>` + numCell(tTxn.toLocaleString());                                      // Agencies
+    else                      midCells = numCell(tAg.toLocaleString()) + numCell(tTxn.toLocaleString());                    // Unit / Exec
+    body += `<tr style="font-weight:800;background:var(--navy);color:#fff"><td>Total</td>${midCells}${numCell(colFmtC(tAmt))}</tr>`;
+  }
+
+  const head = cols.map(c => c[0] === '>' ? `<th class="r">${c.slice(1)}</th>` : `<th>${c}</th>`).join('');
+  return `<div class="vz-sec">
+    <div class="cardhead" style="flex-direction:column;align-items:flex-start;gap:2px">
+      <h3 style="margin:0">${esc(title)}</h3><small style="color:var(--muted)">${esc(sub)}</small>
+    </div>
+    ${bc}
+    <div class="tablewrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
   </div>`;
 }
 
@@ -4017,7 +4114,7 @@ function colBehaviorTab() {
 
 VIEWS.collections = () => {
   const st = colState();
-  const tabs = [['overview','📊 Overview'],['trend','📈 Trend'],['modes','💳 Modes'],['agencies','🏢 Agencies'],['behavior','📋 Behaviour'],['billing','🧾 Bill vs Collection'],['short_payment','⚠️ Short Payment']];
+  const tabs = [['overview','📊 Overview'],['geo','🗺️ State-wise'],['trend','📈 Trend'],['modes','💳 Modes'],['agencies','🏢 Agencies'],['behavior','📋 Behaviour'],['billing','🧾 Bill vs Collection'],['short_payment','⚠️ Short Payment']];
   const OWN = st.tab === 'billing' || st.tab === 'short_payment';   // tabs with their own data source
   // Standard tabs load the shared collection dataset first; the "own-data" tabs skip that gate.
   if (!OWN && !st.kpis && !st.loading && !st.error) { colFetch(); return pagehead('Collections','Loading collection data...'); }
@@ -4031,6 +4128,7 @@ VIEWS.collections = () => {
   else if (st.loading) content = '<div style="text-align:center;padding:60px;color:var(--muted)">⏳ Loading collection data...</div>';
   else if (st.error)   content = `<div class="card pad" style="color:var(--red)">⚠️ ${esc(st.error)} <button class="btn sm" style="margin-left:8px" onclick="colFetch()">Retry</button></div>`;
   else if (st.tab==='overview') content = colOverviewTab();
+  else if (st.tab==='geo')      content = colGeoTab();
   else if (st.tab==='trend')    content = colTrendTab();
   else if (st.tab==='modes')    content = colModesTab();
   else if (st.tab==='agencies') content = colAgenciesTab();
