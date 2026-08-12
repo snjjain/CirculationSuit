@@ -72,7 +72,7 @@ window.clearDateRange = () => {
 /* ---------- REST API client (port 8001) — JWT bearer auth ---------- */
 let AUTH_TOKEN = null;   // set on login / restore; sent as Authorization: Bearer
 const api = {
-  base: "http://localhost:8001",
+  get base() { return `${location.protocol}//${location.hostname}:8001`; },
   h() {
     const h = { "Content-Type": "application/json" };
     if (AUTH_TOKEN) h["Authorization"] = "Bearer " + AUTH_TOKEN;
@@ -7630,7 +7630,7 @@ const SDV_REPORTS = [
 ];
 
 function sdvReportUrl(endpoint) {
-  return 'http://localhost:8001' + sdvQS('/api/survey/report/' + endpoint);
+  return `${location.protocol}//${location.hostname}:8001` + sdvQS('/api/survey/report/' + endpoint);
 }
 
 function sdvFetchReport() {
