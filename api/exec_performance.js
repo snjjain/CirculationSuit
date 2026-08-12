@@ -92,7 +92,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
     const ouCl  = unitCl('unit_code', unitList);   // agency_outstanding scope
 
     const [base, supply, collection, outstanding] = await Promise.all([
-      // Base: all executives from agency_master (the authoritative source)
+      // Base: active executives only (JOIN exec_master.is_active_pli='Y')
       q(`SELECT am.executive_code,
                 MAX(am.executive_name) exec_name,
                 MAX(am.unit_state_nm)  state_name,
@@ -101,6 +101,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
                 GROUP_CONCAT(DISTINCT am.unit_name ORDER BY am.unit_name SEPARATOR ' / ') units,
                 COUNT(DISTINCT am.agcd) agency_count
          FROM agency_master am
+         JOIN exec_master em ON em.executive_code = am.executive_code AND em.is_active_pli = 'Y'
          WHERE am.executive_code IS NOT NULL AND am.executive_code != ''${amCl.cl}
          GROUP BY am.executive_code
          ORDER BY exec_name`, amCl.p),
@@ -160,7 +161,8 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       };
     });
 
-      // Only include executives who had activity (supply or collection) in this period
+      // Only executives active in Oracle (is_active_pli='Y') are in `data` via the JOIN.
+      // Further restrict to those with actual activity in the selected period.
       const activeData = data.filter(r => r.total_supply > 0 || r.total_collection > 0);
 
       _mCache.set(cacheKey, { data: activeData, ts: Date.now() });
@@ -309,7 +311,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const execCode     = String(req.params.exec_code);
       const { from, to } = parseDates(req.query);
 
-      const [execInfo, supR, colR, ouR, agencies] = await Promise.all([
+      const [execInfo, supR, colR, ouR, agencies, hierR] = await Promise.all([
         q(`SELECT executive_code, MAX(executive_name) exec_name, MAX(unit_state_nm) state_name,
                   GROUP_CONCAT(DISTINCT unit_name ORDER BY unit_name SEPARATOR ' / ') units,
                   COUNT(DISTINCT agcd) agency_count
@@ -367,25 +369,43 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
            WHERE am.executive_code = ?
            GROUP BY am.unit, am.agcd
            ORDER BY total_supply DESC`, [from, to, from, to, execCode]),
+
+        // Reporting chain from Oracle hierarchy
+        q(`SELECT exec_desc, exec_desig,
+                  edtn_incharge, edtn_incharge_name,
+                  circ_incharge, circ_incharge_name,
+                  zonal_head,    zonal_head_name,
+                  vp_circulation, vp_circulation_name
+           FROM exec_hierarchy_mapping WHERE exec_code = ? LIMIT 1`, [execCode]),
       ]);
 
       const ei         = execInfo.rows[0] || {};
       const totalColl  = N(colR.rows[0]?.total);
       const totalOu    = N(ouR.rows[0]?.total);
       const collPct    = (totalColl + totalOu) > 0 ? R1(totalColl / (totalColl + totalOu) * 100) : 0;
+      const hier       = hierR.rows[0] || {};
 
       res.json({
         from, to,
         exec: {
-          executive_code:    execCode,
-          exec_name:         ei.exec_name || execCode,
-          state_name:        ei.state_name,
-          units:             ei.units,
-          agency_count:      N(ei.agency_count),
-          total_supply:      N(supR.rows[0]?.total),
-          total_collection:  totalColl,
-          total_outstanding: totalOu,
-          collection_pct:    collPct,
+          executive_code:       execCode,
+          exec_name:            ei.exec_name || execCode,
+          exec_designation:     hier.exec_desig || null,
+          state_name:           ei.state_name,
+          units:                ei.units,
+          agency_count:         N(ei.agency_count),
+          total_supply:         N(supR.rows[0]?.total),
+          total_collection:     totalColl,
+          total_outstanding:    totalOu,
+          collection_pct:       collPct,
+          edtn_incharge:        hier.edtn_incharge        || null,
+          edtn_incharge_name:   hier.edtn_incharge_name   || null,
+          circ_incharge:        hier.circ_incharge        || null,
+          circ_incharge_name:   hier.circ_incharge_name   || null,
+          zonal_head:           hier.zonal_head           || null,
+          zonal_head_name:      hier.zonal_head_name      || null,
+          vp_circulation:       hier.vp_circulation       || null,
+          vp_circulation_name:  hier.vp_circulation_name  || null,
         },
         agencies: agencies.rows.map((r, i) => ({
           rank:              i + 1,
