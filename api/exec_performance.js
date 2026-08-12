@@ -175,6 +175,8 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       return activeData;
     })();
 
+    // Clean up inflight entry on error so future callers can retry
+    fetchPromise.catch(() => _mInflight.delete(cacheKey));
     _mInflight.set(cacheKey, fetchPromise);
     return fetchPromise;
   }
@@ -232,6 +234,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
 
   // ══ RANKING ══
   app.get('/api/exec-perf/ranking', async (req, res) => {
+    const t0 = Date.now();
     try {
       const { from, to } = parseDates(req.query);
       const unitList  = await buildUnitList(req);
@@ -240,6 +243,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const minSupply = parseInt(req.query.min_supply || '0', 10);
 
       const all = await execMetrics(from, to, unitList);
+      console.log(`[ranking] execMetrics: ${all.length} rows in ${Date.now()-t0}ms`);
 
       // Sort metric value
       const metricVal = r => ({
@@ -257,7 +261,10 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const bottom = [...sorted].reverse().slice(0, topN);
 
       res.json({ metric, top_n: topN, min_supply: minSupply, top, bottom, total: filtered.length });
-    } catch (e) { res.status(500).json({ detail: String(e) }); }
+    } catch (e) {
+      console.error(`[ranking] ERROR after ${Date.now()-t0}ms:`, e);
+      res.status(500).json({ detail: String(e) });
+    }
   });
 
   // ══ LIST ══

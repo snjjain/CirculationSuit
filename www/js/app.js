@@ -5366,7 +5366,7 @@ const epState = () => S.live.ep || (S.live.ep = {
   list: null, listPage: 1, listSearch: '', listSort: 'collection_pct', listSortDir: 'desc', _listKey: '',
   drillExec: '', drillExecName: '', drillExecData: null,
   drillAgency: '', drillUnitCode: '', drillAgencyName: '', drillAgencyData: null,
-  _loading: {},
+  _loading: {}, _error: {},
 });
 
 // ── API helpers ───────────────────────────────────────────────────────────────
@@ -5396,11 +5396,17 @@ function epSnapshotFilters() {
 
 function epFetch(key, path, extra) {
   const st = epState();
-  if (st._loading[key] || st[key]) return;
+  if (st._loading[key] || st[key] || st._error[key]) return;
   st._loading[key] = true;
   api.get(epApi(path) + epQS(extra))
-    .then(d => { epSnapshotFilters(); if (d) st[key] = d; st._loading[key] = false; if (S.screen === 'exec_perf') render(); })
-    .catch(() => { st._loading[key] = false; });
+    .then(d => {
+      epSnapshotFilters();
+      if (d) { st[key] = d; st._error[key] = false; }
+      else    { st._error[key] = true; }
+      st._loading[key] = false;
+      if (S.screen === 'exec_perf') render();
+    })
+    .catch(() => { st._loading[key] = false; st._error[key] = true; if (S.screen === 'exec_perf') render(); });
 }
 
 function epClearCache() {
@@ -5563,10 +5569,15 @@ function epKpiGrid() {
 }
 
 // ── Ranking cards ─────────────────────────────────────────────────────────────
+window.epRetryRanking = () => { const st = epState(); st._error.ranking = false; render(); };
 function epRankingCards() {
   const st = epState();
   const f  = st.filters;
   epFetch('ranking', 'ranking', { metric: f.metric, top_n: f.top_n });
+  if (st._error.ranking) return `<div style="height:80px;display:flex;align-items:center;justify-content:center;gap:10px;color:var(--muted);font-size:13px">
+    <span>Rankings unavailable</span>
+    <button class="btn sm" onclick="epRetryRanking()">Retry</button>
+  </div>`;
   if (!st.ranking) return `<div style="height:100px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px">Loading rankings…</div>`;
 
   const { top = [], bottom = [], total = 0, metric } = st.ranking;
