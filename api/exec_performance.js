@@ -92,7 +92,10 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
     const ouCl   = unitCl('unit_code', unitList);  // agency_outstanding
 
     const [base, supply, collection, outstanding] = await Promise.all([
-      // Base: active executives only (JOIN exec_master.is_active_pli='Y')
+      // Base: EXEC executives only.
+      // LEFT JOIN exec_master so the dashboard works even before the Oracle sync populates it.
+      // When exec_master has data: only include is_active_pli='Y' + exec_designation='EXEC'.
+      // When exec_master is empty (pre-sync): include all executives (em.executive_code IS NULL).
       q(`SELECT am.executive_code,
                 MAX(am.executive_name) exec_name,
                 MAX(am.unit_state_nm)  state_name,
@@ -101,12 +104,14 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
                 GROUP_CONCAT(DISTINCT am.unit_name ORDER BY am.unit_name SEPARATOR ' / ') units,
                 COUNT(DISTINCT am.agcd) agency_count
          FROM agency_master am
-         JOIN exec_master em ON em.executive_code = am.executive_code AND em.is_active_pli = 'Y' AND em.exec_designation = 'EXEC'
+         LEFT JOIN exec_master em ON em.executive_code = am.executive_code
          WHERE am.executive_code IS NOT NULL AND am.executive_code != ''${amCl.cl}
+           AND (em.executive_code IS NULL OR (em.is_active_pli = 'Y' AND em.exec_designation = 'EXEC'))
          GROUP BY am.executive_code
          ORDER BY exec_name`, amCl.p),
 
       // Supply — join to DISTINCT (unit,agcd) to avoid DPCD fan-out from agency_master
+      // subCl params come FIRST because the subquery placeholder appears before the date placeholders
       q(`SELECT am.executive_code, SUM(sd.sup_copy) total_supply
          FROM supply_data sd
          JOIN (SELECT DISTINCT unit, agcd, executive_code
@@ -114,7 +119,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
                WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}
               ) am ON sd.unit_code = am.unit AND sd.agcd = am.agcd
          WHERE sd.supply_date BETWEEN ? AND ?
-         GROUP BY am.executive_code`, [from, to, ...subCl.p]),
+         GROUP BY am.executive_code`, [...subCl.p, from, to]),
 
       // Collection — same DISTINCT join to avoid DPCD fan-out
       q(`SELECT am2.executive_code,
@@ -125,7 +130,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
                WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}
               ) am2 ON am2.unit = ac.unit_code AND am2.agcd = ac.ag_code
          WHERE ac.is_valid = 1 AND ac.coll_date BETWEEN ? AND ?
-         GROUP BY am2.executive_code`, [from, to, ...subCl.p]),
+         GROUP BY am2.executive_code`, [...subCl.p, from, to]),
 
       // Outstanding — always CURRENT period snapshot
       q(`SELECT exec_code, SUM(cl_amt) total_outstanding
