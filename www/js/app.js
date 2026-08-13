@@ -5990,14 +5990,14 @@ function arInr(v) { return '₹' + Math.round(Number(v) || 0).toLocaleString('en
 function arR1(v) { return v == null ? '—' : (Math.round(Number(v) * 10) / 10).toFixed(1); }
 
 const AR_GRADE_COLOR = {
-  AAA: '#059669', AA: '#10B981', A: '#34D399',
-  BBB: '#0EA5E9', BB: '#F59E0B', B: '#F97316',
-  C: '#EF4444', 'High Risk': '#991B1B',
+  AAA: '#166534', AA: '#15803d', A: '#16a34a',
+  BBB: '#1e40af', BB: '#92400e', B: '#b45309',
+  C: '#9a1616', 'High Risk': '#7f1d1d',
 };
 const AR_GRADE_BG = {
-  AAA: '#ECFDF5', AA: '#D1FAE5', A: '#A7F3D0',
-  BBB: '#E0F2FE', BB: '#FEF3C7', B: '#FFEDD5',
-  C: '#FEE2E2', 'High Risk': '#FEE2E2',
+  AAA: '#f0fdf4', AA: '#f0fdf4', A: '#f0fdf4',
+  BBB: '#eff6ff', BB: '#fffbeb', B: '#fff7ed',
+  C: '#fef2f2', 'High Risk': '#FEE2E2',
 };
 
 function arGradeBadge(g) {
@@ -6171,14 +6171,16 @@ function arMainView() {
         const bg   = AR_GRADE_BG[c.grade]   || '#F3F4F6';
         const active = st.grade === c.grade;
         return `<button onclick="arFilterGrade('${c.grade}')"
-          style="min-width:110px;flex:0 0 auto;border:2px solid ${active ? col : col + '30'};
-                 background:${active ? col : bg};color:${active ? '#fff' : col};
-                 border-radius:12px;padding:12px 10px;cursor:pointer;text-align:center;
-                 transition:all .2s">
-          <div style="font-size:13px;font-weight:800;letter-spacing:.5px">${c.grade}</div>
-          <div style="font-size:22px;font-weight:900;line-height:1.1;margin:4px 0">${c.count.toLocaleString('en-IN')}</div>
-          <div style="font-size:10px;opacity:.85">agencies</div>
-          <div style="font-size:10px;margin-top:4px;opacity:.9">${arInrLakh(c.outstanding)}</div>
+          style="min-width:96px;flex:0 0 auto;
+                 border:1px solid ${active ? col : 'var(--border)'};
+                 border-left:4px solid ${col};
+                 background:${active ? col+'18' : 'var(--card-bg)'};
+                 border-radius:8px;padding:10px 12px;cursor:pointer;text-align:left;
+                 transition:all .15s">
+          <div style="font-size:11px;font-weight:700;color:${col};letter-spacing:.5px">${c.grade}</div>
+          <div style="font-size:20px;font-weight:800;color:var(--fg);margin:3px 0 1px">${c.count.toLocaleString('en-IN')}</div>
+          <div style="font-size:10px;color:var(--muted)">agencies</div>
+          <div style="font-size:11px;color:${col};margin-top:4px;font-weight:600">${arInrLakh(c.outstanding)}</div>
         </button>`;
       }).join('')}
     </div>`;
@@ -6190,7 +6192,7 @@ function arMainView() {
     <div class="card" style="margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div>
-          <div style="font-weight:700;font-size:15px">⚖️ Scoring Formula</div>
+          <div style="font-weight:700;font-size:15px">⚖️ Rating Weights</div>
           <div style="font-size:12px;color:var(--muted)">Adjust weights — recomputes on Apply.</div>
         </div>
         <button onclick="const st=arState();st.showFormula=!st.showFormula;render()"
@@ -6199,26 +6201,26 @@ function arMainView() {
       ${st.showFormula ? `
       <div style="margin-bottom:16px">
         <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-          <span>Business weight</span><b>${bw}%</b>
+          <span>Supply Performance</span><b>${bw}%</b>
         </div>
         <input type="range" min="5" max="95" value="${bw}" oninput="arBWChange(this.value)"
           style="width:100%;accent-color:var(--navy)">
         <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:8px;margin-bottom:4px">
-          <span>Payment weight</span><b>${100 - bw}%</b>
+          <span>Collection &amp; Credit</span><b>${100 - bw}%</b>
         </div>
         <div style="background:var(--navy);border-radius:4px;height:8px;overflow:hidden">
           <div style="background:var(--grn,#22c55e);height:100%;width:${100 - bw}%;margin-left:${bw}%"></div>
         </div>
       </div>
       <div style="margin-bottom:14px">
-        <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Grade Thresholds (min score)</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Grade Min Score</div>
+        <div style="display:flex;flex-direction:column;gap:5px">
           ${['AAA','AA','A','BBB','BB','B','C'].map(g => `
-            <div style="display:flex;align-items:center;gap:6px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
               ${arGradeBadge(g)}
               <input type="number" value="${thr[g] || 0}" min="0" max="100"
                 onchange="arThrChange('${g}',this.value)"
-                style="width:54px;padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--input-bg,var(--card-bg));color:var(--fg)">
+                style="width:58px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;text-align:right;background:var(--input-bg,var(--card-bg));color:var(--fg)">
             </div>`).join('')}
         </div>
       </div>
@@ -6259,18 +6261,26 @@ function arMainView() {
       const arrow  = active ? (st.dir === 'desc' ? ' ↓' : ' ↑') : '';
       return `<th onclick="arSort('${col}')" style="cursor:pointer;white-space:nowrap;user-select:none">${lbl}${arrow}</th>`;
     };
-    const rows = (list.rows || []).map(r => `
-      <tr onclick="arDrillAgency('${esc(r.unit_code)}','${esc(r.ag_code)}','${esc(r.ag_name || '')}')">
-        <td><b>${esc(r.ag_name || r.ag_code)}</b><small style="display:block;color:var(--muted)">${esc(r.city_name || r.unit_name || '')}</small></td>
-        <td style="font-size:11px;color:var(--muted)">${esc(r.unit_code)}</td>
+    const rows = (list.rows || []).map(r => {
+      const rec = r.breakdown && r.breakdown.recency != null ? r.breakdown.recency : 50;
+      const reg = r.breakdown && r.breakdown.regularity != null ? r.breakdown.regularity : 50;
+      const trend = rec >= 90 && reg >= 70 ? `<span style="color:#16a34a;font-size:11px">▲</span>`
+                  : rec <= 35 || reg < 30  ? `<span style="color:#dc2626;font-size:11px">▼</span>`
+                  : `<span style="color:var(--muted);font-size:11px">—</span>`;
+      const collPct = r.breakdown && r.breakdown.collection_pct != null;
+      const collCol = collPct ? (r.breakdown.collection_pct >= 80 ? '#16a34a' : r.breakdown.collection_pct < 50 ? '#dc2626' : '#b45309') : 'var(--muted)';
+      return `<tr onclick="arDrillAgency('${esc(r.unit_code)}','${esc(r.ag_code)}','${esc(r.ag_name || '')}')">
+        <td><b>${esc(r.ag_name || r.ag_code)}</b><small style="display:block;color:var(--muted)">${esc(r.city_name || '')}</small></td>
+        <td style="font-size:11px;color:var(--muted)">${esc(r.unit_name || r.unit_code)}</td>
         <td>${arGradeBadge(r.grade)}</td>
         <td class="r num" style="font-weight:700">${r.composite}</td>
-        <td class="r num" style="color:var(--blue,#3B82F6)">${r.businessScore}</td>
-        <td class="r num" style="color:var(--grn,#22c55e)">${r.paymentScore}</td>
-        <td class="r num" style="color:var(--muted)">${r.day_copies > 0 ? r.day_copies.toLocaleString('en-IN') : '—'}</td>
-        <td class="r num" style="color:${r.breakdown && r.breakdown.collection_pct != null ? (r.breakdown.collection_pct >= 80 ? 'var(--grn,#22c55e)' : r.breakdown.collection_pct < 50 ? 'var(--red)' : 'var(--gold,#f59e0b)') : 'var(--muted)'}">${r.breakdown && r.breakdown.collection_pct != null ? arR1(r.breakdown.collection_pct) + '%' : '—'}</td>
-        <td class="r num" style="color:var(--red)">${arInrLakh(r.cl_amt)}</td>
-      </tr>`).join('');
+        <td class="r num" style="color:var(--navy)">${r.businessScore}</td>
+        <td class="r num" style="color:var(--navy)">${r.paymentScore}</td>
+        <td class="r num">${r.day_copies > 0 ? r.day_copies.toLocaleString('en-IN') : '—'} ${trend}</td>
+        <td class="r num" style="color:${collCol}">${collPct ? arR1(r.breakdown.collection_pct) + '%' : '—'}</td>
+        <td class="r num" style="color:#dc2626">${arInrLakh(r.cl_amt)}</td>
+      </tr>`;
+    }).join('');
 
     const total = list.total || 0;
     const totalPages = list.total_pages || 1;
@@ -6289,9 +6299,9 @@ function arMainView() {
             <th>Unit</th>
             ${SH('composite','Grade')}
             ${SH('composite','Score')}
-            ${SH('business','Business')}
-            ${SH('payment','Payment')}
-            ${SH('supply','Supply/Day')}
+            ${SH('business','Supply Score')}
+            ${SH('payment','Coll Score')}
+            ${SH('supply','Copies/Day')}
             <th>Coll%</th>
             ${SH('outstanding','Outstanding')}
           </tr></thead>
