@@ -101,7 +101,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
                 GROUP_CONCAT(DISTINCT am.unit_name ORDER BY am.unit_name SEPARATOR ' / ') units,
                 COUNT(DISTINCT am.agcd) agency_count
          FROM agency_master am
-         JOIN exec_master em ON em.executive_code = am.executive_code AND em.is_active_pli = 'Y'
+         JOIN exec_master em ON em.executive_code = am.executive_code AND em.is_active_pli = 'Y' AND em.exec_designation = 'EXEC'
          WHERE am.executive_code IS NOT NULL AND am.executive_code != ''${amCl.cl}
          GROUP BY am.executive_code
          ORDER BY exec_name`, amCl.p),
