@@ -5961,7 +5961,7 @@ window.spExport = function() {
    AGENCY RATING ENGINE
    ════════════════════════════════════════════════════════ */
 
-const arApi = p => `${location.origin.replace(/:\d+$/, ':8001')}/api/agency-rating/${p}`;
+const arApi = p => `/api/agency-rating/${p}`;
 
 const arState = () => S.live.ar || (S.live.ar = {
   // filters
