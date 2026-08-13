@@ -182,47 +182,72 @@ module.exports = function registerAgencyRating({ app, q, getScopeUnitCodes }) {
     };
   }
 
-  // ── Rating cache (5-min TTL) ─────────────────────────────────────────────────
-  const _ratingCache = new Map();
-  const RATING_TTL   = 5 * 60 * 1000;
+  // ── Rating cache (5-min TTL) + pending-promise map (prevents stampede) ────────
+  const _ratingCache   = new Map();
+  const _ratingPending = new Map();
+  const RATING_TTL     = 5 * 60 * 1000;
 
   async function computeAllRatings(unitList) {
     const key = unitList === null ? '__all__' : [...unitList].sort().join(',');
     const hit = _ratingCache.get(key);
     if (hit && (Date.now() - hit.ts) < RATING_TTL) return hit.data;
 
+    // Prevent stampede: if a query for this key is already in flight, await it
+    if (_ratingPending.has(key)) return _ratingPending.get(key);
+
+    const promise = _doComputeAllRatings(key, unitList);
+    _ratingPending.set(key, promise);
+    try { return await promise; } finally { _ratingPending.delete(key); }
+  }
+
+  async function _doComputeAllRatings(key, unitList) {
     const cfg = await getConfig();
     const ucl  = unitList === null  ? ''
       : !unitList.length            ? ' AND 1=0'
-      : ` AND ao.unit_code IN (${unitList.map(() => '?').join(',')})`;
+      : ` AND unit_code IN (${unitList.map(() => '?').join(',')})`;
     const uclP = unitList === null || !unitList.length ? [] : unitList;
 
-    const { rows } = await q(`
-      SELECT
-        ao.unit_code, ao.ag_code, ao.ag_name, ao.unit_name, ao.group_unit_name,
-        ao.exec_code, ao.exec_name,
-        ao.bill_amt, ao.rec_amt, ao.cl_amt, ao.op_amt, ao.net_receipt,
-        ao.supply_days, ao.day_copies, ao.total_copies,
-        ao.security_bal, ao.req_security, ao.sec_diff,
-        ao.ag_status, ao.ag_type, ao.supply_start, ao.last_supply_date, ao.mobno,
-        am.unit_state_nm, am.ag_type_name, am.ag_class_name,
-        am.city_name, am.dist_name, am.supply_start_dt,
-        am.supply_stop_flag, am.mobile_no1
-      FROM agency_outstanding ao
-      LEFT JOIN (
-        SELECT agcd, unit,
-               MAX(unit_state_nm) unit_state_nm,
-               MAX(ag_type_name)  ag_type_name,
-               MAX(ag_class_name) ag_class_name,
-               MAX(city_name)     city_name,
-               MAX(dist_name)     dist_name,
-               MIN(supply_start_dt) supply_start_dt,
-               MAX(supply_stop_flag) supply_stop_flag,
-               MAX(mobile_no1)    mobile_no1
-        FROM agency_master GROUP BY agcd, unit
-      ) am ON am.agcd = ao.ag_code AND am.unit = ao.unit_code
-      WHERE ao.period_label = 'CURRENT' AND ao.ag_status = 'Active'${ucl}
+    // Query 1: outstanding (fast — uses composite index idx_ao_period_status_unit)
+    const { rows: aoRows } = await q(`
+      SELECT unit_code, ag_code, ag_name, unit_name, group_unit_name,
+             exec_code, exec_name,
+             bill_amt, rec_amt, cl_amt, op_amt, net_receipt,
+             supply_days, day_copies, total_copies,
+             security_bal, req_security, sec_diff,
+             ag_status, ag_type, supply_start, last_supply_date, mobno
+      FROM agency_outstanding
+      WHERE period_label = 'CURRENT' AND ag_status = 'Active'${ucl}
     `, uclP);
+
+    if (!aoRows.length) {
+      _ratingCache.set(key, { data: [], ts: Date.now() });
+      return [];
+    }
+
+    // Query 2: agency_master for matching units only — small IN list, fast index hit
+    const unitCodes = [...new Set(aoRows.map(r => r.unit_code))];
+    const ucIn  = unitCodes.length ? unitCodes.map(() => '?').join(',') : "'__none__'";
+    const ucP   = unitCodes.length ? unitCodes : [];
+
+    const { rows: amRows } = await q(`
+      SELECT unit, agcd,
+             unit_state_nm, ag_type_name, ag_class_name,
+             city_name, dist_name, supply_start_dt, supply_stop_flag, mobile_no1
+      FROM agency_master
+      WHERE unit IN (${ucIn})
+    `, ucP);
+
+    // Build lookup map: "unit|agcd" → master row (first encountered per pair)
+    const amMap = new Map();
+    for (const r of amRows) {
+      const k = `${r.unit}|${r.agcd}`;
+      if (!amMap.has(k)) amMap.set(k, r);
+    }
+
+    const rows = aoRows.map(r => {
+      const am = amMap.get(`${r.unit_code}|${r.ag_code}`) || {};
+      return { ...r, ...am };
+    });
 
     // Build unit-level day_copies medians for volume normalization
     const unitGroups = {};
