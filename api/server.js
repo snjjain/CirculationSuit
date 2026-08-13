@@ -4137,6 +4137,9 @@ require('./dcr_app')({ app, q, getScopeUnitCodes });
 // ── Executive Performance Dashboard ───────────────────────────────────────────
 require('./exec_performance')({ app, q, getScopeUnitCodes });
 
+// ── Agency Rating Engine ───────────────────────────────────────────────────────
+require('./agency_rating')({ app, q, getScopeUnitCodes });
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 if (require.main === module) {
   app.listen(API_PORT, '0.0.0.0', () => {

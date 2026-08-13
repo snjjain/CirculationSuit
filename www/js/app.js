@@ -8,8 +8,9 @@ const DASH_MENU = [
   ["supply_dash", "Supply Dashboard",      "📦"],
   ["collections", "Collections",         "₹"],
   ["outstanding",   "Agency Outstanding",  "💰"],
-  ["exec_perf",     "Executive Performance", "👤"],
-  ["short_payment", "Short Payment",      "📋"],
+  ["exec_perf",      "Executive Performance", "👤"],
+  ["agency_rating",  "Agency Rating Engine", "⭐"],
+  ["short_payment",  "Short Payment",        "📋"],
   ["transport",     "Taxi Dashboard",     "🚕"],
   ["survey_dash", "Survey Intelligence", "📊"],
 ];
@@ -5956,6 +5957,565 @@ window.spExport = function() {
   window.location.href = spApi('report') + '?' + p.toString();
 };
 
+/* ════════════════════════════════════════════════════════
+   AGENCY RATING ENGINE
+   ════════════════════════════════════════════════════════ */
+
+const arApi = p => `${location.origin.replace(/:\d+$/, ':8001')}/api/agency-rating/${p}`;
+
+const arState = () => S.live.ar || (S.live.ar = {
+  // filters
+  state: '', unit_code: '', grade: '', search: '', exec: '',
+  sort: 'composite', dir: 'desc', page: 1,
+  // data
+  summary: null, list: null, filters: null, config: null,
+  // detail drill-down
+  drillAgency: null,   // { unit_code, ag_code, ag_name }
+  detail: null,
+  // scoring panel
+  showFormula: true,
+  draftBW: null,       // draft business weight (0-100 integer)
+  draftThresholds: null,
+  // loading flags
+  _loading: {}, _error: {},
+});
+
+function arInrLakh(v) {
+  const n = Math.abs(Number(v));
+  if (n >= 1e7) return (n < 0 ? '-' : '') + '₹' + (n / 1e7).toFixed(2) + ' Cr';
+  if (n >= 1e5) return (n < 0 ? '-' : '') + '₹' + (n / 1e5).toFixed(2) + ' L';
+  return (v < 0 ? '-' : '') + '₹' + Math.abs(Math.round(Number(v))).toLocaleString('en-IN');
+}
+function arInr(v) { return '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN'); }
+function arR1(v) { return v == null ? '—' : (Math.round(Number(v) * 10) / 10).toFixed(1); }
+
+const AR_GRADE_COLOR = {
+  AAA: '#059669', AA: '#10B981', A: '#34D399',
+  BBB: '#0EA5E9', BB: '#F59E0B', B: '#F97316',
+  C: '#EF4444', 'High Risk': '#991B1B',
+};
+const AR_GRADE_BG = {
+  AAA: '#ECFDF5', AA: '#D1FAE5', A: '#A7F3D0',
+  BBB: '#E0F2FE', BB: '#FEF3C7', B: '#FFEDD5',
+  C: '#FEE2E2', 'High Risk': '#FEE2E2',
+};
+
+function arGradeBadge(g) {
+  const c = AR_GRADE_COLOR[g] || '#6B7280';
+  const bg = AR_GRADE_BG[g] || '#F3F4F6';
+  return `<span style="display:inline-block;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:800;letter-spacing:.5px;background:${bg};color:${c};border:1px solid ${c}40">${g}</span>`;
+}
+
+function arBar(value, color, max) {
+  const pct = Math.min(100, Math.max(0, (value / (max || 100)) * 100));
+  return `<div style="background:var(--card-bg,#f3f4f6);border-radius:6px;height:8px;overflow:hidden;margin-top:4px">
+    <div style="background:${color};height:100%;width:${pct}%;border-radius:6px;transition:width .3s"></div></div>`;
+}
+
+function arFetch(key, path, extra) {
+  const st = arState();
+  if (st._loading[key] || st._error[key]) return;
+  if (key === 'list' || key === 'summary') { /* always allow fresh load */ }
+  else if (st[key]) return;
+  st._loading[key] = true; st[key] = null;
+  const qs = extra ? '?' + new URLSearchParams(extra).toString() : '';
+  api.get(arApi(path) + qs)
+    .then(d => {
+      st._loading[key] = false;
+      if (d) { st[key] = d; st._error[key] = false; }
+      else   { st._error[key] = true; }
+      if (S.screen === 'agency_rating') render();
+    })
+    .catch(() => { st._loading[key] = false; st._error[key] = true; if (S.screen === 'agency_rating') render(); });
+}
+
+function arLoadMain() {
+  const st = arState();
+  const flt = { state: st.state, unit_code: st.unit_code };
+  // clear before reload
+  st.summary = null; st.list = null;
+  delete st._loading.summary; delete st._error.summary;
+  delete st._loading.list; delete st._error.list;
+  arFetch('summary', 'summary', flt);
+  arFetch('list',    'list',    { ...flt, grade: st.grade, search: st.search,
+    exec: st.exec, sort: st.sort, dir: st.dir, page: st.page, per_page: 50 });
+}
+
+function arLoadFilters() {
+  arFetch('filters', 'filters');
+}
+
+function arLoadConfig() {
+  const st = arState();
+  if (st.config) return;
+  api.get(arApi('config')).then(d => {
+    if (!d) return;
+    st.config = d;
+    st.draftBW = Math.round((d.businessWeight || 0.4) * 100);
+    st.draftThresholds = Object.assign({}, d.thresholds);
+    if (S.screen === 'agency_rating') render();
+  });
+}
+
+function arLoadDetail(unitCode, agCode) {
+  const st = arState();
+  st.detail = null; st._loading.detail = true; st._error.detail = false;
+  api.get(arApi(`agency/${unitCode}/${agCode}`))
+    .then(d => {
+      st._loading.detail = false;
+      if (d) { st.detail = d; st._error.detail = false; }
+      else   { st._error.detail = true; }
+      if (S.screen === 'agency_rating') render();
+    })
+    .catch(() => { st._loading.detail = false; st._error.detail = true; if (S.screen === 'agency_rating') render(); });
+}
+
+window.arDrillAgency = function(unitCode, agCode, agName) {
+  const st = arState();
+  st.drillAgency = { unit_code: unitCode, ag_code: agCode, ag_name: agName };
+  st.detail = null;
+  arLoadDetail(unitCode, agCode);
+  render();
+};
+window.arBackToList = function() {
+  const st = arState();
+  st.drillAgency = null; st.detail = null;
+  render();
+};
+window.arFilterGrade = function(g) {
+  const st = arState();
+  st.grade = st.grade === g ? '' : g;
+  st.page = 1;
+  arLoadMain();
+  render();
+};
+window.arSearch = function(v) {
+  const st = arState(); st.search = v; st.page = 1;
+  clearTimeout(arSearch._t);
+  arSearch._t = setTimeout(() => { arLoadMain(); render(); }, 400);
+};
+window.arFilterState = function(v) {
+  const st = arState(); st.state = v; st.unit_code = ''; st.page = 1;
+  arLoadMain(); render();
+};
+window.arFilterUnit = function(v) {
+  const st = arState(); st.unit_code = v; st.page = 1;
+  arLoadMain(); render();
+};
+window.arSort = function(col) {
+  const st = arState();
+  if (st.sort === col) st.dir = st.dir === 'desc' ? 'asc' : 'desc';
+  else { st.sort = col; st.dir = 'desc'; }
+  st.page = 1; arLoadMain(); render();
+};
+window.arPage = function(p) {
+  const st = arState(); st.page = p;
+  arLoadMain(); render();
+};
+window.arApplyConfig = async function() {
+  const st = arState();
+  if (!st.config) return;
+  const bw = Math.max(5, Math.min(95, st.draftBW || 40));
+  const cfg = Object.assign({}, st.config, {
+    businessWeight: bw / 100,
+    paymentWeight:  1 - bw / 100,
+    thresholds: Object.assign({}, st.draftThresholds),
+  });
+  try {
+    const r = await fetch(arApi('config'), { method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, api.h()),
+      body: JSON.stringify(cfg) });
+    const d = await r.json();
+    if (d.ok) { st.config = d.config; st.draftBW = bw; st.draftThresholds = Object.assign({}, d.config.thresholds); toast('Rating config saved'); arLoadMain(); render(); }
+    else toast('Save failed: ' + (d.detail || 'error'));
+  } catch (e) { toast('Save failed'); }
+};
+window.arResetConfig = function() {
+  const st = arState();
+  st.draftBW = 40;
+  st.draftThresholds = { AAA: 90, AA: 80, A: 70, BBB: 60, BB: 50, B: 40, C: 28 };
+  render();
+};
+window.arBWChange = function(v) {
+  const st = arState(); st.draftBW = parseInt(v, 10); render();
+};
+window.arThrChange = function(grade, v) {
+  const st = arState();
+  if (!st.draftThresholds) st.draftThresholds = {};
+  st.draftThresholds[grade] = parseInt(v, 10);
+};
+
+// ── MAIN VIEW ────────────────────────────────────────────────────────────────
+function arMainView() {
+  const st = arState();
+
+  // Bootstrap on first load
+  if (!st.filters && !st._loading.filters) arLoadFilters();
+  if (!st.config) arLoadConfig();
+  if (!st.summary && !st._loading.summary) arLoadMain();
+
+  const flt  = st.filters;
+  const sum  = st.summary;
+  const list = st.list;
+  const isAdmin = S.user && S.user.hierarchyLevel === 1;
+  const bw = st.draftBW != null ? st.draftBW : 40;
+
+  // ── Grade summary cards ──
+  let gradeCards = '';
+  if (st._loading.summary) {
+    gradeCards = `<div style="color:var(--muted);padding:12px 0">Loading grade summary…</div>`;
+  } else if (sum) {
+    gradeCards = `<div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin">
+      ${sum.cards.map(c => {
+        const col  = AR_GRADE_COLOR[c.grade] || '#6B7280';
+        const bg   = AR_GRADE_BG[c.grade]   || '#F3F4F6';
+        const active = st.grade === c.grade;
+        return `<button onclick="arFilterGrade('${c.grade}')"
+          style="min-width:110px;flex:0 0 auto;border:2px solid ${active ? col : col + '30'};
+                 background:${active ? col : bg};color:${active ? '#fff' : col};
+                 border-radius:12px;padding:12px 10px;cursor:pointer;text-align:center;
+                 transition:all .2s">
+          <div style="font-size:13px;font-weight:800;letter-spacing:.5px">${c.grade}</div>
+          <div style="font-size:22px;font-weight:900;line-height:1.1;margin:4px 0">${c.count.toLocaleString('en-IN')}</div>
+          <div style="font-size:10px;opacity:.85">agencies</div>
+          <div style="font-size:10px;margin-top:4px;opacity:.9">${arInrLakh(c.outstanding)}</div>
+        </button>`;
+      }).join('')}
+    </div>`;
+  }
+
+  // ── Scoring formula panel ──
+  const thr = st.draftThresholds || { AAA: 90, AA: 80, A: 70, BBB: 60, BB: 50, B: 40, C: 28 };
+  const formulaPanel = `
+    <div class="card" style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div>
+          <div style="font-weight:700;font-size:15px">⚖️ Scoring Formula</div>
+          <div style="font-size:12px;color:var(--muted)">Adjust weights — recomputes on Apply.</div>
+        </div>
+        <button onclick="const st=arState();st.showFormula=!st.showFormula;render()"
+          style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">${st.showFormula ? '▲' : '▼'}</button>
+      </div>
+      ${st.showFormula ? `
+      <div style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+          <span>Business weight</span><b>${bw}%</b>
+        </div>
+        <input type="range" min="5" max="95" value="${bw}" oninput="arBWChange(this.value)"
+          style="width:100%;accent-color:var(--navy)">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:8px;margin-bottom:4px">
+          <span>Payment weight</span><b>${100 - bw}%</b>
+        </div>
+        <div style="background:var(--navy);border-radius:4px;height:8px;overflow:hidden">
+          <div style="background:var(--grn,#22c55e);height:100%;width:${100 - bw}%;margin-left:${bw}%"></div>
+        </div>
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Grade Thresholds (min score)</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          ${['AAA','AA','A','BBB','BB','B','C'].map(g => `
+            <div style="display:flex;align-items:center;gap:6px">
+              ${arGradeBadge(g)}
+              <input type="number" value="${thr[g] || 0}" min="0" max="100"
+                onchange="arThrChange('${g}',this.value)"
+                style="width:54px;padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--input-bg,var(--card-bg));color:var(--fg)">
+            </div>`).join('')}
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        ${isAdmin ? `<button class="btn" style="flex:1;background:var(--navy);color:#fff;padding:9px" onclick="arApplyConfig()">✦ Apply</button>` : ''}
+        <button class="btn" style="flex:1;padding:9px" onclick="arResetConfig()">↺ Reset</button>
+      </div>
+      ` : ''}
+    </div>`;
+
+  // ── Agency ratings table ──
+  const filterRow = `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+    <input type="search" placeholder="Search agency..." value="${esc(st.search)}"
+      oninput="arSearch(this.value)"
+      style="flex:1;min-width:160px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--input-bg,var(--card-bg));color:var(--fg);font-size:13px">
+    ${flt ? `
+    <select onchange="arFilterState(this.value)"
+      style="padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--input-bg,var(--card-bg));color:var(--fg);font-size:13px">
+      <option value="">All States</option>
+      ${flt.states.map(s => `<option value="${esc(s)}" ${st.state === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}
+    </select>
+    <select onchange="arFilterUnit(this.value)"
+      style="padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--input-bg,var(--card-bg));color:var(--fg);font-size:13px">
+      <option value="">All Units</option>
+      ${(flt.units || []).filter(u => !st.state || u.state_nm === st.state).map(u => `<option value="${esc(u.unit_code)}" ${st.unit_code === u.unit_code ? 'selected' : ''}>${esc(u.unit_name)}</option>`).join('')}
+    </select>` : ''}
+    ${st.grade ? `<button onclick="arFilterGrade('')" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg);cursor:pointer;font-size:12px;color:var(--fg)">✕ ${st.grade}</button>` : ''}
+  </div>`;
+
+  let tableHtml = '';
+  if (st._loading.list) {
+    tableHtml = `<div style="text-align:center;padding:32px;color:var(--muted)">Loading agencies…</div>`;
+  } else if (st._error.list) {
+    tableHtml = `<div style="text-align:center;padding:24px;color:var(--red)">Failed to load. <button onclick="arLoadMain();render()">Retry</button></div>`;
+  } else if (list) {
+    const SH = (col, lbl) => {
+      const active = st.sort === col;
+      const arrow  = active ? (st.dir === 'desc' ? ' ↓' : ' ↑') : '';
+      return `<th onclick="arSort('${col}')" style="cursor:pointer;white-space:nowrap;user-select:none">${lbl}${arrow}</th>`;
+    };
+    const rows = (list.rows || []).map(r => `
+      <tr onclick="arDrillAgency('${esc(r.unit_code)}','${esc(r.ag_code)}','${esc(r.ag_name || '')}')">
+        <td><b>${esc(r.ag_name || r.ag_code)}</b><small style="display:block;color:var(--muted)">${esc(r.city_name || r.unit_name || '')}</small></td>
+        <td style="font-size:11px;color:var(--muted)">${esc(r.unit_code)}</td>
+        <td>${arGradeBadge(r.grade)}</td>
+        <td class="r num" style="font-weight:700">${r.composite}</td>
+        <td class="r num" style="color:var(--blue,#3B82F6)">${r.businessScore}</td>
+        <td class="r num" style="color:var(--grn,#22c55e)">${r.paymentScore}</td>
+        <td class="r num" style="color:var(--muted)">${r.day_copies > 0 ? r.day_copies.toLocaleString('en-IN') : '—'}</td>
+        <td class="r num" style="color:${r.breakdown && r.breakdown.collection_pct != null ? (r.breakdown.collection_pct >= 80 ? 'var(--grn,#22c55e)' : r.breakdown.collection_pct < 50 ? 'var(--red)' : 'var(--gold,#f59e0b)') : 'var(--muted)'}">${r.breakdown && r.breakdown.collection_pct != null ? arR1(r.breakdown.collection_pct) + '%' : '—'}</td>
+        <td class="r num" style="color:var(--red)">${arInrLakh(r.cl_amt)}</td>
+      </tr>`).join('');
+
+    const total = list.total || 0;
+    const totalPages = list.total_pages || 1;
+    const pages = [];
+    for (let i = Math.max(1, st.page - 2); i <= Math.min(totalPages, st.page + 2); i++) pages.push(i);
+
+    tableHtml = `
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        Portfolio health — ${total.toLocaleString('en-IN')} active agencies
+        ${sum ? ` · weighted outstanding ${arInrLakh(sum.cards.reduce((s,c)=>s+c.outstanding,0))}` : ''}
+      </div>
+      <div style="overflow-x:auto">
+        <table class="tbl" style="width:100%;font-size:13px">
+          <thead><tr>
+            ${SH('name','Agency')}
+            <th>Unit</th>
+            ${SH('composite','Grade')}
+            ${SH('composite','Score')}
+            ${SH('business','Business')}
+            ${SH('payment','Payment')}
+            ${SH('supply','Supply/Day')}
+            <th>Coll%</th>
+            ${SH('outstanding','Outstanding')}
+          </tr></thead>
+          <tbody>${rows || '<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--muted)">No agencies found</td></tr>'}</tbody>
+        </table>
+      </div>
+      ${totalPages > 1 ? `<div style="display:flex;gap:6px;justify-content:center;margin-top:12px;flex-wrap:wrap">
+        ${st.page > 1 ? `<button class="btn" style="padding:5px 12px" onclick="arPage(${st.page - 1})">‹</button>` : ''}
+        ${pages.map(p => `<button class="btn ${p === st.page ? 'navy' : ''}" style="padding:5px 12px" onclick="arPage(${p})">${p}</button>`).join('')}
+        ${st.page < totalPages ? `<button class="btn" style="padding:5px 12px" onclick="arPage(${st.page + 1})">›</button>` : ''}
+      </div>` : ''}`;
+  }
+
+  return pagehead('Agency Rating Engine', 'Transparent, configurable scoring — business performance × payment behaviour.') + `
+    ${gradeCards ? `<div style="margin-bottom:16px">${gradeCards}</div>` : ''}
+    <div style="display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start">
+      <div>${formulaPanel}</div>
+      <div class="card">
+        <div style="font-weight:700;font-size:15px;margin-bottom:12px">Agency Ratings</div>
+        ${filterRow}
+        ${tableHtml}
+      </div>
+    </div>
+    <style>
+      @media(max-width:700px){
+        .ar-grid{grid-template-columns:1fr!important}
+      }
+      .tbl tbody tr:hover{background:var(--hover-bg,rgba(0,0,0,.04));cursor:pointer}
+    </style>`;
+}
+
+// ── AGENCY DETAIL VIEW ───────────────────────────────────────────────────────
+function arDetailView() {
+  const st = arState();
+  const drill = st.drillAgency || {};
+  const d     = st.detail;
+
+  const back = `<button onclick="arBackToList()" style="background:none;border:none;color:var(--navy);cursor:pointer;font-size:13px;padding:0 0 12px;display:flex;align-items:center;gap:5px">← Agency Ratings</button>`;
+
+  if (st._loading.detail) return back + `<div class="card" style="text-align:center;padding:40px;color:var(--muted)">Loading agency detail…</div>`;
+  if (st._error.detail)   return back + `<div class="card" style="text-align:center;padding:32px;color:var(--red)">Failed to load detail. <button onclick="arLoadDetail('${drill.unit_code}','${drill.ag_code}')">Retry</button></div>`;
+  if (!d) return back + `<div class="card" style="text-align:center;padding:32px;color:var(--muted)">No data</div>`;
+
+  const ag  = d.agency  || {};
+  const cur = d.current || {};
+  const rat = d.rating  || {};
+  const bk  = rat.breakdown || {};
+  const sigs = d.signals || [];
+
+  const statusColor = ag.status === 'Active' ? 'var(--grn,#22c55e)' : 'var(--red)';
+  const cpct = cur.collection_pct;
+
+  // ── Header card ──
+  const header = `<div class="card" style="margin-bottom:16px">
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between">
+      <div style="flex:1;min-width:200px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div style="font-size:20px;font-weight:900">${esc(ag.ag_name || drill.ag_name || ag.ag_code)}</div>
+          ${arGradeBadge(rat.grade || '—')}
+          <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${statusColor}20;color:${statusColor};font-weight:600">${esc(ag.status || 'Active')}</span>
+          ${cpct != null ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${cpct >= 80 ? '#D1FAE5' : cpct < 50 ? '#FEE2E2' : '#FEF3C7'};color:${cpct >= 80 ? '#059669' : cpct < 50 ? '#DC2626' : '#D97706'};font-weight:600">${cpct >= 80 ? '● Low' : cpct < 50 ? '● High' : '● Medium'} · ${arR1(cpct)}%</span>` : ''}
+        </div>
+        <div style="margin-top:6px;font-size:12px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap">
+          <span>📋 ${esc(ag.ag_code)}</span>
+          <span>📍 ${esc([ag.city_name, ag.dist_name].filter(Boolean).join(', ') || ag.unit_name || '')}</span>
+          ${ag.mobile_no1 ? `<span>📞 ${esc(ag.mobile_no1)}</span>` : ''}
+          ${ag.email_id   ? `<span>✉️ ${esc(ag.email_id)}</span>` : ''}
+        </div>
+        <div style="margin-top:6px;font-size:12px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap">
+          ${ag.executive_name ? `<span>👤 ${esc(ag.executive_name)}</span>` : ''}
+          ${ag.ag_type_name   ? `<span>🏷️ ${esc(ag.ag_type_name)}</span>` : ''}
+          ${ag.unit_state_nm  ? `<span>🗺️ ${esc(ag.unit_state_nm)}</span>` : ''}
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Total Outstanding</div>
+        <div style="font-size:26px;font-weight:900;color:var(--red)">${arInrLakh(cur.cl_amt)}</div>
+      </div>
+    </div>
+  </div>`;
+
+  // ── Info row: 6 stats ──
+  const infoRow = (items) => `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:16px">
+    ${items.map(([icon, label, val]) => `<div class="card" style="padding:12px;text-align:center">
+      <div style="font-size:18px">${icon}</div>
+      <div style="font-size:11px;color:var(--muted);margin:2px 0">${label}</div>
+      <div style="font-size:14px;font-weight:700">${val}</div>
+    </div>`).join('')}
+  </div>`;
+
+  const tenureYrs = ag.supply_start_dt
+    ? ((Date.now() - new Date(ag.supply_start_dt).getTime()) / (365.25 * 86400000)).toFixed(1)
+    : null;
+
+  const stats = infoRow([
+    ['📦', 'Days Supplied', cur.supply_days > 0 ? cur.supply_days + ' d' : '—'],
+    ['📋', 'Daily Avg', cur.day_copies > 0 ? cur.day_copies.toLocaleString('en-IN') : '—'],
+    ['👤', 'Executive', esc((ag.executive_name || '—').split(' ').slice(0,2).join(' '))],
+    ['📅', 'Active Since', ag.supply_start_dt ? new Date(ag.supply_start_dt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'2-digit'}) : '—'],
+    ['⏳', 'Tenure', tenureYrs ? tenureYrs + ' yrs' : '—'],
+    ['🗺️', 'State', esc(ag.unit_state_nm || '—')],
+  ]);
+
+  // ── Two-column: outstanding statement | rating breakdown + signals ──
+  const monthLabel = p => {
+    const [y, m] = (p || '').split('-');
+    return ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(m)] + " '" + (y || '').slice(2);
+  };
+
+  const histRows = (d.history || []).map(h => `
+    <tr>
+      <td style="font-weight:600">${monthLabel(h.period_label)}</td>
+      <td class="r num">${arInrLakh(h.bill_amt)}</td>
+      <td class="r num" style="color:var(--grn,#22c55e)">${arInrLakh(h.rec_amt)}</td>
+      <td class="r num" style="color:${N(h.cl_amt) > 0 ? 'var(--red)' : 'var(--grn,#22c55e)'}">${arInrLakh(h.cl_amt)}</td>
+      <td class="r num" style="color:var(--muted)">${h.supply_days || '—'}</td>
+    </tr>`).join('');
+
+  const ouStatement = `<div class="card" style="margin-bottom:16px">
+    <div style="font-weight:700;font-size:14px;margin-bottom:10px">Outstanding Statement</div>
+    <div style="overflow-x:auto">
+      <table class="tbl" style="width:100%;font-size:13px">
+        <thead><tr><th>Period</th><th class="r">Billing</th><th class="r">Collection</th><th class="r">Outstanding</th><th class="r">Sup.Days</th></tr></thead>
+        <tbody>
+          ${histRows || `<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--muted)">No history available</td></tr>`}
+          <tr style="font-weight:800;background:var(--navy,#1C2B45);color:#fff">
+            <td>YTD 2026</td>
+            <td class="r num">${arInrLakh(cur.bill_amt)}</td>
+            <td class="r num">${arInrLakh(cur.rec_amt)}</td>
+            <td class="r num">${arInrLakh(cur.cl_amt)}</td>
+            <td class="r num">${cur.supply_days || '—'}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+
+  // Rating breakdown with progress bars
+  const scoreRow = (label, val, color) => `
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px">
+        <span>${label}</span><b style="color:${color}">${val != null ? val : '—'}</b>
+      </div>
+      ${val != null ? arBar(val, color, 100) : ''}
+    </div>`;
+
+  const ratingBreakdown = `<div class="card" style="margin-bottom:16px">
+    <div style="font-weight:700;font-size:14px;margin-bottom:14px">Rating Breakdown</div>
+    ${scoreRow('Composite Score',  rat.composite,     AR_GRADE_COLOR[rat.grade] || '#6B7280')}
+    ${scoreRow('Business Score',   rat.businessScore, '#3B82F6')}
+    ${scoreRow('Payment Score',    rat.paymentScore,  '#10B981')}
+    <div style="border-top:1px solid var(--border);padding-top:10px;margin-top:4px">
+    ${scoreRow('Supply Regularity',  bk.regularity,  '#60A5FA')}
+    ${scoreRow('Agency Volume',       bk.volume,      '#818CF8')}
+    ${scoreRow('Collection Ratio',   bk.collection,  '#34D399')}
+    ${scoreRow('Outstanding Level',  bk.outstanding, '#6EE7B7')}
+    </div>
+    ${bk.collection_pct != null ? `
+    <div style="margin-top:12px;padding:10px;background:${bk.collection_pct >= 80 ? '#ECFDF5' : bk.collection_pct < 50 ? '#FEF2F2' : '#FFFBEB'};border-radius:8px">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Default Probability</div>
+      <div style="font-size:22px;font-weight:900;color:${bk.collection_pct >= 80 ? '#059669' : bk.collection_pct < 50 ? '#DC2626' : '#D97706'};margin:2px 0">${bk.collection_pct >= 80 ? (100 - bk.collection_pct).toFixed(1) : bk.outstanding_pct != null ? Math.min(99, bk.outstanding_pct).toFixed(1) : '—'}%</div>
+      <div style="font-size:11px;color:var(--muted)">${bk.collection_pct >= 80 ? 'Low risk' : bk.collection_pct < 50 ? 'High risk' : 'Moderate risk'}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">Risk indicator based on current payment behaviour and outstanding pattern.</div>
+    </div>` : ''}
+  </div>`;
+
+  // Signals
+  const sigIcon = t => t === 'green' ? '🟢' : t === 'red' ? '🔴' : '🟡';
+  const signalsCard = sigs.length ? `<div class="card" style="margin-bottom:16px">
+    <div style="font-weight:700;font-size:14px;margin-bottom:10px">Signals</div>
+    ${sigs.map(s => `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <span>${sigIcon(s.type)}</span><span>${esc(s.text)}</span></div>`).join('')}
+  </div>` : '';
+
+  // Supply history
+  const supHistRows = (d.sup_history || []).map(h => `
+    <tr><td style="font-weight:600">${monthLabel(h.month)}</td>
+        <td class="r num">${h.total_supply > 0 ? h.total_supply.toLocaleString('en-IN') : '—'}</td>
+        <td class="r num" style="color:var(--muted)">${h.supply_days || '—'}</td></tr>`).join('');
+  const collHistRows = (d.coll_history || []).map(h => `
+    <tr><td style="font-weight:600">${monthLabel(h.month)}</td>
+        <td class="r num" style="color:var(--grn,#22c55e)">${h.collection > 0 ? arInrLakh(h.collection) : '—'}</td>
+        <td class="r num" style="color:var(--muted)">${h.txn_count || '—'}</td></tr>`).join('');
+
+  const historySection = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+    <div class="card">
+      <div style="font-weight:700;font-size:13px;margin-bottom:10px">📦 Supply History</div>
+      <div style="overflow-x:auto"><table class="tbl" style="width:100%;font-size:12px">
+        <thead><tr><th>Month</th><th class="r">Copies</th><th class="r">Days</th></tr></thead>
+        <tbody>${supHistRows || '<tr><td colspan="3" style="text-align:center;padding:12px;color:var(--muted)">No data</td></tr>'}</tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <div style="font-weight:700;font-size:13px;margin-bottom:10px">₹ Collection History</div>
+      <div style="overflow-x:auto"><table class="tbl" style="width:100%;font-size:12px">
+        <thead><tr><th>Month</th><th class="r">Collected</th><th class="r">Txns</th></tr></thead>
+        <tbody>${collHistRows || '<tr><td colspan="3" style="text-align:center;padding:12px;color:var(--muted)">No data</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+
+  return `<div style="max-width:1200px">
+    ${back}
+    ${header}
+    ${stats}
+    <div style="display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start">
+      <div>${ouStatement}</div>
+      <div>${ratingBreakdown}${signalsCard}</div>
+    </div>
+    ${historySection}
+    <style>@media(max-width:700px){.ar-detail-grid{grid-template-columns:1fr!important}}</style>
+  </div>`;
+}
+
+VIEWS.agency_rating = () => {
+  const st = arState();
+  if (st.drillAgency) return arDetailView();
+  return arMainView();
+};
+
+/* ════════════════════════════════════════════════════════
+   SHORT PAYMENT / BILL-WISE COLLECTION REPORT
+   ════════════════════════════════════════════════════════ */
+
 VIEWS.short_payment = function() {
   const sp = spState();
 
@@ -8418,7 +8978,7 @@ function navGroups() {
   if (u.dashboard) {
     const fieldIds = ["routes", "collections", "complaints", "partners"];
     // mgmtIds are always shown to hl≤4 regardless of saved navScreens (handles screens added after a user's navScreens was last saved)
-    const mgmtIds  = ["command", "ai_insights", "supply_dash", "exec_perf"];
+    const mgmtIds  = ["command", "ai_insights", "supply_dash", "exec_perf", "agency_rating"];
     const items = DASH_MENU
       .filter(([id]) => (hl <= 4 && mgmtIds.includes(id)) || (u.navScreens ? u.navScreens.includes(id) : (hl <= 4 || fieldIds.includes(id))))
       .filter(([id]) => permAllows(id, 'view') !== false)   // explicit rights-matrix deny hides the screen
