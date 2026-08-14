@@ -27,6 +27,12 @@ const API_PORT     = parseInt(process.env.API_PORT || '8000', 10);
 
 const pool = mysql.createPool(DB_CONFIG);
 
+// RDS runs its session in UTC; local MySQL runs in IST. TIMESTAMP columns
+// (created_at, synced_at, auth_audit.ts …) are stored as UTC and rendered per
+// session zone, so without this every audit/sync time would read 5:30 early.
+// Pin every pooled connection to IST so behaviour matches the local DB.
+pool.on('connection', conn => { conn.query("SET time_zone = '+05:30'"); });
+
 // pool.execute() returns [rows, fields] — this wrapper gives a pg-like { rows } interface
 async function q(sql, params) {
   const [rows] = await pool.execute(sql, params || []);
