@@ -796,11 +796,12 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const to   = isDate(req.query.to)   ? req.query.to   : new Date().toISOString().slice(0,10);
       const { clause: sc, params: sp } = await resolveScope(req);
 
-      // All active field execs in scope
+      // All active field execs in scope (exclude placeholder rows with no real emp code)
       const { rows: allExecs } = await q(
         `SELECT person_code, person_name AS name, unit_code, employee_code
          FROM hierarchy_master
-         WHERE is_active = 1 AND hierarchy_level IN (3,4,5,7)${sc}
+         WHERE is_active = 1 AND hierarchy_level IN (3,4,5,7)
+           AND employee_code IS NOT NULL AND employee_code <> '' AND employee_code <> '0'${sc}
          ORDER BY unit_code, person_name`, sp
       );
 
