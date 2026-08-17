@@ -3,16 +3,17 @@
 
 /* ---------- navigation model (menus & submenus from both references) ---------- */
 const DASH_MENU = [
-  ["command",     "Command Centre",        "📊"],
-  ["ai_insights", "AI Insights & Actions", "🤖"],
-  ["supply_dash", "Supply Dashboard",      "📦"],
-  ["collections", "Collections",         "₹"],
-  ["outstanding",   "Agency Outstanding",  "💰"],
-  ["exec_perf",      "Executive Performance", "👤"],
-  ["agency_rating",  "Agency Rating Engine", "⭐"],
-  ["short_payment",  "Short Payment",        "📋"],
-  ["transport",     "Taxi Dashboard",     "🚕"],
-  ["survey_dash", "Survey Intelligence", "📊"],
+  ["command",       "Command Centre",          "📊"],
+  ["ai_insights",   "AI Insights & Actions",   "🤖"],
+  ["supply_dash",   "Supply Dashboard",        "📦"],
+  ["collections",   "Collections",             "₹"],
+  ["outstanding",   "Agency Outstanding",      "💰"],
+  ["exec_perf",     "Executive Performance",   "👤"],
+  ["agency_rating", "Agency Rating Engine",    "⭐"],
+  ["short_payment", "Short Payment",           "📋"],
+  ["transport",     "Taxi Dashboard",          "🚕"],
+  ["survey_dash",   "Survey Intelligence",     "📊"],
+  ["dcr_analytics", "Field Visit Intelligence","📍"],
 ];
 
 const APP_MENU = {
@@ -921,6 +922,541 @@ VIEWS.dcr_report = () => {
 
 /* Remaining field apps still open their standalone prototype in an iframe (redesigned one-by-one). */
 Object.keys(APP_META).forEach(k => { if (!VIEWS["app_" + k]) VIEWS["app_" + k] = () => appFrameView(k); });
+
+/* ═══════════ DCR / Field Visit Intelligence ═══════════ */
+/* ── State ── */
+let _dcrA = { tab: 'summary', summary: null, monthly: null, execs: null, mapData: null,
+               from: monthStartISO(), to: todayISO(), unit_code: '', state: '',
+               _loadS: false, _loadM: false, _loadE: false, _loadMap: false,
+               // Tour Route state
+               tourExecs: null, _loadTE: false,
+               tourEmpCode: '', tourDate: todayISO(),
+               tourData: null, _loadTour: false };
+let _dcrMap = null;     // Leaflet map — agency map tab
+let _dcrTourMap = null; // Leaflet map — tour route tab
+
+/* ── Data loaders ── */
+function _dcrAUrl(path) {
+  let qs = `from=${_dcrA.from}&to=${_dcrA.to}`;
+  if (_dcrA.unit_code) qs += `&unit_code=${encodeURIComponent(_dcrA.unit_code)}`;
+  if (_dcrA.state)     qs += `&state=${encodeURIComponent(_dcrA.state)}`;
+  return `${location.origin}/api/dcr-analytics/${path}?${qs}`;
+}
+function _dcrALoadSummary(force) {
+  if (_dcrA._loadS || (_dcrA.summary && !force)) return;
+  _dcrA._loadS = true; _dcrA.summary = null;
+  fetch(_dcrAUrl('summary'), { headers: api.h() })
+    .then(r=>r.json()).then(d=>{ _dcrA.summary=d; _dcrA._loadS=false; if(S.screen==='dcr_analytics') render(); })
+    .catch(()=>{ _dcrA.summary={_err:true}; _dcrA._loadS=false; if(S.screen==='dcr_analytics') render(); });
+}
+function _dcrALoadMonthly(force) {
+  if (_dcrA._loadM || (_dcrA.monthly && !force)) return;
+  _dcrA._loadM = true; _dcrA.monthly = null;
+  const qs = `months=6${_dcrA.unit_code?'&unit_code='+encodeURIComponent(_dcrA.unit_code):''}${_dcrA.state?'&state='+encodeURIComponent(_dcrA.state):''}`;
+  fetch(`${location.origin}/api/dcr-analytics/monthly?${qs}`, { headers: api.h() })
+    .then(r=>r.json()).then(d=>{ _dcrA.monthly=d; _dcrA._loadM=false; if(S.screen==='dcr_analytics') render(); })
+    .catch(()=>{ _dcrA.monthly={_err:true}; _dcrA._loadM=false; if(S.screen==='dcr_analytics') render(); });
+}
+function _dcrALoadExecs(force) {
+  if (_dcrA._loadE || (_dcrA.execs && !force)) return;
+  _dcrA._loadE = true; _dcrA.execs = null;
+  fetch(_dcrAUrl('executives'), { headers: api.h() })
+    .then(r=>r.json()).then(d=>{ _dcrA.execs=d; _dcrA._loadE=false; if(S.screen==='dcr_analytics') render(); })
+    .catch(()=>{ _dcrA.execs={_err:true}; _dcrA._loadE=false; if(S.screen==='dcr_analytics') render(); });
+}
+function _dcrALoadMap(force) {
+  if (_dcrA._loadMap || (_dcrA.mapData && !force)) return;
+  _dcrA._loadMap = true; _dcrA.mapData = null;
+  const qs = `${_dcrA.unit_code?'unit_code='+encodeURIComponent(_dcrA.unit_code):''}${_dcrA.state?'&state='+encodeURIComponent(_dcrA.state):''}`;
+  fetch(`${location.origin}/api/dcr-analytics/agency-map?${qs}`, { headers: api.h() })
+    .then(r=>r.json()).then(d=>{ _dcrA.mapData=d; _dcrA._loadMap=false; if(S.screen==='dcr_analytics'&&_dcrA.tab==='map') { render(); } })
+    .catch(()=>{ _dcrA.mapData={_err:true}; _dcrA._loadMap=false; if(S.screen==='dcr_analytics') render(); });
+}
+
+/* ── Tour Route loaders ── */
+function _dcrALoadTourExecs(force) {
+  if (_dcrA._loadTE || (_dcrA.tourExecs && !force)) return;
+  _dcrA._loadTE = true;
+  const qs = `${_dcrA.unit_code?'unit_code='+encodeURIComponent(_dcrA.unit_code):''}${_dcrA.state?'&state='+encodeURIComponent(_dcrA.state):''}`;
+  fetch(`${location.origin}/api/dcr-analytics/executive-list?${qs}`, { headers: api.h() })
+    .then(r=>r.json()).then(d=>{ _dcrA.tourExecs=d; _dcrA._loadTE=false; if(S.screen==='dcr_analytics'&&_dcrA.tab==='tour') render(); })
+    .catch(()=>{ _dcrA.tourExecs={_err:true}; _dcrA._loadTE=false; if(S.screen==='dcr_analytics') render(); });
+}
+function _dcrALoadTour() {
+  if (_dcrA._loadTour || !_dcrA.tourEmpCode || !_dcrA.tourDate) return;
+  _dcrA._loadTour = true; _dcrA.tourData = null;
+  if (_dcrTourMap) { _dcrTourMap.remove(); _dcrTourMap = null; }
+  const qs = `emp_code=${encodeURIComponent(_dcrA.tourEmpCode)}&date=${_dcrA.tourDate}${_dcrA.unit_code?'&unit_code='+encodeURIComponent(_dcrA.unit_code):''}`;
+  fetch(`${location.origin}/api/dcr-analytics/tour-route?${qs}`, { headers: api.h() })
+    .then(r=>r.json()).then(d=>{ _dcrA.tourData=d; _dcrA._loadTour=false; if(S.screen==='dcr_analytics'&&_dcrA.tab==='tour') { render(); setTimeout(_initTourMap, 80); } })
+    .catch(()=>{ _dcrA.tourData={_err:true}; _dcrA._loadTour=false; if(S.screen==='dcr_analytics') render(); });
+}
+
+/* ── Tour Route map init ── */
+function _initTourMap() {
+  if (!window.L) return;
+  const d = _dcrA.tourData;
+  if (!d || d._err) return;
+  if (_dcrTourMap) { _dcrTourMap.remove(); _dcrTourMap = null; }
+  const el = document.getElementById('dcrTourMapEl');
+  if (!el) return;
+
+  const gpsVisits = (d.visits || []).filter(v => v.lat && v.lng);
+  const center = d.center;
+  const missed  = d.missed_agencies || [];
+
+  if (!gpsVisits.length && !center) { el.innerHTML = '<div style="padding:20px;color:var(--ink-2);font-size:13px;text-align:center">No GPS data for this date</div>'; return; }
+
+  const allPts = [];
+  if (center?.lat) allPts.push([center.lat, center.lng]);
+  gpsVisits.forEach(v => allPts.push([v.lat, v.lng]));
+
+  const ctr = allPts.length ? allPts.reduce((a,p)=>[a[0]+p[0]/allPts.length,a[1]+p[1]/allPts.length],[0,0]) : [23, 80];
+  _dcrTourMap = L.map(el, { zoomControl: true }).setView(ctr, 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(_dcrTourMap);
+
+  // Draw route polyline
+  if (allPts.length >= 2) {
+    L.polyline(allPts, { color: '#2563eb', weight: 3, opacity: 0.75, dashArray: '6 3' }).addTo(_dcrTourMap);
+    _dcrTourMap.fitBounds(L.latLngBounds(allPts).pad(0.15));
+  }
+
+  // Center marker
+  if (center?.lat) {
+    L.marker([center.lat, center.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#ef4444;color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 2px 6px rgba(0,0,0,.4)">🏢</div>', iconAnchor:[14,14] }) })
+      .addTo(_dcrTourMap)
+      .bindPopup(`<b>${esc(center.name||'Center')}</b><br><span style="font-size:11px;color:#666">Start / End Point</span>`);
+  }
+
+  // Visit markers (numbered)
+  gpsVisits.forEach((v, i) => {
+    const num = v.seq || (i+1);
+    const durMin = (()=>{const s=v.from_time?parseInt(v.from_time)*60+parseInt((v.from_time||'').split(':')[1]||0):null; const e=v.till_time?parseInt(v.till_time)*60+parseInt((v.till_time||'').split(':')[1]||0):null; return (s&&e&&e>s)?(e-s):null;})();
+    const popup = `<b>${esc(v.ag_name||v.agcd||'Agency')}</b> <span style="color:#6b7280;font-size:11px">(${esc(v.agcd||'')})</span>
+      <br><span style="font-size:11px">${v.from_time||''}${v.till_time?' – '+v.till_time:''} ${durMin?'('+durMin+'m)':''}</span>
+      ${v.purpose?`<br><span style="font-size:11px;color:#2563eb">${esc(v.purpose)}</span>`:''}
+      ${v.remarks?`<br><span style="font-size:11px;color:#374151;font-style:italic">"${esc((v.remarks||'').slice(0,100))}"</span>`:''}
+      ${v.distance_from_prev!=null?`<br><span style="font-size:11px;color:#6b7280">📏 ${v.distance_from_prev} km from prev</span>`:''}`;
+    L.marker([v.lat, v.lng], { icon: L.divIcon({ className: '', html: `<div style="background:#2563eb;color:#fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.4)">${num}</div>`, iconAnchor:[13,13] }) })
+      .addTo(_dcrTourMap).bindPopup(popup);
+  });
+
+  // Missed agency markers (orange)
+  missed.forEach(ag => {
+    L.marker([ag.lat, ag.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#f59e0b;color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:10px;box-shadow:0 2px 4px rgba(0,0,0,.3)">!</div>', iconAnchor:[10,10] }) })
+      .addTo(_dcrTourMap)
+      .bindPopup(`<b style="color:#f59e0b">⚠ Missed Nearby</b><br>${esc(ag.ag_name)}<br><span style="font-size:11px;color:#6b7280">${esc(ag.city||'')} · ${ag.nearest_dist_km} km away</span>`);
+  });
+}
+
+/* ── Tour Route tab renderer ── */
+function _dcrATourTab() {
+  _dcrALoadTourExecs();
+  const execs = _dcrA.tourExecs?.executives || [];
+  const d = _dcrA.tourData;
+  const stats = d?.stats || {};
+
+  const execOpts = execs.map(e => `<option value="${esc(e.emp_code)}" ${_dcrA.tourEmpCode===e.emp_code?'selected':''}>${esc(e.name||e.emp_code)} [${esc(e.unit_code)}]</option>`).join('');
+
+  const filterRow = `
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <select id="tourExecSel" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink);max-width:260px">
+        <option value="">— Select Executive —</option>${execOpts}
+      </select>
+      <input type="date" id="tourDateIn" value="${_dcrA.tourDate}" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
+      <button class="btn sm pri" onclick="window._dcrATourLoad()">Load Route</button>
+      ${_dcrA._loadTour ? '<span style="font-size:12px;color:var(--ink-2)">Loading…</span>' : ''}
+    </div>`;
+
+  if (!d && !_dcrA._loadTour) return filterRow + `<div style="color:var(--ink-2);font-size:13px;padding:30px 0;text-align:center">Select an executive and date, then click Load Route</div>`;
+  if (_dcrA._loadTour) return filterRow + `<div style="color:var(--ink-2);font-size:13px;padding:30px 0;text-align:center">⏳ Analysing tour route…</div>`;
+  if (d?._err) return filterRow + `<div style="color:var(--red);font-size:13px;padding:20px 0">Failed to load tour route data</div>`;
+
+  // Stats strip
+  const statsStrip = `
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      ${_dcrKpi(stats.total_visits||0,'Visits','var(--ink)')}
+      ${_dcrKpi(stats.gps_visits||0,'GPS Tagged','var(--blue)')}
+      ${_dcrKpi((stats.total_distance_km||0)+'km','Distance','var(--grn)')}
+      ${_dcrKpi(stats.field_hours!=null?stats.field_hours+'h':'—','Field Hours','var(--purple)')}
+      ${_dcrKpi(stats.geographic_spread_km!=null?stats.geographic_spread_km+'km':'—','Coverage','var(--gold)')}
+      ${_dcrKpi(stats.missed_nearby_count||0,'Missed Nearby','var(--orange)')}
+    </div>
+    ${stats.first_visit_time?`<div style="font-size:11px;color:var(--ink-2);margin-bottom:10px">⏰ ${stats.first_visit_time} → ${stats.last_visit_time||'?'}&nbsp;&nbsp;·&nbsp;&nbsp;📏 Total route: ${stats.total_distance_km} km&nbsp;&nbsp;·&nbsp;&nbsp;⏱ In meetings: ${stats.total_time_in_meetings_min||0} min</div>`:''}`;
+
+  // Map
+  const mapDiv = `<div id="dcrTourMapEl" style="height:360px;border-radius:10px;overflow:hidden;background:var(--surface-2);margin-bottom:14px"></div>`;
+
+  // Visit timeline table
+  const visits = d.visits || [];
+  const missedAg = d.missed_agencies || [];
+  const visitTable = visits.length ? `
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin-bottom:6px">Visit Timeline</div>
+    <div style="overflow-x:auto">
+    <table class="tbl" style="font-size:12px;min-width:560px">
+      <thead><tr>
+        <th style="width:32px">#</th><th style="text-align:left">Agency</th><th>Time</th>
+        <th>Duration</th><th>Purpose</th><th class="r">Dist prev</th><th style="font-size:10px">GPS</th>
+      </tr></thead>
+      <tbody>
+      ${visits.map(v=>{
+        const sm=v.from_time?parseInt(v.from_time)*60+parseInt((v.from_time||'').split(':')[1]||0):null;
+        const em=v.till_time?parseInt(v.till_time)*60+parseInt((v.till_time||'').split(':')[1]||0):null;
+        const dur=(sm&&em&&em>sm)?((em-sm)+'m'):'—';
+        return `<tr>
+          <td style="color:var(--ink-2);text-align:center">${v.seq}</td>
+          <td><b>${esc(v.ag_name||v.agcd||'—')}</b>${v.city?`<span style="font-size:10px;color:var(--ink-2)"> ${esc(v.city)}</span>`:''}</td>
+          <td style="white-space:nowrap;color:var(--ink-2)">${v.from_time||'—'}${v.till_time?' – '+v.till_time:''}</td>
+          <td style="color:var(--ink-2)">${dur}</td>
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(v.purpose||''||v.remarks||'')}">${esc((v.purpose||'').slice(0,40)||'—')}</td>
+          <td class="r" style="color:var(--ink-2)">${v.distance_from_prev!=null?v.distance_from_prev+' km':'—'}</td>
+          <td style="text-align:center">${v.lat?'📍':'—'}</td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table></div>` : `<div style="color:var(--ink-2);font-size:13px">No visits recorded for this date</div>`;
+
+  // Missed agencies
+  const missedSection = missedAg.length ? `
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--orange);margin-bottom:8px">⚠ ${missedAg.length} Nearby Unvisited Agencies (within 5 km of route)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+      ${missedAg.map(ag=>`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:11.5px">
+        <b>${esc(ag.ag_name||ag.agcd)}</b>&nbsp;<span style="color:var(--ink-2)">${esc(ag.city||'')}</span>
+        <span style="color:var(--orange);margin-left:6px">${ag.nearest_dist_km} km</span>
+      </div>`).join('')}
+      </div>
+    </div>` : '';
+
+  return filterRow + statsStrip + mapDiv + visitTable + missedSection;
+}
+
+window._dcrATourLoad = () => {
+  const ec = document.getElementById('tourExecSel')?.value;
+  const dt = document.getElementById('tourDateIn')?.value;
+  if (!ec) { alert('Please select an executive'); return; }
+  if (!dt) { alert('Please select a date'); return; }
+  _dcrA.tourEmpCode = ec;
+  _dcrA.tourDate    = dt;
+  _dcrA.tourData    = null;
+  _dcrA._loadTour   = false;
+  if (_dcrTourMap) { _dcrTourMap.remove(); _dcrTourMap = null; }
+  _dcrALoadTour();
+  render();
+};
+
+/* ── KPI cell helper ── */
+function _dcrKpi(val, lbl, color, sub) {
+  return `<div style="background:var(--surface-2);border-radius:10px;padding:12px 14px;min-width:100px">
+    <div style="font-size:20px;font-weight:700;color:${color||'var(--ink)'};line-height:1.2">${val}</div>
+    <div style="font-size:10.5px;color:var(--ink-2);margin-top:3px;text-transform:uppercase;letter-spacing:.04em;font-weight:600">${lbl}</div>
+    ${sub?`<div style="font-size:11px;color:var(--ink-2);margin-top:2px">${sub}</div>`:''}
+  </div>`;
+}
+
+/* ── Summary tab ── */
+function _dcrASummaryTab() {
+  _dcrALoadSummary(); _dcrALoadMonthly();
+  const s = _dcrA.summary;
+  const m = _dcrA.monthly;
+
+  // KPIs
+  let kpiHtml = '';
+  if (!s) {
+    kpiHtml = `<div style="color:var(--ink-2);font-size:13px;padding:20px 0">Loading…</div>`;
+  } else if (s._err) {
+    kpiHtml = `<div style="color:var(--red);font-size:13px">Failed to load summary data</div>`;
+  } else {
+    const v = s.visits||{}, ex = s.executives||{}, ag = s.agencies||{};
+    kpiHtml = `
+      <div style="margin-bottom:18px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Visits</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px">
+          ${_dcrKpi(fmtN(v.total||0), 'Total Visits', 'var(--primary)')}
+          ${_dcrKpi(fmtN((v.agency_oracle||0)+(v.app_agent||0)), 'Agency Visits', 'var(--gold)')}
+          ${_dcrKpi(fmtN(v.center_attendance||0), 'Center Attendance', 'var(--blue)')}
+          ${_dcrKpi(fmtN((v.app_hawker||0)), 'Hawker Visits', 'var(--teal)')}
+        </div>
+      </div>
+      <div style="margin-bottom:18px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Executives</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px">
+          ${_dcrKpi(fmtN(ex.total||0), 'Total Execs', 'var(--ink)')}
+          ${_dcrKpi(fmtN(ex.with_dcr||0), 'With DCR', 'var(--grn)')}
+          ${_dcrKpi(fmtN(ex.without_dcr||0), 'Without DCR', 'var(--red)')}
+          ${_dcrKpi(fmtN(ex.active_in_period||0), 'Active in Period', 'var(--ink)')}
+        </div>
+      </div>
+      <div style="margin-bottom:18px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Agency Coverage</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px">
+          ${_dcrKpi(fmtN(ag.total||0), 'Total Agencies', 'var(--ink)')}
+          ${_dcrKpi(fmtN(ag.visited||0), 'Visited', 'var(--grn)')}
+          ${_dcrKpi(fmtN(ag.not_visited||0), 'Not Visited', 'var(--red)', `of ${fmtN(ag.active||0)} active`)}
+          ${ag.total ? _dcrKpi(Math.round((ag.visited||0)/(ag.active||1)*100)+'%', 'Coverage', ag.visited/(ag.active||1)>.6?'var(--grn)':'var(--gold)') : ''}
+        </div>
+      </div>
+      ${s.outcomes?.length ? `
+      <div style="margin-bottom:18px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Top Visit Purposes</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${s.outcomes.slice(0,8).map(o=>`<span style="background:var(--surface-2);border-radius:20px;padding:5px 12px;font-size:12px"><b>${fmtN(o.count)}</b> &nbsp; ${esc(o.purpose||'Not specified')}</span>`).join('')}
+        </div>
+      </div>` : ''}
+    `;
+  }
+
+  // Monthly trend table
+  let monthlyHtml = '';
+  if (!m) {
+    monthlyHtml = `<div style="color:var(--ink-2);font-size:13px;padding:12px 0">Loading monthly data…</div>`;
+  } else if (m._err) {
+    monthlyHtml = `<div style="color:var(--red);font-size:12px">Monthly data unavailable</div>`;
+  } else {
+    const rows = (m.months || []).slice().reverse();
+    monthlyHtml = `
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Monthly Trend (Last 6 Months)</div>
+      <div style="overflow-x:auto">
+      <table class="tbl" style="font-size:12px;min-width:560px">
+        <thead><tr>
+          <th>Month</th><th class="r">Agency Visits</th><th class="r">Attendance</th>
+          <th class="r">Hawker Visits</th><th class="r">Total</th><th class="r">Uniq. Agencies</th><th class="r">Execs</th>
+        </tr></thead>
+        <tbody>
+        ${rows.map(r=>`<tr>
+          <td style="font-weight:600">${r.month}</td>
+          <td class="r">${fmtN(r.agency_visits)}</td>
+          <td class="r">${fmtN(r.center_attendance)}</td>
+          <td class="r">${fmtN(r.app_hawker)}</td>
+          <td class="r" style="font-weight:600">${fmtN(r.total)}</td>
+          <td class="r">${fmtN(r.uniq_agencies)}</td>
+          <td class="r">${fmtN(r.exec_count)}</td>
+        </tr>`).join('')||`<tr><td colspan="7" style="text-align:center;color:var(--ink-2)">No data</td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  return kpiHtml + monthlyHtml;
+}
+
+/* ── Map tab ── */
+function _dcrAMapTab() {
+  _dcrALoadMap();
+  const d = _dcrA.mapData;
+  const status = !d ? 'Loading GPS agency data…'
+    : d._err ? 'Failed to load map data'
+    : `${d.count || 0} agencies mapped (GPS captured during DCR visits)`;
+  const mapHtml = `
+    <div style="font-size:12px;color:var(--ink-2);margin-bottom:10px">${status}</div>
+    <div id="dcr-agency-map" style="height:520px;border-radius:12px;border:1px solid var(--border);background:var(--surface-2);overflow:hidden"></div>
+  `;
+  if (d && !d._err && d.agencies?.length) {
+    setTimeout(_initDcrAgencyMap, 100);
+  }
+  return mapHtml;
+}
+
+function _initDcrAgencyMap() {
+  const el = document.getElementById('dcr-agency-map');
+  if (!el || !window.L) return;
+
+  // Destroy existing map
+  if (_dcrMap) { _dcrMap.remove(); _dcrMap = null; }
+
+  _dcrMap = L.map(el, { preferCanvas: true }).setView([26.0, 75.5], 6);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a>', maxZoom: 18
+  }).addTo(_dcrMap);
+
+  const agencies = (_dcrA.mapData?.agencies || []);
+  const markerGroup = window.L.markerClusterGroup ? L.markerClusterGroup({ maxClusterRadius: 40 }) : L.layerGroup();
+
+  agencies.forEach(a => {
+    if (!a.lat || !a.lng) return;
+    const isInactive = a.status === 'Inactive';
+    const color = isInactive ? '#9ca3af' : '#2563eb';
+    const icon = L.divIcon({
+      className: '',
+      html: `<div style="background:${color};border-radius:50%;width:10px;height:10px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>`,
+      iconSize: [10,10], iconAnchor: [5,5], popupAnchor: [0,-8]
+    });
+    const supply = a.supply != null ? `<b>${fmtN(a.supply)}</b> copies` : '—';
+    const lastVisit = a.last_visit_date ? `${a.last_visit_date} by ${esc(a.last_exec_name||'—')}` : 'No visit recorded';
+    const marker = L.marker([a.lat, a.lng], { icon });
+    marker.bindTooltip(`<b>${esc(a.ag_name)}</b><br>${esc(a.city||a.district||'')}`, { permanent:false, direction:'top', opacity:0.95 });
+    marker.bindPopup(`
+      <div style="min-width:220px;font-size:12px;line-height:1.6">
+        <div style="font-size:13px;font-weight:700;margin-bottom:6px;color:#1e293b">${esc(a.ag_name)}</div>
+        <div><b>Code:</b> ${esc(a.agcd)}</div>
+        <div><b>Unit:</b> ${esc(a.unit_code)} ${esc(a.unit_name||'')}</div>
+        <div><b>District:</b> ${esc(a.district||'—')} &nbsp; <b>City:</b> ${esc(a.city||'—')}</div>
+        <div><b>Class:</b> ${esc(a.ag_class||'—')}</div>
+        <div><b>Supply:</b> ${supply}</div>
+        <div><b>Status:</b> <span style="color:${isInactive?'#ef4444':'#16a34a'};font-weight:600">${esc(a.status)}</span></div>
+        <div><b>Assigned to:</b> ${esc(a.field_officer||a.assigned_exec||'—')}</div>
+        <div style="margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0"><b>Last DCR Visit:</b><br>${esc(lastVisit)}</div>
+        ${a.last_purpose?`<div><b>Purpose:</b> ${esc(a.last_purpose)}</div>`:''}
+        ${a.last_remarks?`<div><b>Remarks:</b> ${esc(a.last_remarks||'').slice(0,120)}</div>`:''}
+        <div style="margin-top:8px"><a href="#" onclick="event.preventDefault();_dcrADrillAgency('${esc(a.agcd)}','${esc(a.ag_name)}')" style="color:#2563eb;font-size:11px;font-weight:600">View visit history →</a></div>
+      </div>`, { maxWidth: 280 }
+    );
+    markerGroup.addLayer(marker);
+  });
+
+  _dcrMap.addLayer(markerGroup);
+  if (agencies.length) {
+    const bounds = agencies.filter(a=>a.lat&&a.lng).map(a=>[a.lat,a.lng]);
+    if (bounds.length) _dcrMap.fitBounds(bounds, { padding: [30,30], maxZoom: 10 });
+  }
+
+  // Legend
+  const legend = L.control({ position: 'bottomright' });
+  legend.onAdd = () => {
+    const d = L.DomUtil.create('div');
+    d.style.cssText = 'background:white;padding:8px 12px;border-radius:8px;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,.15)';
+    d.innerHTML = `<div style="font-weight:700;margin-bottom:4px">Agency Status</div>
+      <div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#2563eb;margin-right:6px;vertical-align:middle"></span>Active</div>
+      <div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#9ca3af;margin-right:6px;vertical-align:middle"></span>Inactive</div>
+      <div style="margin-top:4px;color:#64748b">${agencies.filter(a=>a.lat&&a.lng).length} with GPS</div>`;
+    return d;
+  };
+  legend.addTo(_dcrMap);
+}
+
+/* ── Executive Performance tab ── */
+function _dcrAExecsTab() {
+  _dcrALoadExecs();
+  const d = _dcrA.execs;
+  if (!d) return `<div style="color:var(--ink-2);font-size:13px;padding:20px 0">Loading executive data…</div>`;
+  if (d._err) return `<div style="color:var(--red);font-size:13px">Failed to load executive data</div>`;
+  const execs = d.executives || [];
+  if (!execs.length) return `<div style="color:var(--ink-2);font-size:13px">No executive DCR data for this period</div>`;
+  return `
+    <div style="font-size:11px;color:var(--ink-2);margin-bottom:10px">${execs.length} executives · ${d.period?.from} to ${d.period?.to}</div>
+    <div style="overflow-x:auto">
+    <table class="tbl" style="font-size:12px;min-width:640px">
+      <thead><tr>
+        <th style="text-align:left">Executive</th><th>Unit</th><th class="r">Agency Visits</th>
+        <th class="r">Uniq. Agencies</th><th class="r">Working Days</th><th class="r">Avg/Day</th>
+        <th class="r">Attendance</th><th>Last Visit</th>
+      </tr></thead>
+      <tbody>
+      ${execs.map((e,i)=>`<tr style="${i<3?'font-weight:600':''}">
+        <td>${esc(e.name||e.emp_code||'—')}</td>
+        <td style="color:var(--ink-2)">${esc(e.unit_code||'—')}</td>
+        <td class="r">${fmtN(e.agency_visits)}</td>
+        <td class="r">${fmtN(e.uniq_agencies)}</td>
+        <td class="r">${fmtN(e.working_days)}</td>
+        <td class="r" style="color:${e.avg_per_day>=3?'var(--grn)':e.avg_per_day>=1?'var(--gold)':'var(--red)'}"><b>${e.avg_per_day.toFixed(1)}</b></td>
+        <td class="r">${fmtN(e.attendance)}</td>
+        <td style="color:var(--ink-2);font-size:11px">${e.last_visit||'—'}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table></div>`;
+}
+
+/* ── Agency drill-down modal ── */
+window._dcrADrillAgency = async (agcd, name) => {
+  modal(`<div style="color:var(--ink-2);font-size:13px;padding:24px 0;text-align:center">Loading visit history for ${esc(name)}…</div>`);
+  try {
+    const d = await api.get(`/api/dcr-analytics/agency-visits/${encodeURIComponent(agcd)}`);
+    if (!d) { document.querySelector('.modal')&&(document.querySelector('.modal').innerHTML+=`<p style="color:var(--red)">Failed to load</p>`); return; }
+    const ag = d.agency || {};
+    const allVisits = [
+      ...(d.oracle_visits||[]).map(v=>({...v, source:'Oracle ERP', exec: v.executive_name, date: v.visit_date, purpose: v.visit_purpose, remarks: v.visit_remarks, status: v.call_status})),
+      ...(d.app_visits||[]).map(v=>({...v, source:'DCR App', exec: v.staff_name, date: v.visit_date, purpose: v.purpose, remarks: v.remarks, status: v.outcome})),
+    ].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    const statusLabel = ag.supply_stop_flag === 'Y' || (ag.suspend_date && new Date(ag.suspend_date) <= new Date()) ? 'Inactive' : 'Active';
+    modal(`<h3 style="margin-bottom:4px">${esc(ag.ag_name || name)}</h3>
+      <div style="font-size:12px;color:var(--ink-2);margin-bottom:14px">
+        Code: <b>${esc(agcd)}</b> &nbsp;·&nbsp; Unit: <b>${esc(ag.unit||'—')}</b> &nbsp;·&nbsp; District: <b>${esc(ag.dist_name||'—')}</b>
+        &nbsp;·&nbsp; Status: <b style="color:${statusLabel==='Active'?'var(--grn)':'var(--red)'}">${statusLabel}</b>
+        &nbsp;·&nbsp; Class: <b>${esc(ag.ag_class_name||'—')}</b>
+        ${ag.outstanding!=null?`&nbsp;·&nbsp; Outstanding: <b style="color:var(--red)">${fmtC(Number(ag.outstanding))}</b>`:''}
+      </div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:6px">Visit History (${allVisits.length} visits)</div>
+      <div style="max-height:380px;overflow-y:auto">
+      <table class="tbl" style="font-size:12px">
+        <thead><tr><th>Date</th><th>Executive</th><th>Purpose</th><th>Remarks</th><th>Status</th><th style="font-size:10px">Source</th></tr></thead>
+        <tbody>
+        ${allVisits.map(v=>`<tr>
+          <td style="white-space:nowrap">${esc(v.date||'—')}</td>
+          <td>${esc(v.exec||'—')}</td>
+          <td>${esc(v.purpose||'—')}</td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(v.remarks||'')}">${esc((v.remarks||'').slice(0,60))||'—'}</td>
+          <td>${esc(v.status||'—')}</td>
+          <td style="color:var(--ink-2);font-size:10px">${esc(v.source)}</td>
+        </tr>`).join('')||`<tr><td colspan="6" style="text-align:center;color:var(--ink-2)">No visits recorded</td></tr>`}
+        </tbody>
+      </table></div>
+      <div style="margin-top:14px">
+        <button class="btn" onclick="closeModals()">Close</button>
+      </div>`);
+  } catch(e) { console.error(e); }
+};
+
+/* ── Apply filter ── */
+window.dcrAApplyFilter = () => {
+  _dcrA.from = document.getElementById('dcrA-from')?.value || _dcrA.from;
+  _dcrA.to   = document.getElementById('dcrA-to')?.value   || _dcrA.to;
+  _dcrA.unit_code = document.getElementById('dcrA-unit')?.value || '';
+  _dcrA.state     = document.getElementById('dcrA-state')?.value || '';
+  _dcrA.summary = _dcrA.monthly = _dcrA.execs = _dcrA.mapData = null;
+  _dcrA._loadS = _dcrA._loadM = _dcrA._loadE = _dcrA._loadMap = false;
+  _dcrA.tourExecs = null; _dcrA._loadTE = false;
+  if (_dcrMap) { _dcrMap.remove(); _dcrMap = null; }
+  if (_dcrTourMap) { _dcrTourMap.remove(); _dcrTourMap = null; }
+  render();
+};
+
+window.dcrASetTab = t => { _dcrA.tab = t; render(); };
+
+/* ── Main view ── */
+VIEWS.dcr_analytics = () => {
+  const tab = _dcrA.tab;
+  const hdr = pagehead('Field Visit Intelligence', 'DCR analytics — agency visits, center attendance, GPS mapping & executive performance');
+
+  const filterBar = `
+    <div class="card" style="padding:10px 14px;margin-bottom:12px">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px">
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px">
+          <label style="color:var(--ink-2);white-space:nowrap">From</label>
+          <input type="date" id="dcrA-from" value="${_dcrA.from}" style="font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
+          <label style="color:var(--ink-2)">To</label>
+          <input type="date" id="dcrA-to"   value="${_dcrA.to}"   style="font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px">
+          <label style="color:var(--ink-2);white-space:nowrap">Unit</label>
+          <input type="text" id="dcrA-unit" value="${_dcrA.unit_code}" placeholder="e.g. JA0" style="width:70px;font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
+          <label style="color:var(--ink-2)">State</label>
+          <select id="dcrA-state" style="font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
+            <option value="">All States</option>
+            <option value="Rajasthan" ${_dcrA.state==='Rajasthan'?'selected':''}>Rajasthan</option>
+            <option value="Madhya Pradesh" ${_dcrA.state==='Madhya Pradesh'?'selected':''}>Madhya Pradesh</option>
+            <option value="Chhattisgarh" ${_dcrA.state==='Chhattisgarh'?'selected':''}>Chhattisgarh</option>
+            <option value="National" ${_dcrA.state==='National'?'selected':''}>National</option>
+          </select>
+        </div>
+        <button class="btn sm pri" onclick="dcrAApplyFilter()">Apply</button>
+        <button class="btn sm" onclick="_dcrA.from=monthStartISO();_dcrA.to=todayISO();_dcrA.unit_code='';_dcrA.state='';_dcrA.summary=_dcrA.monthly=_dcrA.execs=_dcrA.mapData=_dcrA.tourExecs=_dcrA.tourData=null;_dcrA._loadS=_dcrA._loadM=_dcrA._loadE=_dcrA._loadMap=_dcrA._loadTE=_dcrA._loadTour=false;if(_dcrMap){_dcrMap.remove();_dcrMap=null;}if(_dcrTourMap){_dcrTourMap.remove();_dcrTourMap=null;}render()">Reset</button>
+      </div>
+    </div>`;
+
+  const tabs = `<div class="seg" style="margin-bottom:12px">
+    <button class="${tab==='summary'?'on':''}" onclick="dcrASetTab('summary')">📊 Summary</button>
+    <button class="${tab==='map'?'on':''}"     onclick="dcrASetTab('map')">📍 Agency Map</button>
+    <button class="${tab==='execs'?'on':''}"   onclick="dcrASetTab('execs')">👤 Executives</button>
+    <button class="${tab==='tour'?'on':''}"    onclick="dcrASetTab('tour')">🗺 Tour Route</button>
+  </div>`;
+
+  let body = '';
+  if (tab === 'summary') body = _dcrASummaryTab();
+  else if (tab === 'map') body = _dcrAMapTab();
+  else if (tab === 'execs') body = _dcrAExecsTab();
+  else if (tab === 'tour') body = _dcrATourTab();
+
+  return hdr + filterBar + tabs + `<div class="card pad">${body}</div>`;
+};
 
 /* ---- Dashboard: Command Centre ---- */
 /* ── Command Centre helpers ─────────────────────────────── */
