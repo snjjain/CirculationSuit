@@ -341,6 +341,53 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
     } catch (e) { res.status(500).json({ detail: e.message }); }
   });
 
+  // GET /api/admin/users/:id/apps  — current module/dashboard assignment for one user
+  app.get('/api/admin/users/:id/apps', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { rows: us } = await q('SELECT id, person_code, hierarchy_level FROM app_users WHERE id = ?', [req.params.id]);
+      const u = us[0];
+      if (!u) return res.status(404).json({ detail: 'User not found' });
+      const meta = LEVEL_META[u.hierarchy_level] || { modules: [], dashboard: false };
+      let perm = null;
+      if (u.person_code) {
+        const { rows } = await q('SELECT dashboard, nav_screens, modules FROM user_permissions WHERE person_code = ?', [u.person_code]);
+        perm = rows[0] || null;
+      }
+      res.json({
+        person_code: u.person_code,
+        has_override: !!perm,
+        dashboard:       perm && perm.dashboard  != null ? Boolean(perm.dashboard)                 : Boolean(meta.dashboard),
+        modules:         perm && perm.modules              ? safeJSON(perm.modules, meta.modules) : meta.modules,
+        default_modules: meta.modules,
+        default_dashboard: Boolean(meta.dashboard),
+      });
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
+  // PUT /api/admin/users/:id/apps  — save modules + dashboard only (nav_screens/perms untouched)
+  app.put('/api/admin/users/:id/apps', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { rows: us } = await q('SELECT id, person_code, name FROM app_users WHERE id = ?', [req.params.id]);
+      const u = us[0];
+      if (!u) return res.status(404).json({ detail: 'User not found' });
+      if (!u.person_code) return res.status(400).json({ detail: 'Assign a person code to this user first' });
+      const b = req.body || {};
+      if (b.reset) {
+        await q('DELETE FROM user_permissions WHERE person_code = ?', [u.person_code]);
+        await audit('perms_reset', { actor: req.auth.personCode, target: u.person_code, detail: u.name, ip: ipOf(req) });
+      } else {
+        const dash = b.dashboard !== undefined ? (b.dashboard ? 1 : 0) : null;
+        const mods = b.modules ? JSON.stringify(b.modules) : JSON.stringify([]);
+        await q(`INSERT INTO user_permissions (person_code, dashboard, modules)
+                 VALUES (?, ?, ?)
+                 ON DUPLICATE KEY UPDATE dashboard = VALUES(dashboard), modules = VALUES(modules), updated_at = NOW()`,
+          [u.person_code, dash, mods]);
+        await audit('perms_update', { actor: req.auth.personCode, target: u.person_code, detail: `apps:${(b.modules||[]).join(',')}`, ip: ipOf(req) });
+      }
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
   // GET /api/admin/audit  — recent audit trail
   app.get('/api/admin/audit', requireAuth, requireAdmin, async (req, res) => {
     try {

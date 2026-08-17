@@ -6899,6 +6899,69 @@ window.umShowTempPassword = (name, pwd) => {
     <div style="font-size:22px;font-weight:800;letter-spacing:1px;text-align:center;padding:14px;background:var(--surface-2);border-radius:10px;margin:12px 0;user-select:all">${esc(pwd || '—')}</div>
     <div style="display:flex;gap:9px"><button class="btn pri block" onclick="closeModals()">Done</button></div>`);
 };
+
+/* ---- App Assignment modal ---- */
+let _umaData = null; // holds GET response while Apps modal is open
+
+window.umApps = async (id) => {
+  const u = (S.live.adminUsers || []).find(x => x.id === id); if (!u) return;
+  const d = await api.get(`/api/admin/users/${id}/apps`);
+  if (!d) { toast('❌ Failed to load'); return; }
+  _umaData = { ...d, userId: id };
+
+  const chkRow = (checked, id, label, note) =>
+    `<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:9px 12px;border-radius:8px;background:var(--surface-2)">
+       <input type="checkbox" id="${id}" ${checked ? 'checked' : ''}>
+       <span style="font-size:13px;flex:1">${label}</span>
+       ${note ? `<span style="font-size:10px;color:var(--ink-2)">${note}</span>` : ''}
+     </label>`;
+
+  const modRows = MR_ALL_MODULES.map(m =>
+    chkRow(d.modules.includes(m.key), `umaM_${m.key}`, `${m.icon} ${m.label}`,
+           d.default_modules.includes(m.key) ? 'default' : '')).join('');
+
+  const noPersonCode = !d.person_code;
+  modal(`<h3 style="margin-bottom:4px">App Access</h3>
+    <div style="font-size:12px;color:var(--ink-2);margin-bottom:14px">${esc(u.name)} · ${d.has_override ? '<b>Custom</b>' : 'Level defaults'}</div>
+    ${noPersonCode ? `<div style="padding:10px 12px;background:var(--red-l);color:var(--red);border-radius:8px;font-size:13px;margin-bottom:12px">
+      No person code — assign one in Edit to enable custom permissions.</div>` : ''}
+
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-2);margin-bottom:6px">Dashboard</div>
+    <div style="margin-bottom:14px">
+      ${chkRow(d.dashboard, 'umaDash', 'Can view Vitran OS dashboard (Supply, Collections, Reports…)', d.default_dashboard ? 'default' : '')}
+    </div>
+
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-2);margin-bottom:6px">Field Apps</div>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">${modRows}</div>
+
+    <div id="umaErr"></div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap">
+      <button class="btn pri" onclick="umAppsSave(${id})" ${noPersonCode ? 'disabled' : ''}>Save</button>
+      ${d.has_override ? `<button class="btn" onclick="umAppsReset(${id})">Reset to defaults</button>` : ''}
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+};
+
+window.umAppsSave = async (id) => {
+  const dash = document.getElementById('umaDash')?.checked;
+  const modules = MR_ALL_MODULES
+    .filter(m => document.getElementById(`umaM_${m.key}`)?.checked)
+    .map(m => m.key);
+  const r = await apiCall('PUT', `/api/admin/users/${id}/apps`, { dashboard: dash, modules });
+  if (!r.ok) {
+    const el = document.getElementById('umaErr');
+    if (el) el.innerHTML = `<div class="err">${esc(r.detail || 'Save failed')}</div>`;
+    return;
+  }
+  closeModals(); toast('✅ App access saved — effective on next login');
+};
+
+window.umAppsReset = async (id) => {
+  if (!confirm('Reset to level defaults?')) return;
+  const r = await apiCall('PUT', `/api/admin/users/${id}/apps`, { reset: true });
+  if (r.ok) { closeModals(); toast('↩️ Reset to defaults'); }
+  else toast('❌ ' + (r.detail || 'Failed'));
+};
 VIEWS.user_mgmt = () => {
   fetchAdminUsers();
   const users = S.live.adminUsers || [];
@@ -6925,6 +6988,7 @@ VIEWS.user_mgmt = () => {
       <td style="padding:8px 10px;font-size:11px;color:var(--ink-2)">${u.last_login_at ? esc(String(u.last_login_at).slice(0, 16).replace('T', ' ')) : 'never'}</td>
       <td style="padding:8px 10px;white-space:nowrap;text-align:right">
         <button class="btn sm" onclick="umEdit(${u.id})">Edit</button>
+        <button class="btn sm navy" onclick="umApps(${u.id})">Apps</button>
         <button class="btn sm" onclick="umResetPwd(${u.id}, '${esc(nmeSafe)}')">Reset PW</button>
         ${locked ? `<button class="btn sm" onclick="umUnlock(${u.id})">Unlock</button>` : ''}
         <button class="btn sm" onclick="umToggleActive(${u.id}, ${u.is_active ? 1 : 0})">${u.is_active ? 'Deactivate' : 'Activate'}</button>
