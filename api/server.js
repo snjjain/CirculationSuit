@@ -576,7 +576,23 @@ app.get('/api/admin/users/:id/scope', async (req, res) => {
       }
     }
 
-    const { rows: allUnits } = await q('SELECT unit_code, unit_name FROM pub_unit_master ORDER BY unit_name');
+    const { rows: allUnitsRaw } = await q('SELECT unit_code, unit_name FROM pub_unit_master ORDER BY unit_name');
+    // Classify each unit into its home state by matching unit_name keywords
+    const _CG = ['BHILAI','BILASPUR','JAGDALPUR','RAIPUR'];
+    const _MP = ['BHOPAL','CHHINDWARA','GWALIOR','INDORE','JABALPUR','KHANDWA','MANDSAUR','RATLAM','SAGAR','SATNA','UJJAIN'];
+    const _NAT = ['AHMEDABAD','BANGLORE','BANGALORE','CHENNAI','COIMBATORE','DELHI','HUBLI','KOLKATA','MUMBAI','SURAT'];
+    const unitStateName = n => {
+      const u = (n || '').toUpperCase();
+      if (_NAT.some(k => u.includes(k))) return 'National';
+      if (_MP.some(k => u.includes(k)))  return 'Madhya Pradesh';
+      if (_CG.some(k => u.includes(k)))  return 'Chhattisgarh';
+      return 'Rajasthan';
+    };
+    const allUnits = allUnitsRaw.map(un => ({
+      unit_code:  un.unit_code,
+      unit_name:  un.unit_name,
+      state_name: unitStateName(un.unit_name),
+    }));
     res.json({
       person_code:        u.person_code,
       hierarchy_level:    u.hierarchy_level,

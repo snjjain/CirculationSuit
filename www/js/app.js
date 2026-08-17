@@ -6982,30 +6982,44 @@ window.umScope = async (id) => {
 
   const noPersonCode = !d.person_code;
   const derived = d.derived_unit_codes || [];
-  const current = d.unit_codes || derived;
-  const search  = '';
+  const current = new Set(d.unit_codes || derived);
 
-  const unitRows = (d.all_units || []).map(un => {
-    const checked  = current.includes(un.unit_code);
-    const isDefault = derived.includes(un.unit_code);
-    return `<label style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:6px;cursor:pointer;background:var(--surface-2);font-size:13px">
-      <input type="checkbox" name="umsUnit" value="${esc(un.unit_code)}" ${checked ? 'checked' : ''}>
-      <span style="flex:1">${esc(un.unit_code)} — ${esc(un.unit_name)}</span>
-      ${isDefault ? `<span style="font-size:10px;color:var(--ink-2)">hierarchy</span>` : ''}
-    </label>`;
+  // Group units by state_name
+  const byState = {};
+  (d.all_units || []).forEach(un => {
+    const st = un.state_name || 'National / Other';
+    if (!byState[st]) byState[st] = [];
+    byState[st].push(un);
+  });
+
+  const stateBlocks = Object.entries(byState).sort((a,b) => a[0].localeCompare(b[0])).map(([state, units]) => {
+    const allChecked = units.every(un => current.has(un.unit_code));
+    const unitItems = units.map(un => {
+      const isDefault = derived.includes(un.unit_code);
+      return `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px 5px 28px;cursor:pointer;font-size:13px">
+        <input type="checkbox" name="umsUnit" data-state="${esc(state)}" value="${esc(un.unit_code)}" ${current.has(un.unit_code) ? 'checked' : ''} onchange="umsStateHeaderSync('${esc(state)}')">
+        <span style="flex:1;color:var(--ink-1)">${esc(un.unit_name)}</span>
+        ${isDefault ? `<span style="font-size:10px;color:var(--ink-2);background:var(--surface-2);border-radius:4px;padding:1px 5px">default</span>` : ''}
+      </label>`;
+    }).join('');
+    return `<div class="ums-state-grp" style="margin-bottom:6px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+      <label style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--surface-2);cursor:pointer;font-size:13px;font-weight:600">
+        <input type="checkbox" name="umsStateAll" data-state="${esc(state)}" ${allChecked ? 'checked' : ''} onchange="umsStateToggle('${esc(state)}',this.checked)">
+        <span style="flex:1">${esc(state)}</span>
+        <span style="font-size:11px;font-weight:400;color:var(--ink-2)">${units.length} unit${units.length !== 1 ? 's' : ''}</span>
+      </label>
+      ${unitItems}
+    </div>`;
   }).join('');
 
-  modal(`<h3 style="margin-bottom:4px">Scope Override</h3>
-    <div style="font-size:12px;color:var(--ink-2);margin-bottom:14px">${esc(u.name)} · ${d.has_override ? '<b>Custom</b>' : 'Hierarchy-derived'} · ${current ? current.length + ' unit(s)' : 'PAN India'}</div>
+  modal(`<h3 style="margin-bottom:4px">Branch Access</h3>
+    <div style="font-size:12px;color:var(--ink-2);margin-bottom:14px">${esc(u.name)} · ${d.has_override ? '<b style="color:var(--primary)">Custom override</b>' : 'Hierarchy defaults'} · ${current.size} unit(s) assigned</div>
     ${noPersonCode ? `<div style="padding:10px 12px;background:var(--red-l);color:var(--red);border-radius:8px;font-size:13px;margin-bottom:12px">No person code — assign one in Edit first.</div>` : ''}
-    ${!derived.length && !noPersonCode ? `<div style="padding:10px 12px;background:#fef3c7;color:#92400e;border-radius:8px;font-size:13px;margin-bottom:12px">Not found in hierarchy mapping — hierarchy scope is empty. Setting an override is recommended.</div>` : ''}
-    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-2);margin-bottom:6px">
-      Assigned Units <span style="font-weight:400;text-transform:none">(tick to grant access)</span>
-    </div>
-    <div style="max-height:340px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;margin-bottom:14px;padding-right:4px">${unitRows}</div>
-    <div style="display:flex;gap:8px;margin-bottom:14px">
-      <button class="btn sm" onclick="umsScopeAll(true)">All</button>
-      <button class="btn sm" onclick="umsScopeAll(false)">None</button>
+    ${!derived.length && !noPersonCode ? `<div style="padding:10px 12px;background:#fef3c7;color:#92400e;border-radius:8px;font-size:13px;margin-bottom:12px">Not found in hierarchy — hierarchy scope is empty. Use custom override.</div>` : ''}
+    <div style="max-height:380px;overflow-y:auto;margin-bottom:10px;padding-right:2px">${stateBlocks}</div>
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+      <button class="btn sm" onclick="umsScopeAll(true)">Select all</button>
+      <button class="btn sm" onclick="umsScopeAll(false)">Clear all</button>
       <button class="btn sm" onclick="umsScopeDefault()">Hierarchy defaults</button>
     </div>
     <div id="umsErr"></div>
@@ -7018,11 +7032,25 @@ window.umScope = async (id) => {
 
 window.umsScopeAll = (on) => {
   document.querySelectorAll('input[name="umsUnit"]').forEach(cb => { cb.checked = on; });
+  document.querySelectorAll('input[name="umsStateAll"]').forEach(cb => { cb.checked = on; });
 };
 window.umsScopeDefault = () => {
   if (!_umsData) return;
   const derived = new Set(_umsData.derived_unit_codes || []);
   document.querySelectorAll('input[name="umsUnit"]').forEach(cb => { cb.checked = derived.has(cb.value); });
+  document.querySelectorAll('input[name="umsStateAll"]').forEach(cb => {
+    const state = cb.dataset.state;
+    const all = document.querySelectorAll(`input[name="umsUnit"][data-state="${state}"]`);
+    cb.checked = all.length > 0 && Array.from(all).every(c => c.checked);
+  });
+};
+window.umsStateToggle = (state, on) => {
+  document.querySelectorAll(`input[name="umsUnit"][data-state="${state}"]`).forEach(cb => { cb.checked = on; });
+};
+window.umsStateHeaderSync = (state) => {
+  const all = document.querySelectorAll(`input[name="umsUnit"][data-state="${state}"]`);
+  const hdr = document.querySelector(`input[name="umsStateAll"][data-state="${state}"]`);
+  if (hdr) hdr.checked = all.length > 0 && Array.from(all).every(c => c.checked);
 };
 
 window.umScopeSave = async (id) => {
