@@ -6962,6 +6962,87 @@ window.umAppsReset = async (id) => {
   if (r.ok) { closeModals(); toast('↩️ Reset to defaults'); }
   else toast('❌ ' + (r.detail || 'Failed'));
 };
+
+/* ---- Scope Assignment modal ---- */
+let _umsData = null;
+
+window.umScope = async (id) => {
+  const u = (S.live.adminUsers || []).find(x => x.id === id); if (!u) return;
+  const d = await api.get(`/api/admin/users/${id}/scope`);
+  if (!d) { toast('❌ Failed to load'); return; }
+  _umsData = { ...d, userId: id };
+
+  if (d.is_pan_india) {
+    modal(`<h3>Scope — ${esc(u.name)}</h3>
+      <div style="padding:16px;background:var(--surface-2);border-radius:10px;font-size:13px;color:var(--ink-2)">
+        Level 1 Admin — PAN India access. Cannot be scoped down.</div>
+      <div style="margin-top:14px"><button class="btn" onclick="closeModals()">Close</button></div>`);
+    return;
+  }
+
+  const noPersonCode = !d.person_code;
+  const derived = d.derived_unit_codes || [];
+  const current = d.unit_codes || derived;
+  const search  = '';
+
+  const unitRows = (d.all_units || []).map(un => {
+    const checked  = current.includes(un.unit_code);
+    const isDefault = derived.includes(un.unit_code);
+    return `<label style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:6px;cursor:pointer;background:var(--surface-2);font-size:13px">
+      <input type="checkbox" name="umsUnit" value="${esc(un.unit_code)}" ${checked ? 'checked' : ''}>
+      <span style="flex:1">${esc(un.unit_code)} — ${esc(un.unit_name)}</span>
+      ${isDefault ? `<span style="font-size:10px;color:var(--ink-2)">hierarchy</span>` : ''}
+    </label>`;
+  }).join('');
+
+  modal(`<h3 style="margin-bottom:4px">Scope Override</h3>
+    <div style="font-size:12px;color:var(--ink-2);margin-bottom:14px">${esc(u.name)} · ${d.has_override ? '<b>Custom</b>' : 'Hierarchy-derived'} · ${current ? current.length + ' unit(s)' : 'PAN India'}</div>
+    ${noPersonCode ? `<div style="padding:10px 12px;background:var(--red-l);color:var(--red);border-radius:8px;font-size:13px;margin-bottom:12px">No person code — assign one in Edit first.</div>` : ''}
+    ${!derived.length && !noPersonCode ? `<div style="padding:10px 12px;background:#fef3c7;color:#92400e;border-radius:8px;font-size:13px;margin-bottom:12px">Not found in hierarchy mapping — hierarchy scope is empty. Setting an override is recommended.</div>` : ''}
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-2);margin-bottom:6px">
+      Assigned Units <span style="font-weight:400;text-transform:none">(tick to grant access)</span>
+    </div>
+    <div style="max-height:340px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;margin-bottom:14px;padding-right:4px">${unitRows}</div>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <button class="btn sm" onclick="umsScopeAll(true)">All</button>
+      <button class="btn sm" onclick="umsScopeAll(false)">None</button>
+      <button class="btn sm" onclick="umsScopeDefault()">Hierarchy defaults</button>
+    </div>
+    <div id="umsErr"></div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap">
+      <button class="btn pri" onclick="umScopeSave(${id})" ${noPersonCode ? 'disabled' : ''}>Save</button>
+      ${d.has_override ? `<button class="btn" onclick="umScopeReset(${id})">Reset to hierarchy</button>` : ''}
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+};
+
+window.umsScopeAll = (on) => {
+  document.querySelectorAll('input[name="umsUnit"]').forEach(cb => { cb.checked = on; });
+};
+window.umsScopeDefault = () => {
+  if (!_umsData) return;
+  const derived = new Set(_umsData.derived_unit_codes || []);
+  document.querySelectorAll('input[name="umsUnit"]').forEach(cb => { cb.checked = derived.has(cb.value); });
+};
+
+window.umScopeSave = async (id) => {
+  const unit_codes = Array.from(document.querySelectorAll('input[name="umsUnit"]'))
+    .filter(cb => cb.checked).map(cb => cb.value);
+  const r = await apiCall('PUT', `/api/admin/users/${id}/scope`, { unit_codes });
+  if (!r.ok) {
+    const el = document.getElementById('umsErr');
+    if (el) el.innerHTML = `<div class="err">${esc(r.detail || 'Save failed')}</div>`;
+    return;
+  }
+  closeModals(); toast('✅ Scope saved — effective immediately');
+};
+
+window.umScopeReset = async (id) => {
+  if (!confirm('Reset to hierarchy-derived scope?')) return;
+  const r = await apiCall('PUT', `/api/admin/users/${id}/scope`, { reset: true });
+  if (r.ok) { closeModals(); toast('↩️ Scope reset to hierarchy'); }
+  else toast('❌ ' + (r.detail || 'Failed'));
+};
 VIEWS.user_mgmt = () => {
   fetchAdminUsers();
   const users = S.live.adminUsers || [];
@@ -6989,6 +7070,7 @@ VIEWS.user_mgmt = () => {
       <td style="padding:8px 10px;white-space:nowrap;text-align:right">
         <button class="btn sm" onclick="umEdit(${u.id})">Edit</button>
         <button class="btn sm navy" onclick="umApps(${u.id})">Apps</button>
+        <button class="btn sm navy" onclick="umScope(${u.id})">Scope</button>
         <button class="btn sm" onclick="umResetPwd(${u.id}, '${esc(nmeSafe)}')">Reset PW</button>
         ${locked ? `<button class="btn sm" onclick="umUnlock(${u.id})">Unlock</button>` : ''}
         <button class="btn sm" onclick="umToggleActive(${u.id}, ${u.is_active ? 1 : 0})">${u.is_active ? 'Deactivate' : 'Activate'}</button>
@@ -7030,6 +7112,7 @@ const AUDIT_LABEL = {
   password_change: 'Password changed', admin_reset: 'Admin password reset',
   user_create: 'User created', user_update: 'User updated',
   perms_update: 'Rights updated', perms_reset: 'Rights reset',
+  scope_update: 'Scope override saved', scope_reset: 'Scope reset to hierarchy',
 };
 VIEWS.audit_log = () => {
   fetchAudit();

@@ -109,6 +109,16 @@ function _haversineKm(lat1, lon1, lat2, lon2) {
   )`);
 })().catch(e => console.warn('[startup] user_permissions init:', e.message));
 
+// ── user_scope_overrides table ───────────────────────────────────────────────
+// Explicit unit_code list per user, overrides hierarchy-derived scope when set.
+;(async () => {
+  await q(`CREATE TABLE IF NOT EXISTS user_scope_overrides (
+    person_code VARCHAR(20) PRIMARY KEY,
+    unit_codes  TEXT NOT NULL COMMENT 'JSON array of unit_codes',
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  )`);
+})().catch(e => console.warn('[startup] user_scope_overrides init:', e.message));
+
 // Ensure dashboard performance indexes exist (idempotent — errors if already present are ignored).
 // These make the collection filter-dropdown scans fast (district & agency-name lookups).
 ;(async () => {
@@ -148,6 +158,12 @@ const LEVEL_COL = {
  */
 async function getScopeUnitCodes(personCode, hierarchyLevel) {
   if (hierarchyLevel === 1 || !personCode) return null;
+
+  // Explicit scope override wins — admin can assign any unit set regardless of hierarchy.
+  try {
+    const { rows: ov } = await q('SELECT unit_codes FROM user_scope_overrides WHERE person_code = ?', [String(personCode)]);
+    if (ov[0]?.unit_codes) return JSON.parse(ov[0].unit_codes);
+  } catch (_) {}
 
   const col = LEVEL_COL[hierarchyLevel];
   if (col) {
@@ -530,6 +546,71 @@ app.post('/api/admin/permissions', async (req, res) => {
   } catch (e) {
     res.status(500).json({ detail: String(e) });
   }
+});
+
+// GET /api/admin/users/:id/scope  — current effective scope + derived scope + all units
+app.get('/api/admin/users/:id/scope', async (req, res) => {
+  try {
+    if (!req.auth || req.auth.hierarchyLevel !== 1) return res.status(403).json({ detail: 'Administrator access required' });
+    const { rows: us } = await q('SELECT id, person_code, hierarchy_level FROM app_users WHERE id = ?', [req.params.id]);
+    const u = us[0];
+    if (!u) return res.status(404).json({ detail: 'User not found' });
+
+    // Check for explicit override
+    let hasOverride = false, overrideUnits = null;
+    if (u.person_code) {
+      const { rows: ov } = await q('SELECT unit_codes FROM user_scope_overrides WHERE person_code = ?', [u.person_code]);
+      if (ov[0]?.unit_codes) { hasOverride = true; overrideUnits = JSON.parse(ov[0].unit_codes); }
+    }
+
+    // Derive scope purely from hierarchy (bypass override)
+    let derivedUnits = null;
+    if (u.hierarchy_level !== 1 && u.person_code) {
+      const col = LEVEL_COL[u.hierarchy_level];
+      if (col) {
+        const { rows } = await q(`SELECT DISTINCT unit_code FROM hierarchy_mapping WHERE ${col} = ?`, [u.person_code]);
+        derivedUnits = rows.map(r => r.unit_code);
+      } else {
+        const { rows } = await q('SELECT unit_code FROM hierarchy_master WHERE person_code = ? AND is_active = 1', [u.person_code]);
+        derivedUnits = rows[0]?.unit_code ? [rows[0].unit_code] : [];
+      }
+    }
+
+    const { rows: allUnits } = await q('SELECT unit_code, unit_name FROM pub_unit_master ORDER BY unit_name');
+    res.json({
+      person_code:        u.person_code,
+      hierarchy_level:    u.hierarchy_level,
+      is_pan_india:       u.hierarchy_level === 1,
+      has_override:       hasOverride,
+      unit_codes:         hasOverride ? overrideUnits : derivedUnits,
+      derived_unit_codes: derivedUnits,
+      all_units:          allUnits,
+    });
+  } catch (e) { res.status(500).json({ detail: e.message }); }
+});
+
+// PUT /api/admin/users/:id/scope  — save or reset scope override
+app.put('/api/admin/users/:id/scope', async (req, res) => {
+  try {
+    if (!req.auth || req.auth.hierarchyLevel !== 1) return res.status(403).json({ detail: 'Administrator access required' });
+    const { rows: us } = await q('SELECT id, person_code, name FROM app_users WHERE id = ?', [req.params.id]);
+    const u = us[0];
+    if (!u) return res.status(404).json({ detail: 'User not found' });
+    if (!u.person_code) return res.status(400).json({ detail: 'Assign a person code first to override scope' });
+    const b = req.body || {};
+    if (b.reset) {
+      await q('DELETE FROM user_scope_overrides WHERE person_code = ?', [u.person_code]);
+      await auth.audit('scope_reset', { actor: req.auth.personCode, target: u.person_code, detail: u.name, ip: auth.ipOf(req) });
+    } else {
+      const units = Array.isArray(b.unit_codes) ? b.unit_codes : [];
+      await q(`INSERT INTO user_scope_overrides (person_code, unit_codes)
+               VALUES (?, ?)
+               ON DUPLICATE KEY UPDATE unit_codes = VALUES(unit_codes), updated_at = NOW()`,
+        [u.person_code, JSON.stringify(units)]);
+      await auth.audit('scope_update', { actor: req.auth.personCode, target: u.person_code, detail: `units:${units.join(',')}`, ip: auth.ipOf(req) });
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ detail: e.message }); }
 });
 
 // ── Date-range helpers ────────────────────────────────────────────────────────
