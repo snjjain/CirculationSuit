@@ -3397,6 +3397,103 @@ app.get('/api/sync/collection/status', (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
+// SUPPLY SYNC — 5:00 AM DAILY (supply_data — agent supply)
+// HAWKER SUPPLY SYNC — 5:20 AM DAILY (hawker_supply — cash sale)
+// AGENCY MASTER SYNC — 5:40 AM DAILY
+// EXEC HIERARCHY SYNC — Sunday 4:00 AM WEEKLY
+// EMP MOBILE SYNC — 1st of month 4:30 AM MONTHLY
+// (supply_sync + hawker_supply_sync + agency_master_sync run as child processes
+//  because they use process.exit() internally and cannot be required as modules)
+// ════════════════════════════════════════════════════════════════════════════
+const { fork } = require('child_process');
+
+function scheduleAt(h, m, label, fn) {
+  function fire() {
+    const now  = new Date();
+    const next = new Date(now);
+    next.setHours(h, m, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    setTimeout(() => { fn(); fire(); }, next - now);
+    console.log(`[${label}] Next auto-sync at ${next.toLocaleString('en-IN')}`);
+  }
+  fire();
+}
+
+// 5:00 AM — Supply sync (yesterday's supply_data)
+scheduleAt(5, 0, 'supply-sync', () => {
+  console.log('[supply-sync] 5 AM daily trigger firing');
+  const cp = fork(path.join(__dirname, 'supply_sync.js'), [], { silent: true });
+  cp.stdout.on('data', d => console.log('[supply-sync]', d.toString().trim()));
+  cp.stderr.on('data', d => console.error('[supply-sync]', d.toString().trim()));
+  cp.on('exit', code => console.log(`[supply-sync] Done (exit ${code})`));
+});
+
+// 5:20 AM — Hawker supply sync (yesterday's hawker_supply / cash sale)
+scheduleAt(5, 20, 'hawker-sync', () => {
+  console.log('[hawker-sync] 5:20 AM daily trigger firing');
+  const cp = fork(path.join(__dirname, 'hawker_supply_sync.js'), [], { silent: true });
+  cp.stdout.on('data', d => console.log('[hawker-sync]', d.toString().trim()));
+  cp.stderr.on('data', d => console.error('[hawker-sync]', d.toString().trim()));
+  cp.on('exit', code => console.log(`[hawker-sync] Done (exit ${code})`));
+});
+
+// 5:40 AM — Agency master sync (incremental)
+scheduleAt(5, 40, 'agency-master-sync', () => {
+  console.log('[agency-master-sync] 5:40 AM daily trigger firing');
+  const cp = fork(path.join(__dirname, 'agency_master_sync.js'), [], { silent: true });
+  cp.stdout.on('data', d => console.log('[agency-master-sync]', d.toString().trim()));
+  cp.stderr.on('data', d => console.error('[agency-master-sync]', d.toString().trim()));
+  cp.on('exit', code => console.log(`[agency-master-sync] Done (exit ${code})`));
+});
+
+// Sunday 4:00 AM — Exec hierarchy sync (weekly)
+(function scheduleExecHierarchy() {
+  function nextSunday4am() {
+    const now  = new Date();
+    const next = new Date(now);
+    next.setHours(4, 0, 0, 0);
+    const daysUntilSunday = (7 - next.getDay()) % 7 || 7;
+    next.setDate(next.getDate() + daysUntilSunday);
+    if (next <= now) next.setDate(next.getDate() + 7);
+    return next;
+  }
+  function fire() {
+    const next = nextSunday4am();
+    setTimeout(() => {
+      console.log('[exec-hierarchy-sync] Sunday 4 AM trigger firing');
+      const cp = fork(path.join(__dirname, 'oracle_exec_hierarchy_sync.js'), [], { silent: true });
+      cp.stdout.on('data', d => console.log('[exec-hierarchy-sync]', d.toString().trim()));
+      cp.stderr.on('data', d => console.error('[exec-hierarchy-sync]', d.toString().trim()));
+      cp.on('exit', code => { console.log(`[exec-hierarchy-sync] Done (exit ${code})`); fire(); });
+    }, next - new Date());
+    console.log(`[exec-hierarchy-sync] Next auto-sync at ${next.toLocaleString('en-IN')}`);
+  }
+  fire();
+})();
+
+// 1st of month 4:30 AM — Employee mobile / user sync (monthly)
+(function scheduleEmpMobileSync() {
+  function next1stOfMonth() {
+    const now  = new Date();
+    const next = new Date(now.getFullYear(), now.getMonth() + 1, 1, 4, 30, 0, 0);
+    if (next <= now) next.setMonth(next.getMonth() + 1);
+    return next;
+  }
+  function fire() {
+    const next = next1stOfMonth();
+    setTimeout(() => {
+      console.log('[emp-mobile-sync] Monthly trigger firing');
+      const cp = fork(path.join(__dirname, 'oracle_emp_mobile_sync.js'), [], { silent: true });
+      cp.stdout.on('data', d => console.log('[emp-mobile-sync]', d.toString().trim()));
+      cp.stderr.on('data', d => console.error('[emp-mobile-sync]', d.toString().trim()));
+      cp.on('exit', code => { console.log(`[emp-mobile-sync] Done (exit ${code})`); fire(); });
+    }, next - new Date());
+    console.log(`[emp-mobile-sync] Next auto-sync at ${next.toLocaleString('en-IN')}`);
+  }
+  fire();
+})();
+
+// ════════════════════════════════════════════════════════════════════════════
 // COLLECTION DASHBOARD ENDPOINTS
 // ════════════════════════════════════════════════════════════════════════════
 
