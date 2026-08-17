@@ -231,6 +231,10 @@ function modal(html) {
 }
 function closeModals() { document.querySelectorAll(".modal-scrim").forEach(e => e.remove()); }
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+// Remarks from Oracle contain Hindi as HTML entities (&#2310; etc.) — keep & intact, only strip < >
+function remHtml(s) { return String(s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// Oracle purpose fields store numeric call-type IDs — only show if text present
+function fmtPurpose(p) { return (!p || /^[\d,\s]+$/.test(String(p))) ? null : remHtml(p); }
 
 function go(screen) {
   S.screen = screen; S.sideOpen = false; render();
@@ -1034,8 +1038,8 @@ function _initTourMap() {
     const durMin = (()=>{const s=v.from_time?parseInt(v.from_time)*60+parseInt((v.from_time||'').split(':')[1]||0):null; const e=v.till_time?parseInt(v.till_time)*60+parseInt((v.till_time||'').split(':')[1]||0):null; return (s&&e&&e>s)?(e-s):null;})();
     const popup = `<b>${esc(v.ag_name||v.agcd||'Agency')}</b> <span style="color:#6b7280;font-size:11px">(${esc(v.agcd||'')})</span>
       <br><span style="font-size:11px">${v.from_time||''}${v.till_time?' – '+v.till_time:''} ${durMin?'('+durMin+'m)':''}</span>
-      ${v.purpose?`<br><span style="font-size:11px;color:#2563eb">${esc(v.purpose)}</span>`:''}
-      ${v.remarks?`<br><span style="font-size:11px;color:#374151;font-style:italic">"${esc((v.remarks||'').slice(0,100))}"</span>`:''}
+      ${fmtPurpose(v.purpose)?`<br><span style="font-size:11px;color:#2563eb">${esc(fmtPurpose(v.purpose))}</span>`:''}
+      ${v.remarks?`<br><span style="font-size:11px;color:#374151;font-style:italic">"${remHtml((v.remarks||'').slice(0,120))}"</span>`:''}
       ${v.distance_from_prev!=null?`<br><span style="font-size:11px;color:#6b7280">📏 ${v.distance_from_prev} km from prev</span>`:''}`;
     L.marker([v.lat, v.lng], { icon: L.divIcon({ className: '', html: `<div style="background:#2563eb;color:#fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.4)">${num}</div>`, iconAnchor:[13,13] }) })
       .addTo(_dcrTourMap).bindPopup(popup);
@@ -1103,12 +1107,13 @@ function _dcrATourTab() {
         const sm=v.from_time?parseInt(v.from_time)*60+parseInt((v.from_time||'').split(':')[1]||0):null;
         const em=v.till_time?parseInt(v.till_time)*60+parseInt((v.till_time||'').split(':')[1]||0):null;
         const dur=(sm&&em&&em>sm)?((em-sm)+'m'):'—';
-        return `<tr>
+        const purpose = fmtPurpose(v.purpose);
+        return `<tr onclick="${v.agcd?`_dcrADrillAgency('${esc(v.agcd)}','${esc(v.ag_name||v.agcd||'')}')`:''}" style="cursor:${v.agcd?'pointer':'default'}" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
           <td style="color:var(--ink-2);text-align:center">${v.seq}</td>
-          <td><b>${esc(v.ag_name||v.agcd||'—')}</b>${v.city?`<span style="font-size:10px;color:var(--ink-2)"> ${esc(v.city)}</span>`:''}</td>
+          <td><b style="color:var(--primary)">${esc(v.ag_name||v.agcd||'—')}</b>${v.city?`<span style="font-size:10px;color:var(--ink-2)"> ${esc(v.city)}</span>`:''}</td>
           <td style="white-space:nowrap;color:var(--ink-2)">${v.from_time||'—'}${v.till_time?' – '+v.till_time:''}</td>
           <td style="color:var(--ink-2)">${dur}</td>
-          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(v.purpose||''||v.remarks||'')}">${esc((v.purpose||'').slice(0,40)||'—')}</td>
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${remHtml(v.remarks||v.purpose||'')}">${purpose?esc(purpose):remHtml((v.remarks||'').slice(0,40))||'—'}</td>
           <td class="r" style="color:var(--ink-2)">${v.distance_from_prev!=null?v.distance_from_prev+' km':'—'}</td>
           <td style="text-align:center">${v.lat?'📍':'—'}</td>
         </tr>`;
@@ -1121,7 +1126,7 @@ function _dcrATourTab() {
     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--orange);margin-bottom:8px">⚠ ${missedAg.length} Nearby Unvisited Agencies (within 5 km of route)</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px">
-      ${missedAg.map(ag=>`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:11.5px">
+      ${missedAg.map(ag=>`<div onclick="_dcrADrillAgency('${esc(ag.agcd)}','${esc(ag.ag_name||ag.agcd||'')}')" role="button" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:11.5px;cursor:pointer" onmouseenter="this.style.borderColor='var(--orange)'" onmouseleave="this.style.borderColor='var(--border)'">
         <b>${esc(ag.ag_name||ag.agcd)}</b>&nbsp;<span style="color:var(--ink-2)">${esc(ag.city||'')}</span>
         <span style="color:var(--orange);margin-left:6px">${ag.nearest_dist_km} km</span>
       </div>`).join('')}
@@ -1146,11 +1151,13 @@ window._dcrATourLoad = () => {
 };
 
 /* ── KPI cell helper ── */
-function _dcrKpi(val, lbl, color, sub) {
-  return `<div style="background:var(--surface-2);border-radius:10px;padding:12px 14px;min-width:100px">
+function _dcrKpi(val, lbl, color, sub, onclick) {
+  const clickAttr = onclick ? `onclick="${onclick}" role="button" tabindex="0" onmouseenter="this.style.outline='2px solid var(--primary)'" onmouseleave="this.style.outline='none'"` : '';
+  return `<div ${clickAttr} style="background:var(--surface-2);border-radius:10px;padding:12px 14px;min-width:100px${onclick?';cursor:pointer':''}">
     <div style="font-size:20px;font-weight:700;color:${color||'var(--ink)'};line-height:1.2">${val}</div>
     <div style="font-size:10.5px;color:var(--ink-2);margin-top:3px;text-transform:uppercase;letter-spacing:.04em;font-weight:600">${lbl}</div>
     ${sub?`<div style="font-size:11px;color:var(--ink-2);margin-top:2px">${sub}</div>`:''}
+    ${onclick?`<div style="font-size:10px;color:var(--primary);margin-top:4px">tap for details →</div>`:''}
   </div>`;
 }
 
@@ -1172,8 +1179,8 @@ function _dcrASummaryTab() {
       <div style="margin-bottom:18px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Visits</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px">
-          ${_dcrKpi(fmtN(v.total||0), 'Total Visits', 'var(--primary)')}
-          ${_dcrKpi(fmtN((v.agency_oracle||0)+(v.app_agent||0)), 'Agency Visits', 'var(--gold)')}
+          ${_dcrKpi(fmtN(v.total||0), 'Total Visits', 'var(--primary)', null, "_dcrADrillVisitList()")}
+          ${_dcrKpi(fmtN((v.agency_oracle||0)+(v.app_agent||0)), 'Agency Visits', 'var(--gold)', null, "_dcrADrillVisitList()")}
           ${_dcrKpi(fmtN(v.center_attendance||0), 'Center Attendance', 'var(--blue)')}
           ${_dcrKpi(fmtN((v.app_hawker||0)), 'Hawker Visits', 'var(--teal)')}
         </div>
@@ -1181,18 +1188,18 @@ function _dcrASummaryTab() {
       <div style="margin-bottom:18px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Executives</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px">
-          ${_dcrKpi(fmtN(ex.total||0), 'Total Execs', 'var(--ink)')}
-          ${_dcrKpi(fmtN(ex.with_dcr||0), 'With DCR', 'var(--grn)')}
-          ${_dcrKpi(fmtN(ex.without_dcr||0), 'Without DCR', 'var(--red)')}
-          ${_dcrKpi(fmtN(ex.active_in_period||0), 'Active in Period', 'var(--ink)')}
+          ${_dcrKpi(fmtN(ex.total||0), 'Total Execs', 'var(--ink)', null, "dcrASetTab('execs')")}
+          ${_dcrKpi(fmtN(ex.with_dcr||0), 'With DCR', 'var(--grn)', null, "dcrASetTab('execs')")}
+          ${_dcrKpi(fmtN(ex.without_dcr||0), 'Without DCR', 'var(--red)', null, '_dcrADrillWithoutDcr()')}
+          ${_dcrKpi(fmtN(ex.active_in_period||0), 'Active in Period', 'var(--ink)', null, "dcrASetTab('execs')")}
         </div>
       </div>
       <div style="margin-bottom:18px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Agency Coverage</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px">
-          ${_dcrKpi(fmtN(ag.total||0), 'Total Agencies', 'var(--ink)')}
-          ${_dcrKpi(fmtN(ag.visited||0), 'Visited', 'var(--grn)')}
-          ${_dcrKpi(fmtN(ag.not_visited||0), 'Not Visited', 'var(--red)', `of ${fmtN(ag.active||0)} active`)}
+          ${_dcrKpi(fmtN(ag.total||0), 'Total Agencies', 'var(--ink)', null, "dcrASetTab('map')")}
+          ${_dcrKpi(fmtN(ag.visited||0), 'Visited', 'var(--grn)', null, "_dcrADrillVisitList()")}
+          ${_dcrKpi(fmtN(ag.not_visited||0), 'Not Visited', 'var(--red)', `of ${fmtN(ag.active||0)} active`, '_dcrADrillUnvisited()')}
           ${ag.total ? _dcrKpi(Math.round((ag.visited||0)/(ag.active||1)*100)+'%', 'Coverage', ag.visited/(ag.active||1)>.6?'var(--grn)':'var(--gold)') : ''}
         </div>
       </div>
@@ -1200,7 +1207,7 @@ function _dcrASummaryTab() {
       <div style="margin-bottom:18px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Top Visit Purposes</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px">
-          ${s.outcomes.slice(0,8).map(o=>`<span style="background:var(--surface-2);border-radius:20px;padding:5px 12px;font-size:12px"><b>${fmtN(o.count)}</b> &nbsp; ${esc(o.purpose||'Not specified')}</span>`).join('')}
+          ${s.outcomes.slice(0,8).map(o=>`<span onclick="_dcrADrillPurpose(${JSON.stringify(o.purpose)})" role="button" style="background:var(--surface-2);border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;border:1px solid transparent" onmouseenter="this.style.borderColor='var(--primary)'" onmouseleave="this.style.borderColor='transparent'"><b>${fmtN(o.count)}</b> &nbsp; ${esc(o.purpose||'Not specified')}</span>`).join('')}
         </div>
       </div>` : ''}
     `;
@@ -1223,8 +1230,8 @@ function _dcrASummaryTab() {
           <th class="r">Hawker Visits</th><th class="r">Total</th><th class="r">Uniq. Agencies</th><th class="r">Execs</th>
         </tr></thead>
         <tbody>
-        ${rows.map(r=>`<tr>
-          <td style="font-weight:600">${r.month}</td>
+        ${rows.map(r=>`<tr onclick="_dcrADrillMonth('${r.month}')" style="cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
+          <td style="font-weight:600;color:var(--primary)">${r.month} →</td>
           <td class="r">${fmtN(r.agency_visits)}</td>
           <td class="r">${fmtN(r.center_attendance)}</td>
           <td class="r">${fmtN(r.app_hawker)}</td>
@@ -1295,8 +1302,8 @@ function _initDcrAgencyMap() {
         <div><b>Status:</b> <span style="color:${isInactive?'#ef4444':'#16a34a'};font-weight:600">${esc(a.status)}</span></div>
         <div><b>Assigned to:</b> ${esc(a.field_officer||a.assigned_exec||'—')}</div>
         <div style="margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0"><b>Last DCR Visit:</b><br>${esc(lastVisit)}</div>
-        ${a.last_purpose?`<div><b>Purpose:</b> ${esc(a.last_purpose)}</div>`:''}
-        ${a.last_remarks?`<div><b>Remarks:</b> ${esc(a.last_remarks||'').slice(0,120)}</div>`:''}
+        ${fmtPurpose(a.last_purpose)?`<div><b>Purpose:</b> ${esc(fmtPurpose(a.last_purpose))}</div>`:''}
+        ${a.last_remarks?`<div><b>Remarks:</b> ${remHtml(a.last_remarks).slice(0,160)}</div>`:''}
         <div style="margin-top:8px"><a href="#" onclick="event.preventDefault();_dcrADrillAgency('${esc(a.agcd)}','${esc(a.ag_name)}')" style="color:#2563eb;font-size:11px;font-weight:600">View visit history →</a></div>
       </div>`, { maxWidth: 280 }
     );
@@ -1341,8 +1348,8 @@ function _dcrAExecsTab() {
         <th class="r">Attendance</th><th>Last Visit</th>
       </tr></thead>
       <tbody>
-      ${execs.map((e,i)=>`<tr style="${i<3?'font-weight:600':''}">
-        <td>${esc(e.name||e.emp_code||'—')}</td>
+      ${execs.map((e,i)=>`<tr onclick="_dcrADrillExecutive('${esc(e.emp_code)}','${esc(e.name||e.emp_code||'')}')" style="${i<3?'font-weight:600;':''}cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
+        <td style="color:var(--primary)">${esc(e.name||e.emp_code||'—')}</td>
         <td style="color:var(--ink-2)">${esc(e.unit_code||'—')}</td>
         <td class="r">${fmtN(e.agency_visits)}</td>
         <td class="r">${fmtN(e.uniq_agencies)}</td>
@@ -1363,8 +1370,8 @@ window._dcrADrillAgency = async (agcd, name) => {
     if (!d) { document.querySelector('.modal')&&(document.querySelector('.modal').innerHTML+=`<p style="color:var(--red)">Failed to load</p>`); return; }
     const ag = d.agency || {};
     const allVisits = [
-      ...(d.oracle_visits||[]).map(v=>({...v, source:'Oracle ERP', exec: v.executive_name, date: v.visit_date, purpose: v.visit_purpose, remarks: v.visit_remarks, status: v.call_status})),
-      ...(d.app_visits||[]).map(v=>({...v, source:'DCR App', exec: v.staff_name, date: v.visit_date, purpose: v.purpose, remarks: v.remarks, status: v.outcome})),
+      ...(d.oracle_visits||[]).map(v=>({...v, exec: v.executive_name, date: v.visit_date, purpose: v.visit_purpose, remarks: v.visit_remarks, status: v.call_status, time: v.from_time&&v.till_time?v.from_time+' – '+v.till_time:v.from_time||''})),
+      ...(d.app_visits||[]).map(v=>({...v, exec: v.staff_name, date: v.visit_date, purpose: v.purpose, remarks: v.remarks, status: v.outcome, time: v.check_in?String(v.check_in).slice(11,16):''})),
     ].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
     const statusLabel = ag.supply_stop_flag === 'Y' || (ag.suspend_date && new Date(ag.suspend_date) <= new Date()) ? 'Inactive' : 'Active';
     modal(`<h3 style="margin-bottom:4px">${esc(ag.ag_name || name)}</h3>
@@ -1375,24 +1382,151 @@ window._dcrADrillAgency = async (agcd, name) => {
         ${ag.outstanding!=null?`&nbsp;·&nbsp; Outstanding: <b style="color:var(--red)">${fmtC(Number(ag.outstanding))}</b>`:''}
       </div>
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:6px">Visit History (${allVisits.length} visits)</div>
-      <div style="max-height:380px;overflow-y:auto">
+      <div style="max-height:400px;overflow-y:auto">
       <table class="tbl" style="font-size:12px">
-        <thead><tr><th>Date</th><th>Executive</th><th>Purpose</th><th>Remarks</th><th>Status</th><th style="font-size:10px">Source</th></tr></thead>
+        <thead><tr><th>Date</th><th>Time</th><th>Executive</th><th>Type</th><th>Remarks</th><th>Status</th></tr></thead>
         <tbody>
-        ${allVisits.map(v=>`<tr>
-          <td style="white-space:nowrap">${esc(v.date||'—')}</td>
-          <td>${esc(v.exec||'—')}</td>
-          <td>${esc(v.purpose||'—')}</td>
-          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(v.remarks||'')}">${esc((v.remarks||'').slice(0,60))||'—'}</td>
-          <td>${esc(v.status||'—')}</td>
-          <td style="color:var(--ink-2);font-size:10px">${esc(v.source)}</td>
-        </tr>`).join('')||`<tr><td colspan="6" style="text-align:center;color:var(--ink-2)">No visits recorded</td></tr>`}
+        ${allVisits.map(v=>{
+          const purpose = fmtPurpose(v.purpose);
+          const rem = remHtml(v.remarks||'');
+          return `<tr>
+            <td style="white-space:nowrap">${esc(v.date||'—')}</td>
+            <td style="color:var(--ink-2);white-space:nowrap;font-size:11px">${esc(v.time||'—')}</td>
+            <td>${esc(v.exec||'—')}</td>
+            <td style="font-size:11px;color:var(--ink-2)">${purpose?esc(purpose):'—'}</td>
+            <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${rem}">${rem||'—'}</td>
+            <td style="font-size:11px">${esc(v.status||'—')}</td>
+          </tr>`;
+        }).join('')||`<tr><td colspan="6" style="text-align:center;color:var(--ink-2)">No visits recorded</td></tr>`}
         </tbody>
       </table></div>
       <div style="margin-top:14px">
         <button class="btn" onclick="closeModals()">Close</button>
       </div>`);
   } catch(e) { console.error(e); }
+};
+
+/* ── DCR drill-down modals ── */
+
+// Generic visit list modal (all visits in period, or filtered by emp_code)
+window._dcrADrillVisitList = async (empCode, empName) => {
+  const label = empName ? `visits for ${esc(empName)}` : 'all visits';
+  modal(`<div style="color:var(--ink-2);font-size:13px;padding:24px 0;text-align:center">Loading ${label}…</div>`);
+  try {
+    const qs = `from=${_dcrA.from}&to=${_dcrA.to}${empCode?'&emp_code='+encodeURIComponent(empCode):''}${_dcrA.unit_code?'&unit_code='+encodeURIComponent(_dcrA.unit_code):''}${_dcrA.state?'&state='+encodeURIComponent(_dcrA.state):''}`;
+    const d = await api.get(`/api/dcr-analytics/visit-list?${qs}`);
+    if (!d) return;
+    const visits = d.visits || [];
+    modal(`<h3 style="margin-bottom:4px">${empName ? esc(empName) : 'All DCR Visits'}</h3>
+      <div style="font-size:12px;color:var(--ink-2);margin-bottom:12px">${d.period?.from} to ${d.period?.to} · ${visits.length} visits</div>
+      <div style="max-height:420px;overflow-y:auto">
+      <table class="tbl" style="font-size:12px;min-width:560px">
+        <thead><tr><th>Date</th><th>Time</th><th>Agency</th><th>Executive</th><th>Remarks</th><th>GPS</th></tr></thead>
+        <tbody>
+        ${visits.map(v=>`<tr onclick="_dcrADrillAgency('${esc(v.agcd)}','${esc(v.ag_name||v.agcd||'')}')" style="cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
+          <td style="white-space:nowrap">${esc(v.visit_date||'—')}</td>
+          <td style="color:var(--ink-2);font-size:11px;white-space:nowrap">${esc(v.from_time||'—')}</td>
+          <td style="color:var(--primary)"><b>${esc(v.ag_name||v.agcd||'—')}</b>${v.city?` <span style="font-size:10px;color:var(--ink-2)">${esc(v.city)}</span>`:''}</td>
+          <td style="font-size:11px">${esc(v.executive_name||'—')}</td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${remHtml(v.visit_remarks||'')}">${remHtml((v.visit_remarks||'').slice(0,60))||'—'}</td>
+          <td style="text-align:center">${v.lat?'📍':'—'}</td>
+        </tr>`).join('')||`<tr><td colspan="6" style="text-align:center;color:var(--ink-2)">No visits</td></tr>`}
+        </tbody>
+      </table></div>
+      <div style="margin-top:12px"><button class="btn" onclick="closeModals()">Close</button></div>`);
+  } catch(e) { console.error(e); }
+};
+
+window._dcrADrillExecutive = (empCode, name) => window._dcrADrillVisitList(empCode, name);
+
+window._dcrADrillPurpose = async (purpose) => {
+  modal(`<div style="color:var(--ink-2);font-size:13px;padding:24px 0;text-align:center">Loading visits…</div>`);
+  try {
+    const qs = `from=${_dcrA.from}&to=${_dcrA.to}&purpose=${encodeURIComponent(purpose)}${_dcrA.unit_code?'&unit_code='+encodeURIComponent(_dcrA.unit_code):''}`;
+    const d = await api.get(`/api/dcr-analytics/visit-list?${qs}`);
+    if (!d) return;
+    const visits = d.visits || [];
+    modal(`<h3 style="margin-bottom:4px">Visits — Purpose: ${esc(purpose||'Not specified')}</h3>
+      <div style="font-size:12px;color:var(--ink-2);margin-bottom:12px">${d.period?.from} to ${d.period?.to} · ${visits.length} visits</div>
+      <div style="max-height:420px;overflow-y:auto">
+      <table class="tbl" style="font-size:12px;min-width:500px">
+        <thead><tr><th>Date</th><th>Agency</th><th>Executive</th><th>Remarks</th></tr></thead>
+        <tbody>
+        ${visits.map(v=>`<tr onclick="_dcrADrillAgency('${esc(v.agcd)}','${esc(v.ag_name||v.agcd||'')}')" style="cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
+          <td style="white-space:nowrap">${esc(v.visit_date||'—')}</td>
+          <td style="color:var(--primary)">${esc(v.ag_name||v.agcd||'—')}</td>
+          <td style="font-size:11px">${esc(v.executive_name||'—')}</td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${remHtml(v.visit_remarks||'')}">${remHtml((v.visit_remarks||'').slice(0,70))||'—'}</td>
+        </tr>`).join('')||`<tr><td colspan="4" style="text-align:center;color:var(--ink-2)">No visits</td></tr>`}
+        </tbody>
+      </table></div>
+      <div style="margin-top:12px"><button class="btn" onclick="closeModals()">Close</button></div>`);
+  } catch(e) { console.error(e); }
+};
+
+window._dcrADrillWithoutDcr = async () => {
+  modal(`<div style="color:var(--ink-2);font-size:13px;padding:24px 0;text-align:center">Loading executives without DCR…</div>`);
+  try {
+    const qs = `from=${_dcrA.from}&to=${_dcrA.to}${_dcrA.unit_code?'&unit_code='+encodeURIComponent(_dcrA.unit_code):''}${_dcrA.state?'&state='+encodeURIComponent(_dcrA.state):''}`;
+    const d = await api.get(`/api/dcr-analytics/execs-without-dcr?${qs}`);
+    if (!d) return;
+    const execs = d.executives || [];
+    modal(`<h3 style="margin-bottom:4px">Executives Without DCR</h3>
+      <div style="font-size:12px;color:var(--ink-2);margin-bottom:12px">${d.period?.from} to ${d.period?.to} · ${execs.length} executives</div>
+      <div style="max-height:420px;overflow-y:auto">
+      <table class="tbl" style="font-size:12px">
+        <thead><tr><th style="text-align:left">Name</th><th>Unit</th><th>Emp Code</th></tr></thead>
+        <tbody>
+        ${execs.map(e=>`<tr>
+          <td>${esc(e.name||'—')}</td>
+          <td style="color:var(--ink-2)">${esc(e.unit_code||'—')}</td>
+          <td style="color:var(--ink-2);font-size:11px">${esc(e.employee_code||'—')}</td>
+        </tr>`).join('')||`<tr><td colspan="3" style="text-align:center;color:var(--ink-2)">All executives have DCR this period</td></tr>`}
+        </tbody>
+      </table></div>
+      <div style="margin-top:12px"><button class="btn" onclick="closeModals()">Close</button></div>`);
+  } catch(e) { console.error(e); }
+};
+
+window._dcrADrillUnvisited = async () => {
+  modal(`<div style="color:var(--ink-2);font-size:13px;padding:24px 0;text-align:center">Loading unvisited agencies…</div>`);
+  try {
+    const qs = `from=${_dcrA.from}&to=${_dcrA.to}${_dcrA.unit_code?'&unit_code='+encodeURIComponent(_dcrA.unit_code):''}${_dcrA.state?'&state='+encodeURIComponent(_dcrA.state):''}`;
+    const d = await api.get(`/api/dcr-analytics/unvisited-agencies?${qs}`);
+    if (!d) return;
+    const agencies = d.agencies || [];
+    modal(`<h3 style="margin-bottom:4px">Active Agencies — No Visit This Period</h3>
+      <div style="font-size:12px;color:var(--ink-2);margin-bottom:12px">${d.period?.from} to ${d.period?.to} · ${agencies.length} agencies (sorted by outstanding ↓)</div>
+      <div style="max-height:420px;overflow-y:auto">
+      <table class="tbl" style="font-size:12px;min-width:560px">
+        <thead><tr><th style="text-align:left">Agency</th><th>Unit</th><th>District</th><th>Class</th><th class="r">Outstanding</th><th style="text-align:left">Assigned</th></tr></thead>
+        <tbody>
+        ${agencies.map(a=>`<tr onclick="_dcrADrillAgency('${esc(a.agcd)}','${esc(a.ag_name||a.agcd||'')}')" style="cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
+          <td style="color:var(--primary)"><b>${esc(a.ag_name||a.agcd||'—')}</b> <span style="font-size:10px;color:var(--ink-2)">${esc(a.city||'')}</span></td>
+          <td style="color:var(--ink-2)">${esc(a.unit_code||'—')}</td>
+          <td style="color:var(--ink-2)">${esc(a.district||'—')}</td>
+          <td style="font-size:11px">${esc(a.ag_class||'—')}</td>
+          <td class="r" style="color:var(--red)">${a.outstanding?fmtC(Number(a.outstanding)):'—'}</td>
+          <td style="font-size:11px">${esc(a.assigned_exec||'—')}</td>
+        </tr>`).join('')||`<tr><td colspan="6" style="text-align:center;color:var(--ink-2)">All active agencies visited</td></tr>`}
+        </tbody>
+      </table></div>
+      <div style="margin-top:12px"><button class="btn" onclick="closeModals()">Close</button></div>`);
+  } catch(e) { console.error(e); }
+};
+
+window._dcrADrillMonth = (month) => {
+  const [y, mo] = month.split('-').map(Number);
+  const lastDay = new Date(y, mo, 0).getDate();
+  _dcrA.from = `${month}-01`;
+  _dcrA.to   = `${month}-${String(lastDay).padStart(2,'0')}`;
+  const fromEl = document.getElementById('dcrA-from');
+  const toEl   = document.getElementById('dcrA-to');
+  if (fromEl) fromEl.value = _dcrA.from;
+  if (toEl)   toEl.value   = _dcrA.to;
+  _dcrA.execs = null; _dcrA._loadE = false;
+  _dcrA.tab = 'execs';
+  render();
 };
 
 /* ── Apply filter ── */

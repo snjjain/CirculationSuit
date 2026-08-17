@@ -678,6 +678,145 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: e.message }); }
   });
 
+  // ── GET /api/dcr-analytics/visit-list ──────────────────────────────────────
+  // Generic filtered list of Oracle DCR agency visits (for exec/outcome drill-down)
+  // Query params: emp_code (optional), purpose (optional), from, to, unit_code/state (scope)
+  app.get('/api/dcr-analytics/visit-list', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const from = isDate(req.query.from) ? req.query.from : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10);
+      const to   = isDate(req.query.to)   ? req.query.to   : new Date().toISOString().slice(0,10);
+      const { clause: sc, params: sp } = await resolveScope(req);
+      const { emp_code, purpose } = req.query;
+
+      const extra = [];
+      const extraParams = [];
+      if (emp_code) { extra.push('emp_code = ?'); extraParams.push(emp_code); }
+      if (purpose)  { extra.push('visit_purpose = ?'); extraParams.push(purpose); }
+      const extraWhere = extra.length ? ' AND ' + extra.join(' AND ') : '';
+
+      const { rows: visits } = await q(
+        `SELECT id, visit_date, visit_to_main_code AS agcd, executive_name, emp_code,
+                from_time, till_time, visit_purpose, visit_remarks, call_status,
+                followup_amount, unit_code,
+                CAST(latitude AS DECIMAL(10,6)) AS lat, CAST(longitude AS DECIMAL(10,6)) AS lng
+         FROM dcr_agency_visit
+         WHERE visit_date BETWEEN ? AND ?${sc}${extraWhere}
+         ORDER BY visit_date DESC, from_time DESC
+         LIMIT 300`,
+        [from, to, ...sp, ...extraParams]
+      );
+
+      // Get agency names separately (avoid cross-table JOIN collation issue)
+      const agcds = [...new Set(visits.map(r => r.agcd).filter(Boolean))];
+      let agMap = {};
+      if (agcds.length) {
+        const ph = agcds.map(() => '?').join(',');
+        const { rows: agRows } = await q(
+          `SELECT agcd, ag_name, city_name AS city FROM agency_master WHERE agcd IN (${ph})`, agcds
+        );
+        agRows.forEach(r => { agMap[r.agcd] = r; });
+      }
+
+      res.json({
+        period: { from, to },
+        count: visits.length,
+        visits: visits.map(r => ({
+          id: r.id,
+          visit_date: r.visit_date,
+          agcd: r.agcd,
+          ag_name: agMap[r.agcd]?.ag_name || r.agcd,
+          city: agMap[r.agcd]?.city || '',
+          executive_name: r.executive_name,
+          emp_code: r.emp_code,
+          from_time: r.from_time,
+          till_time: r.till_time,
+          visit_purpose: r.visit_purpose,
+          visit_remarks: r.visit_remarks,
+          call_status: r.call_status,
+          followup_amount: r.followup_amount,
+          unit_code: r.unit_code,
+          lat: r.lat && Number(r.lat) >= 8 && Number(r.lat) <= 38 ? Number(r.lat) : null,
+          lng: r.lng && Number(r.lng) >= 68 && Number(r.lng) <= 98 ? Number(r.lng) : null,
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
+  // ── GET /api/dcr-analytics/unvisited-agencies ───────────────────────────────
+  // Active agencies with no DCR visit in the given period
+  app.get('/api/dcr-analytics/unvisited-agencies', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const from = isDate(req.query.from) ? req.query.from : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10);
+      const to   = isDate(req.query.to)   ? req.query.to   : new Date().toISOString().slice(0,10);
+      const { clause: sc, params: sp } = await resolveScope(req);
+
+      // Step 1: get visited agcds (params only → no cross-table collation issue)
+      const { rows: visitedRows } = await q(
+        `SELECT DISTINCT visit_to_main_code AS agcd FROM dcr_agency_visit
+         WHERE visit_date BETWEEN ? AND ?${sc}`,
+        [from, to, ...sp]
+      );
+      const visitedAgcds = visitedRows.map(r => r.agcd).filter(Boolean);
+
+      // Step 2: query agency_master with NOT IN using params
+      const amWhere = sc ? sc.replace(/AND unit_code/g, 'AND am.unit').replace(/unit_code IN/g, 'am.unit IN').trim() : '';
+      let notInClause = '', notInParams = [];
+      if (visitedAgcds.length) {
+        notInClause = `AND am.agcd NOT IN (${visitedAgcds.map(() => '?').join(',')})`;
+        notInParams = visitedAgcds;
+      }
+
+      const { rows: agencies } = await q(
+        `SELECT am.agcd, am.ag_name, am.unit AS unit_code, am.unit_name,
+                am.city_name AS city, am.dist_name AS district,
+                am.ag_class_name AS ag_class, am.executive_name AS assigned_exec,
+                ao.cl_amt AS outstanding
+         FROM agency_master am
+         LEFT JOIN agency_outstanding ao ON ao.ag_code = am.agcd AND ao.period_label = 'CURRENT'
+         WHERE am.supply_stop_flag <> 'Y'
+           AND (am.suspend_date IS NULL OR am.suspend_date > CURDATE())
+           ${amWhere} ${notInClause}
+         ORDER BY COALESCE(ao.cl_amt,0) DESC, am.unit, am.ag_name
+         LIMIT 500`,
+        [...sp, ...notInParams]
+      );
+
+      res.json({ period: { from, to }, count: agencies.length, agencies });
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
+  // ── GET /api/dcr-analytics/execs-without-dcr ───────────────────────────────
+  // Active executives (hierarchy_master) who made zero agency visits in the period
+  app.get('/api/dcr-analytics/execs-without-dcr', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const from = isDate(req.query.from) ? req.query.from : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10);
+      const to   = isDate(req.query.to)   ? req.query.to   : new Date().toISOString().slice(0,10);
+      const { clause: sc, params: sp } = await resolveScope(req);
+
+      // All active field execs in scope
+      const { rows: allExecs } = await q(
+        `SELECT person_code, person_name AS name, unit_code, employee_code
+         FROM hierarchy_master
+         WHERE is_active = 1 AND hierarchy_level IN (3,4,5,7)${sc}
+         ORDER BY unit_code, person_name`, sp
+      );
+
+      // Emp codes with any DCR in period
+      const { rows: dcrRows } = await q(
+        `SELECT DISTINCT emp_code FROM dcr_agency_visit
+         WHERE visit_date BETWEEN ? AND ?${sc} AND emp_code IS NOT NULL AND emp_code <> ''`,
+        [from, to, ...sp]
+      );
+      const dcrSet = new Set(dcrRows.map(r => (r.emp_code||'').toUpperCase()));
+
+      const withoutDcr = allExecs.filter(e => !dcrSet.has((e.employee_code||'').toUpperCase()));
+      res.json({ period: { from, to }, count: withoutDcr.length, executives: withoutDcr });
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
   // ── GET /api/dcr-analytics/agency-visits/:agcd ──────────────────────────────
   // Drill-down: all visits for one agency (from both Oracle and new app)
   app.get('/api/dcr-analytics/agency-visits/:agcd', async (req, res) => {
