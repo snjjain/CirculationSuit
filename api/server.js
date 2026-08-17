@@ -136,12 +136,12 @@ function _haversineKm(lat1, lon1, lat2, lon2) {
 const LEVEL_META = {
   1:  { roleLabel: 'Admin — Board View',   role: 'admin',            dashboard: true,  modules: ['agent','hawker','dcr','survey','taxi'] },
   2:  { roleLabel: 'Edition Incharge',     role: 'edition_incharge', dashboard: true,  modules: ['agent','dcr','survey'] },
-  3:  { roleLabel: 'Circulation Incharge', role: 'circ_incharge',    dashboard: true,  modules: ['agent','dcr'] },
+  3:  { roleLabel: 'Circulation Incharge', role: 'circ_incharge',    dashboard: true,  modules: ['agent','dcr','survey'] },
   4:  { roleLabel: 'Zonal Head',           role: 'zonal_head',       dashboard: true,  modules: ['agent','dcr','survey'] },
   5:  { roleLabel: 'VP Circulation',       role: 'vp',               dashboard: true,  modules: ['agent','dcr','survey','taxi'] },
-  7:  { roleLabel: 'Field Executive',      role: 'executive',        dashboard: false, modules: ['dcr','survey'] },
-  9:  { roleLabel: 'Newspaper Agent',      role: 'agent',            dashboard: false, modules: ['agent'] },
-  10: { roleLabel: 'Hawker',               role: 'hawker',           dashboard: false, modules: ['hawker'] },
+  7:  { roleLabel: 'Field Executive',      role: 'executive',        dashboard: true,  modules: ['dcr','survey'] },
+  9:  { roleLabel: 'Newspaper Agent',      role: 'agent',            dashboard: true,  modules: ['agent','dcr','survey'] },
+  10: { roleLabel: 'Hawker',               role: 'hawker',           dashboard: true,  modules: ['hawker','dcr','survey'] },
 };
 
 /** Map hierarchy level → column name in hierarchy_mapping */
