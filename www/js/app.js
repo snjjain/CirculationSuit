@@ -931,6 +931,7 @@ Object.keys(APP_META).forEach(k => { if (!VIEWS["app_" + k]) VIEWS["app_" + k] =
 /* ── State ── */
 let _dcrA = { tab: 'summary', summary: null, monthly: null, execs: null, mapData: null,
                from: monthStartISO(), to: todayISO(), unit_code: '', state: '',
+               units: null, _loadUnits: false,
                _loadS: false, _loadM: false, _loadE: false, _loadMap: false,
                // Tour Route state
                tourExecs: null, _loadTE: false,
@@ -975,6 +976,14 @@ function _dcrALoadMap(force) {
   fetch(`${location.origin}/api/dcr-analytics/agency-map?${qs}`, { headers: api.h() })
     .then(r=>r.json()).then(d=>{ _dcrA.mapData=d; _dcrA._loadMap=false; if(S.screen==='dcr_analytics'&&_dcrA.tab==='map') { render(); } })
     .catch(()=>{ _dcrA.mapData={_err:true}; _dcrA._loadMap=false; if(S.screen==='dcr_analytics') render(); });
+}
+
+function _dcrALoadUnits() {
+  if (_dcrA._loadUnits || _dcrA.units) return;
+  _dcrA._loadUnits = true;
+  fetch(`${location.origin.replace(':8123',':8001')}/api/dcr-analytics/units`, { headers: api.h() })
+    .then(r=>r.json()).then(d=>{ _dcrA.units=d.units||[]; _dcrA._loadUnits=false; if(S.screen==='dcr_analytics') render(); })
+    .catch(()=>{ _dcrA.units=[]; _dcrA._loadUnits=false; });
 }
 
 /* ── Tour Route loaders ── */
@@ -1560,6 +1569,19 @@ window._dcrADrillMonth = (month) => {
 };
 
 /* ── Apply filter ── */
+window._dcrAStateChange = () => {
+  const state = document.getElementById('dcrA-state')?.value || '';
+  const unitSel = document.getElementById('dcrA-unit');
+  const allUnits = _dcrA.units || [];
+  const filtered = state ? allUnits.filter(u => u.state === state) : allUnits;
+  const current = unitSel?.value || '';
+  if (unitSel) {
+    unitSel.innerHTML = `<option value="">All Units</option>` +
+      filtered.map(u => `<option value="${esc(u.unit_code)}" ${u.unit_code===current&&filtered.some(f=>f.unit_code===current)?'selected':''}>${esc(u.unit_name)}</option>`).join('');
+    if (current && !filtered.some(u => u.unit_code === current)) unitSel.value = '';
+  }
+};
+
 window.dcrAApplyFilter = () => {
   _dcrA.from = document.getElementById('dcrA-from')?.value || _dcrA.from;
   _dcrA.to   = document.getElementById('dcrA-to')?.value   || _dcrA.to;
@@ -1580,26 +1602,33 @@ VIEWS.dcr_analytics = () => {
   const tab = _dcrA.tab;
   const hdr = pagehead('Field Visit Intelligence', 'DCR analytics — agency visits, center attendance, GPS mapping & executive performance');
 
+  _dcrALoadUnits();
+  const allUnits = _dcrA.units || [];
+  const filteredUnits = _dcrA.state ? allUnits.filter(u => u.state === _dcrA.state) : allUnits;
+  const unitOpts = `<option value="">All Units</option>` +
+    filteredUnits.map(u => `<option value="${esc(u.unit_code)}" ${_dcrA.unit_code===u.unit_code?'selected':''}>${esc(u.unit_name)}</option>`).join('');
+  const sel = s => `font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)`;
+
   const filterBar = `
     <div class="card" style="padding:10px 14px;margin-bottom:12px">
       <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px">
         <div style="display:flex;align-items:center;gap:6px;font-size:12px">
           <label style="color:var(--ink-2);white-space:nowrap">From</label>
-          <input type="date" id="dcrA-from" value="${_dcrA.from}" style="font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
+          <input type="date" id="dcrA-from" value="${_dcrA.from}" style="${sel()}">
           <label style="color:var(--ink-2)">To</label>
-          <input type="date" id="dcrA-to"   value="${_dcrA.to}"   style="font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
+          <input type="date" id="dcrA-to" value="${_dcrA.to}" style="${sel()}">
         </div>
         <div style="display:flex;align-items:center;gap:6px;font-size:12px">
-          <label style="color:var(--ink-2);white-space:nowrap">Unit</label>
-          <input type="text" id="dcrA-unit" value="${_dcrA.unit_code}" placeholder="e.g. JA0" style="width:70px;font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
           <label style="color:var(--ink-2)">State</label>
-          <select id="dcrA-state" style="font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
+          <select id="dcrA-state" onchange="_dcrAStateChange()" style="${sel()}">
             <option value="">All States</option>
             <option value="Rajasthan" ${_dcrA.state==='Rajasthan'?'selected':''}>Rajasthan</option>
             <option value="Madhya Pradesh" ${_dcrA.state==='Madhya Pradesh'?'selected':''}>Madhya Pradesh</option>
             <option value="Chhattisgarh" ${_dcrA.state==='Chhattisgarh'?'selected':''}>Chhattisgarh</option>
             <option value="National" ${_dcrA.state==='National'?'selected':''}>National</option>
           </select>
+          <label style="color:var(--ink-2)">Unit</label>
+          <select id="dcrA-unit" style="${sel()};max-width:180px">${unitOpts}</select>
         </div>
         <button class="btn sm pri" onclick="dcrAApplyFilter()">Apply</button>
         <button class="btn sm" onclick="_dcrA.from=monthStartISO();_dcrA.to=todayISO();_dcrA.unit_code='';_dcrA.state='';_dcrA.summary=_dcrA.monthly=_dcrA.execs=_dcrA.mapData=_dcrA.tourExecs=_dcrA.tourData=null;_dcrA._loadS=_dcrA._loadM=_dcrA._loadE=_dcrA._loadMap=_dcrA._loadTE=_dcrA._loadTour=false;if(_dcrMap){_dcrMap.remove();_dcrMap=null;}if(_dcrTourMap){_dcrTourMap.remove();_dcrTourMap=null;}render()">Reset</button>

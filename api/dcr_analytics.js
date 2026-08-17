@@ -67,6 +67,26 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
     return { clause: ` AND unit_code IN (${ph})`, params: unitCodes, unitCodes };
   }
 
+  // ── GET /api/dcr-analytics/units ────────────────────────────────────────────
+  // Full unit list with state classification — used by frontend filter dropdown
+  app.get('/api/dcr-analytics/units', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const { rows } = await q('SELECT unit_code, unit_name FROM pub_unit_master ORDER BY unit_name');
+      const CG  = ['BHILAI','BILASPUR','JAGDALPUR','RAIPUR'];
+      const MP  = ['BHOPAL','CHHINDWARA','GWALIOR','INDORE','JABALPUR','KHANDWA','MANDSAUR','RATLAM','SAGAR','SATNA','UJJAIN'];
+      const NAT = ['AHMEDABAD','BANGLORE','BANGALORE','CHENNAI','COIMBATORE','DELHI','HUBLI','KOLKATA','MUMBAI','SURAT'];
+      const getState = name => {
+        const u = (name||'').toUpperCase();
+        if (CG.some(k=>u.includes(k)))  return 'Chhattisgarh';
+        if (MP.some(k=>u.includes(k)))  return 'Madhya Pradesh';
+        if (NAT.some(k=>u.includes(k))) return 'National';
+        return 'Rajasthan';
+      };
+      res.json({ units: rows.map(r => ({ unit_code: r.unit_code, unit_name: r.unit_name, state: getState(r.unit_name) })) });
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
   // ── GET /api/dcr-analytics/summary ──────────────────────────────────────────
   // Returns KPI groups: visits, executives, agencies, outcomes
   app.get('/api/dcr-analytics/summary', async (req, res) => {
