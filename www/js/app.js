@@ -1405,7 +1405,7 @@ function _dcrAExecsTab() {
 window._dcrADrillAgency = async (agcd, name) => {
   modal(`<div style="color:var(--ink-2);font-size:13px;padding:24px 0;text-align:center">Loading visit history for ${esc(name)}…</div>`);
   try {
-    const d = await api.get(`/api/dcr-analytics/agency-visits/${encodeURIComponent(agcd)}`);
+    const d = await api.get(`/api/dcr-analytics/agency-visits/${encodeURIComponent(agcd)}?from=${_dcrA.from}&to=${_dcrA.to}`);
     if (!d) { document.querySelector('.modal')&&(document.querySelector('.modal').innerHTML+=`<p style="color:var(--red)">Failed to load</p>`); return; }
     const ag = d.agency || {};
     const allVisits = [
@@ -1420,7 +1420,7 @@ window._dcrADrillAgency = async (agcd, name) => {
         &nbsp;·&nbsp; Class: <b>${esc(ag.ag_class_name||'—')}</b>
         ${ag.outstanding!=null?`&nbsp;·&nbsp; Outstanding: <b style="color:var(--red)">${fmtC(Number(ag.outstanding))}</b>`:''}
       </div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:6px">Visit History (${allVisits.length} visits)</div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:6px">Visit History — ${allVisits.length} visits &nbsp;<span style="font-weight:400;color:var(--ink-3)">${_dcrA.from} to ${_dcrA.to}</span></div>
       <div style="max-height:400px;overflow-y:auto">
       <table class="tbl" style="font-size:12px">
         <thead><tr><th>Date</th><th>Time</th><th>Executive</th><th>Type</th><th>Remarks</th><th>Status</th></tr></thead>

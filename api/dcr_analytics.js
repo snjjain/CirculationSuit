@@ -873,6 +873,8 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
     try {
       if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
       const { agcd } = req.params;
+      const from = isDate(req.query.from) ? req.query.from : '2020-01-01';
+      const to   = isDate(req.query.to)   ? req.query.to   : new Date().toISOString().slice(0,10);
 
       const [agencyRes, oracleVisits, appVisits] = await Promise.all([
         q(`SELECT am.*, ao.cl_amt AS outstanding
@@ -885,13 +887,15 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
                   CAST(latitude AS DECIMAL(10,6)) lat, CAST(longitude AS DECIMAL(10,6)) lng,
                   next_visit_date, contact_mob_no
            FROM dcr_agency_visit WHERE visit_to_main_code = ?
-           ORDER BY visit_date DESC, id DESC LIMIT 50`, [agcd]),
+             AND visit_date BETWEEN ? AND ?
+           ORDER BY visit_date DESC, id DESC LIMIT 200`, [agcd, from, to]),
         q(`SELECT visit_date, target_type, staff_name, staff_person_code,
                   purpose, remarks, outcome, payment_mode, payment_type,
                   amount_collected, outstanding_amount, copies_committed,
                   check_in, check_out, lat, lng, created_at
            FROM dcr_visit WHERE target_code = ? AND target_type = 'agent'
-           ORDER BY visit_date DESC, id DESC LIMIT 50`, [agcd]),
+             AND visit_date BETWEEN ? AND ?
+           ORDER BY visit_date DESC, id DESC LIMIT 200`, [agcd, from, to]),
       ]);
 
       const agency = agencyRes.rows[0] || {};
