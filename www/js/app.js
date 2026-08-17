@@ -1060,7 +1060,7 @@ function _dcrATourTab() {
   const d = _dcrA.tourData;
   const stats = d?.stats || {};
 
-  const execOpts = execs.map(e => `<option value="${esc(e.emp_code)}" ${_dcrA.tourEmpCode===e.emp_code?'selected':''}>${esc(e.name||e.emp_code)} [${esc(e.unit_code)}]</option>`).join('');
+  const execOpts = execs.map(e => `<option value="${esc(e.emp_code)}" ${_dcrA.tourEmpCode===e.emp_code?'selected':''}>${esc(e.name||e.emp_code)} [${esc(e.unit_name||e.unit_code)}]</option>`).join('');
 
   const filterRow = `
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)">
@@ -1197,19 +1197,29 @@ function _dcrASummaryTab() {
       <div style="margin-bottom:18px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Agency Coverage</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px">
-          ${_dcrKpi(fmtN(ag.total||0), 'Total Agencies', 'var(--ink)', null, "dcrASetTab('map')")}
+          ${_dcrKpi(fmtN(ag.active||0), 'Active Agencies', 'var(--ink)', `${fmtN(ag.total||0)} total`, "dcrASetTab('map')")}
           ${_dcrKpi(fmtN(ag.visited||0), 'Visited', 'var(--grn)', null, "_dcrADrillVisitList()")}
           ${_dcrKpi(fmtN(ag.not_visited||0), 'Not Visited', 'var(--red)', `of ${fmtN(ag.active||0)} active`, '_dcrADrillUnvisited()')}
-          ${ag.total ? _dcrKpi(Math.round((ag.visited||0)/(ag.active||1)*100)+'%', 'Coverage', ag.visited/(ag.active||1)>.6?'var(--grn)':'var(--gold)') : ''}
+          ${(()=>{const pct=(ag.visited||0)/(ag.active||1)*100;const s=pct===0?'0%':pct<1?'<1%':Math.round(pct)+'%';return ag.active?_dcrKpi(s,'Coverage',pct>.60?'var(--grn)':pct>.30?'var(--gold)':'var(--red)'):''})()}
         </div>
       </div>
-      ${s.outcomes?.length ? `
+      ${(()=>{
+        const outcomes = s.outcomes||[];
+        const isNumericPurpose = p => /^[\d,\s]+$/.test(String(p||''));
+        const named = outcomes.filter(o=>o.purpose&&!isNumericPurpose(o.purpose));
+        const unspecifiedCnt = outcomes.filter(o=>!o.purpose).reduce((a,o)=>a+(o.count||0),0);
+        const unclassifiedCnt = outcomes.filter(o=>isNumericPurpose(o.purpose)).reduce((a,o)=>a+(o.count||0),0);
+        const chips = [
+          ...named.slice(0,6).map(o=>`<span onclick="_dcrADrillPurpose(${JSON.stringify(o.purpose)})" role="button" style="background:var(--surface-2);border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;border:1px solid transparent" onmouseenter="this.style.borderColor='var(--primary)'" onmouseleave="this.style.borderColor='transparent'"><b>${fmtN(o.count)}</b> &nbsp; ${esc(o.purpose)}</span>`),
+          unspecifiedCnt?`<span style="background:var(--surface-2);border-radius:20px;padding:5px 12px;font-size:12px;color:var(--ink-2)"><b>${fmtN(unspecifiedCnt)}</b> &nbsp; Not specified</span>`:'',
+          unclassifiedCnt?`<span style="background:var(--surface-2);border-radius:20px;padding:5px 12px;font-size:12px;color:var(--ink-2)" title="Oracle system call-type IDs — no text description available"><b>${fmtN(unclassifiedCnt)}</b> &nbsp; Unclassified</span>`:'',
+        ].filter(Boolean);
+        return chips.length ? `
       <div style="margin-bottom:18px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Top Visit Purposes</div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px">
-          ${s.outcomes.slice(0,8).map(o=>`<span onclick="_dcrADrillPurpose(${JSON.stringify(o.purpose)})" role="button" style="background:var(--surface-2);border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;border:1px solid transparent" onmouseenter="this.style.borderColor='var(--primary)'" onmouseleave="this.style.borderColor='transparent'"><b>${fmtN(o.count)}</b> &nbsp; ${esc(o.purpose||'Not specified')}</span>`).join('')}
-        </div>
-      </div>` : ''}
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${chips.join('')}</div>
+      </div>` : '';
+      })()}
     `;
   }
 
@@ -1350,7 +1360,7 @@ function _dcrAExecsTab() {
       <tbody>
       ${execs.map((e,i)=>`<tr onclick="_dcrADrillExecutive('${esc(e.emp_code)}','${esc(e.name||e.emp_code||'')}')" style="${i<3?'font-weight:600;':''}cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
         <td style="color:var(--primary)">${esc(e.name||e.emp_code||'—')}</td>
-        <td style="color:var(--ink-2)">${esc(e.unit_code||'—')}</td>
+        <td style="color:var(--ink-2)">${esc(e.unit_name||e.unit_code||'—')}</td>
         <td class="r">${fmtN(e.agency_visits)}</td>
         <td class="r">${fmtN(e.uniq_agencies)}</td>
         <td class="r">${fmtN(e.working_days)}</td>
@@ -1479,7 +1489,7 @@ window._dcrADrillWithoutDcr = async () => {
         <tbody>
         ${execs.map(e=>`<tr>
           <td>${esc(e.name||'—')}</td>
-          <td style="color:var(--ink-2)">${esc(e.unit_code||'—')}</td>
+          <td style="color:var(--ink-2)">${esc(e.unit_name||e.unit_code||'—')}</td>
           <td style="color:var(--ink-2);font-size:11px">${esc(e.employee_code||'—')}</td>
         </tr>`).join('')||`<tr><td colspan="3" style="text-align:center;color:var(--ink-2)">All executives have DCR this period</td></tr>`}
         </tbody>

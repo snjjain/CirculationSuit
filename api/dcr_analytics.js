@@ -16,6 +16,14 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
   const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 
+  // Separate query to get unit_code → unit_name (avoids cross-table collation JOIN issues)
+  async function getUnitNameMap() {
+    const { rows } = await q('SELECT unit_code, unit_name FROM pub_unit_master');
+    const map = {};
+    rows.forEach(r => { map[r.unit_code] = r.unit_name; });
+    return map;
+  }
+
   // Scope helper: resolve unit_codes array from query params
   async function resolveScope(req) {
     const { unit_code, state } = req.query;
@@ -391,10 +399,12 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const caMap = {};
       caRows.forEach(r => { caMap[r.emp_code] = { attendances: Number(r.attendances), days: Number(r.days) }; });
 
+      const unitMap = await getUnitNameMap();
       const executives = execRows.map(r => ({
         emp_code:      r.emp_code,
         name:          r.executive_name,
         unit_code:     r.unit_code,
+        unit_name:     unitMap[r.unit_code] || r.unit_code,
         agency_visits: Number(r.agency_visits),
         uniq_agencies: Number(r.uniq_agencies),
         working_days:  Number(r.working_days),
@@ -423,7 +433,8 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
          ORDER BY unit_code, executive_name`,
         sp
       );
-      res.json({ executives: rows });
+      const unitMap = await getUnitNameMap();
+      res.json({ executives: rows.map(r => ({ ...r, unit_name: unitMap[r.unit_code] || r.unit_code })) });
     } catch (e) { res.status(500).json({ detail: e.message }); }
   });
 
