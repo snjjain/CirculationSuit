@@ -1196,11 +1196,31 @@ function _dcrASummaryTab() {
       </div>
       <div style="margin-bottom:18px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:8px">Agency Coverage</div>
+        <div style="background:var(--surface-2);border-radius:10px;padding:12px 14px;margin-bottom:8px">
+          <div style="font-size:13px;font-weight:700;color:var(--ink);margin-bottom:8px">Total Agencies &nbsp;<span style="font-size:20px;color:var(--primary)">${fmtN(ag.total||0)}</span><span style="font-size:11px;color:var(--ink-2);margin-left:4px">(with supply or outstanding)</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">
+            <div style="display:flex;justify-content:space-between;padding:5px 8px;background:var(--surface-3,var(--surface-2));border-radius:6px;border-left:3px solid var(--grn)">
+              <span style="color:var(--ink-2)">Active (supply running)</span>
+              <b style="color:var(--grn)">${fmtN(ag.active||0)}</b>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:5px 8px;background:var(--surface-3,var(--surface-2));border-radius:6px;border-left:3px solid var(--red)">
+              <span style="color:var(--ink-2)">Closed (stopped/suspended)</span>
+              <b style="color:var(--red)">${fmtN(ag.closed||0)}</b>
+            </div>
+            <div onclick="_dcrADrillUnvisited()" role="button" style="display:flex;justify-content:space-between;padding:5px 8px;background:var(--surface-3,var(--surface-2));border-radius:6px;border-left:3px solid var(--gold);cursor:pointer" onmouseenter="this.style.outline='1px solid var(--gold)'" onmouseleave="this.style.outline=''">
+              <span style="color:var(--ink-2)">Active with Outstanding</span>
+              <b style="color:var(--gold)">${fmtN(ag.active_with_os||0)}</b>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:5px 8px;background:var(--surface-3,var(--surface-2));border-radius:6px;border-left:3px solid var(--orange,#f97316)">
+              <span style="color:var(--ink-2)">Closed with Outstanding</span>
+              <b style="color:var(--orange,#f97316)">${fmtN(ag.closed_with_os||0)}</b>
+            </div>
+          </div>
+        </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px">
-          ${_dcrKpi(fmtN(ag.active||0), 'Active Agencies', 'var(--ink)', `${fmtN(ag.total||0)} total`, "dcrASetTab('map')")}
-          ${_dcrKpi(fmtN(ag.visited||0), 'Visited', 'var(--grn)', null, "_dcrADrillVisitList()")}
+          ${_dcrKpi(fmtN(ag.visited||0), 'Visited This Period', 'var(--grn)', null, "_dcrADrillVisitList()")}
           ${_dcrKpi(fmtN(ag.not_visited||0), 'Not Visited', 'var(--red)', `of ${fmtN(ag.active||0)} active`, '_dcrADrillUnvisited()')}
-          ${(()=>{const pct=(ag.visited||0)/(ag.active||1)*100;const s=pct===0?'0%':pct<1?'<1%':Math.round(pct)+'%';return ag.active?_dcrKpi(s,'Coverage',pct>.60?'var(--grn)':pct>.30?'var(--gold)':'var(--red)'):''})()}
+          ${(()=>{const pct=(ag.visited||0)/(ag.active||1)*100;const s=pct===0?'0%':pct<1?'<1%':Math.round(pct)+'%';return ag.active?_dcrKpi(s,'Active Coverage',pct>60?'var(--grn)':pct>30?'var(--gold)':'var(--red)'):''})()}
         </div>
       </div>
       ${(()=>{

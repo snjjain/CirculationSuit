@@ -145,15 +145,29 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const execWith = Math.min(execTotal, (execWithRows[0]?.cnt || 0) + (execWithRows[1]?.cnt || 0));
 
       // ─ Agencies coverage ─
+      // Agency breakdown — use supply_data (last 60 days) to determine active supply;
+      // exclude agencies with no current supply AND no outstanding (purely dormant records)
+      const amSc = sc.replace(/AND unit_code/g, 'AND am.unit').replace(/unit_code IN/g, 'am.unit IN');
       const { rows: agTotalRows } = await q(
-        `SELECT COUNT(*) total,
-                SUM(CASE WHEN supply_stop_flag = 'Y' OR (suspend_date IS NOT NULL AND suspend_date <= CURDATE()) THEN 1 ELSE 0 END) inactive
-         FROM agency_master${sc.replace(/AND unit_code/g,'WHERE unit').replace(/unit_code IN/g,'unit IN')}`,
+        `SELECT
+           COUNT(*) AS total,
+           SUM(CASE WHEN hs.agcd IS NOT NULL THEN 1 ELSE 0 END) AS active,
+           SUM(CASE WHEN hs.agcd IS NULL     THEN 1 ELSE 0 END) AS closed,
+           SUM(CASE WHEN hs.agcd IS NOT NULL AND COALESCE(ao.cl_amt,0) > 0 THEN 1 ELSE 0 END) AS active_with_os,
+           SUM(CASE WHEN hs.agcd IS NULL     AND COALESCE(ao.cl_amt,0) > 0 THEN 1 ELSE 0 END) AS closed_with_os
+         FROM agency_master am
+         LEFT JOIN (
+           SELECT DISTINCT agcd
+           FROM supply_data
+           WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY) AND sup_copy > 0
+         ) hs ON hs.agcd = am.agcd
+         LEFT JOIN agency_outstanding ao ON ao.ag_code = am.agcd AND ao.period_label = 'CURRENT'
+         WHERE (hs.agcd IS NOT NULL OR COALESCE(ao.cl_amt, 0) > 0)${amSc}`,
         sp
       );
-      const agTotal = agTotalRows[0] || {};
+      const agRow = agTotalRows[0] || {};
       const agVisited = Number(av.uniq_agencies || 0);
-      const agActive  = Number(agTotal.total || 0) - Number(agTotal.inactive || 0);
+      const agActive  = Number(agRow.active || 0);
 
       res.json({
         period: { from, to },
@@ -172,11 +186,13 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
           active_in_period: Number(av.exec_count || 0),
         },
         agencies: {
-          total: Number(agTotal.total || 0),
-          active: agActive,
-          inactive: Number(agTotal.inactive || 0),
-          visited: agVisited,
-          not_visited: Math.max(0, agActive - agVisited),
+          total:          Number(agRow.total         || 0),
+          active:         Number(agRow.active        || 0),
+          closed:         Number(agRow.closed        || 0),
+          active_with_os: Number(agRow.active_with_os|| 0),
+          closed_with_os: Number(agRow.closed_with_os|| 0),
+          visited:        agVisited,
+          not_visited:    Math.max(0, agActive - agVisited),
         },
         collection: {
           total: Number(coll.total_collected || 0),
@@ -785,10 +801,12 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
                 am.ag_class_name AS ag_class, am.executive_name AS assigned_exec,
                 ao.cl_amt AS outstanding
          FROM agency_master am
+         JOIN (
+           SELECT DISTINCT agcd FROM supply_data
+           WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY) AND sup_copy > 0
+         ) hs ON hs.agcd = am.agcd
          LEFT JOIN agency_outstanding ao ON ao.ag_code = am.agcd AND ao.period_label = 'CURRENT'
-         WHERE am.supply_stop_flag <> 'Y'
-           AND (am.suspend_date IS NULL OR am.suspend_date > CURDATE())
-           ${amWhere} ${notInClause}
+         WHERE 1=1 ${amWhere} ${notInClause}
          ORDER BY COALESCE(ao.cl_amt,0) DESC, am.unit, am.ag_name
          LIMIT 500`,
         [...sp, ...notInParams]
