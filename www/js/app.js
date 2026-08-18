@@ -6943,25 +6943,20 @@ VIEWS.exec_perf = () => {
    ════════════════════════════════════════════════════════ */
 
 const etState = () => S.live.et || (S.live.et = {
-  filters:     { month_year: '', unit_code: '', state: '' },
-  filterOpts:  null,
-  employees:   null,
-  targets:     null,         // target list (list tab)
-  achievement: null,         // target vs actual (achievement tab)
-  weights:     null,
-  thresholds:  null,
-  tab:         'entry',      // 'entry' | 'achievement'
-  formEmp:     '',
-  formEmpName: '',
-  formUnitCode:'',
-  formTargets: {},           // { growth_copies:'', growth_pct:'', collection:'', agency_visits:'', attendance_days:'', survey:'' }
-  formSaving:  false,
-  formSaved:   false,
-  formError:   '',
-  _loading:    {},
+  filters:      { month_year: '', state: '', unit_code: '' },
+  filterOpts:   null,
+  // unit-wise target entry: { unitCode: { supply_copies:'', collection:'', agency_visits:'', attendance_days:'' } }
+  unitTargets:  {},
+  targetsLoaded: false,
+  achievement:  null,
+  tab:          'entry',   // 'entry' | 'achievement'
+  saving:       {},        // { unitCode: true }
+  saved:        {},        // { unitCode: true } flash feedback
+  saveError:    '',
+  _loading:     {},
 });
 
-const etApi = p => `/api/targets/${p}`;
+const etApi  = p => `/api/targets/${p}`;
 const etFmtN = v => (!v && v !== 0) ? '—' : Number(v).toLocaleString('en-IN');
 const etFmtC = v => {
   if (!v && v !== 0) return '—';
@@ -6971,111 +6966,154 @@ const etFmtC = v => {
   return '₹' + Math.round(n).toLocaleString('en-IN');
 };
 const etPct = v => (!v && v !== 0) ? '—' : Number(v).toFixed(1) + '%';
-const etAchvColor = pct => {
-  if (pct == null) return 'var(--muted)';
-  if (pct >= 100)  return 'var(--grn)';
-  if (pct >= 80)   return '#f59e0b';
-  if (pct >= 60)   return '#f97316';
-  return 'var(--red)';
-};
-const etAchvBadge = pct => {
-  if (pct == null) return '';
-  const [bg, label] = pct >= 100 ? ['#dcfce7','Achieved'] : pct >= 80 ? ['#fef9c3','Near Target'] : pct >= 60 ? ['#ffedd5','Needs Attention'] : ['#fee2e2','Poor'];
-  return `<span style="background:${bg};color:${etAchvColor(pct)};padding:1px 7px;border-radius:20px;font-size:10.5px;font-weight:700">${pct}% · ${label}</span>`;
-};
+const etScoreColor = s => s >= 100 ? 'var(--grn)' : s >= 80 ? '#f59e0b' : s >= 60 ? '#f97316' : 'var(--red)';
+const etScoreBg    = s => s >= 100 ? '#dcfce7'    : s >= 80 ? '#fef9c3'  : s >= 60 ? '#ffedd5'  : '#fee2e2';
 
 function etLoadFilters() {
   const st = etState();
   if (st.filterOpts || st._loading.filters) return;
   st._loading.filters = true;
-  api.get(etApi('filters')).then(d => { st.filterOpts = d; st._loading.filters = false; if (S.screen==='exec_targets') render(); }).catch(()=>{st._loading.filters=false;});
+  api.get(etApi('filters')).then(d => {
+    st.filterOpts = d;
+    // Default state to first available if not set
+    if (!st.filters.state && d.states?.length) st.filters.state = d.states[0];
+    st._loading.filters = false;
+    if (S.screen === 'exec_targets') render();
+  }).catch(() => { st._loading.filters = false; });
 }
-function etLoadEmployees() {
+
+function etLoadTargets() {
   const st = etState();
   const f  = st.filters;
-  const qs = '?' + new URLSearchParams(Object.fromEntries(Object.entries({state:f.state,unit_code:f.unit_code}).filter(([,v])=>v))).toString();
-  st._loading.employees = true; st.employees = null;
-  api.get(etApi('employees') + qs).then(d => { st.employees = d?.employees||[]; st._loading.employees = false; if (S.screen==='exec_targets') render(); }).catch(()=>{st._loading.employees=false;});
+  if (!f.state && !f.unit_code) { st.unitTargets = {}; st.targetsLoaded = true; return; }
+  const qs = '?' + new URLSearchParams(Object.fromEntries(
+    Object.entries({ month_year: f.month_year || currentMonthYear(), state: f.state, unit_code: f.unit_code }).filter(([, v]) => v)
+  )).toString();
+  st._loading.targets = true;
+  api.get(etApi('list') + qs).then(d => {
+    const st2 = etState();
+    // Pre-fill form inputs from saved targets, keeping unsaved edits
+    const saved = {};
+    for (const u of (d.units || [])) saved[u.unit_code] = { ...u.targets };
+    // Merge: saved values win, but preserve any in-flight edits not yet synced
+    st2.unitTargets = saved;
+    st2.targetsLoaded = true;
+    st2._loading.targets = false;
+    if (S.screen === 'exec_targets') render();
+  }).catch(() => { etState()._loading.targets = false; });
 }
+
 function etLoadAchievement() {
   const st = etState();
   const f  = st.filters;
-  const qs = '?' + new URLSearchParams(Object.fromEntries(Object.entries({month_year:f.month_year,unit_code:f.unit_code,state:f.state}).filter(([,v])=>v))).toString();
+  const qs = '?' + new URLSearchParams(Object.fromEntries(
+    Object.entries({ month_year: f.month_year || currentMonthYear(), state: f.state, unit_code: f.unit_code }).filter(([, v]) => v)
+  )).toString();
   st._loading.achievement = true; st.achievement = null;
-  api.get(etApi('achievement') + qs).then(d => { st.achievement = d; st._loading.achievement = false; if (S.screen==='exec_targets') render(); }).catch(()=>{st._loading.achievement=false;});
+  api.get(etApi('achievement') + qs).then(d => {
+    const s = etState(); s.achievement = d; s._loading.achievement = false;
+    if (S.screen === 'exec_targets') render();
+  }).catch(() => { etState()._loading.achievement = false; });
 }
 
-window.etSetTab = tab => { etState().tab = tab; etState().formSaved = false; if (tab==='achievement') etLoadAchievement(); render(); };
-window.etStateChange = v => { const st=etState(); st.filters.state=v; st.filters.unit_code=''; st.employees=null; st.achievement=null; render(); };
-window.etUnitChange  = v => { const st=etState(); st.filters.unit_code=v; st.employees=null; st.achievement=null; render(); };
-window.etMonthChange = v => { const st=etState(); st.filters.month_year=v; st.achievement=null; if(st.tab==='achievement') etLoadAchievement(); render(); };
-window.etSelectEmp   = (code, name, unitCode) => {
-  const st = etState();
-  if (st.formEmp === code) { st.formEmp=''; st.formEmpName=''; st.formUnitCode=''; } else {
-    st.formEmp=code; st.formEmpName=name; st.formUnitCode=unitCode;
-    // Pre-fill existing targets for this month
-    const my = st.filters.month_year || currentMonthYear();
-    st._loading.formTargets = true;
-    api.get(`${etApi('list')}?month_year=${encodeURIComponent(my)}&emp_code=${encodeURIComponent(code)}`)
-      .then(d => {
-        const st2 = etState();
-        st2.formTargets = {};
-        for (const t of (d?.targets||[])) st2.formTargets[t.target_type] = t.target_value;
-        st2._loading.formTargets = false;
-        if (S.screen==='exec_targets') render();
-      }).catch(()=>{ etState()._loading.formTargets=false; });
-  }
+window.etSetTab = tab => {
+  const st = etState(); st.tab = tab;
+  if (tab === 'achievement') etLoadAchievement();
   render();
 };
-window.etSaveTargets = async () => {
+window.etStateChange = v => {
   const st = etState();
-  if (!st.formEmp) { alert('Please select an employee'); return; }
+  st.filters.state = v; st.filters.unit_code = '';
+  st.unitTargets = {}; st.targetsLoaded = false; st.achievement = null;
+  render();
+};
+window.etUnitChange = v => {
+  const st = etState();
+  st.filters.unit_code = v;
+  st.unitTargets = {}; st.targetsLoaded = false; st.achievement = null;
+  render();
+};
+window.etMonthChange = v => {
+  const st = etState();
+  st.filters.month_year = v;
+  st.unitTargets = {}; st.targetsLoaded = false; st.achievement = null;
+  if (st.tab === 'achievement') etLoadAchievement();
+  render();
+};
+window.etFieldChange = (unitCode, field, value) => {
+  const st = etState();
+  if (!st.unitTargets[unitCode]) st.unitTargets[unitCode] = {};
+  st.unitTargets[unitCode][field] = value;
+};
+window.etSaveUnit = async (unitCode, stateName) => {
+  const st = etState();
   const my = st.filters.month_year || currentMonthYear();
-  st.formSaving = true; st.formError = ''; render();
+  st.saving[unitCode] = true; st.saveError = ''; render();
   try {
     await api.post('/api/targets', {
-      emp_code: st.formEmp, unit_code: st.formUnitCode,
-      month_year: my, targets: st.formTargets,
+      unit_code: unitCode, state_code: stateName, month_year: my,
+      targets: st.unitTargets[unitCode] || {},
     });
-    st.formSaving = false; st.formSaved = true; st.achievement = null; render();
-    setTimeout(() => { etState().formSaved = false; render(); }, 3000);
-  } catch (e) { st.formSaving = false; st.formError = String(e); render(); }
+    st.saving[unitCode] = false; st.saved[unitCode] = true;
+    st.achievement = null; render();
+    setTimeout(() => { etState().saved[unitCode] = false; render(); }, 2500);
+  } catch (e) {
+    st.saving[unitCode] = false; st.saveError = String(e); render();
+  }
 };
-window.etRefreshAchievement = () => { etState().achievement=null; etLoadAchievement(); };
+window.etSaveAll = async () => {
+  const st    = etState();
+  const units = etVisibleUnits();
+  for (const u of units) {
+    if (!st.saving[u.unit_code]) await window.etSaveUnit(u.unit_code, st.filters.state);
+  }
+};
+window.etRefreshAchievement = () => { etState().achievement = null; etLoadAchievement(); };
 
 function currentMonthYear() {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// Returns the list of units to show in entry/achievement based on current state/unit filter
+function etVisibleUnits() {
+  const st   = etState();
+  const f    = st.filters;
+  const opts = st.filterOpts || { units: [] };
+  let units  = opts.units || [];
+  if (f.state)     units = units.filter(u => u.state_nm === f.state);
+  if (f.unit_code) units = units.filter(u => u.unit_code === f.unit_code);
+  return units;
+}
+
+function etMonthLabel(my) {
+  const [y, mo] = (my || currentMonthYear()).split('-');
+  return ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)] + ' ' + y;
 }
 
 function etFilterBar() {
   const st   = etState();
   const f    = st.filters;
-  const opts = st.filterOpts || { states:[], units:[], months:[] };
+  const opts = st.filterOpts || { states: [], units: [], months: [] };
 
   if (!st.filterOpts) etLoadFilters();
-  if (!st.employees && !st._loading.employees) etLoadEmployees();
 
-  const months = opts.months?.length ? opts.months : [currentMonthYear()];
-  const selMy  = f.month_year || currentMonthYear();
-  const visUnits = f.state ? (opts.units||[]).filter(u => u.state_nm===f.state) : (opts.units||[]);
+  const months   = opts.months?.length ? opts.months : [currentMonthYear()];
+  const selMy    = f.month_year || currentMonthYear();
+  const visUnits = f.state ? (opts.units || []).filter(u => u.state_nm === f.state) : (opts.units || []);
 
   return `<div class="card" style="padding:10px 14px;margin-bottom:12px">
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
       <select class="inp" style="font-size:12px;padding:5px 8px" onchange="etMonthChange(this.value)">
-        ${months.map(m => {
-          const [y,mo] = m.split('-');
-          const lbl = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)]+' '+y;
-          return `<option value="${esc(m)}" ${selMy===m?'selected':''}>${lbl}</option>`;
-        }).join('')}
+        ${months.map(m => `<option value="${esc(m)}" ${selMy===m?'selected':''}>${etMonthLabel(m)}</option>`).join('')}
       </select>
       <select class="inp" style="font-size:12px;padding:5px 8px" onchange="etStateChange(this.value)">
-        <option value="">All States</option>
-        ${(opts.states||[]).map(s=>`<option value="${esc(s)}" ${f.state===s?'selected':''}>${esc(s)}</option>`).join('')}
+        <option value="">— Select State —</option>
+        ${(opts.states || []).map(s => `<option value="${esc(s)}" ${f.state===s?'selected':''}>${esc(s)}</option>`).join('')}
       </select>
-      <select class="inp" style="font-size:12px;padding:5px 8px" onchange="etUnitChange(this.value)">
-        <option value="">All Units${f.state?' in '+esc(f.state):''}</option>
-        ${visUnits.map(u=>`<option value="${esc(u.unit_code)}" ${f.unit_code===u.unit_code?'selected':''}>${esc(u.unit_name)}</option>`).join('')}
+      <select class="inp" style="font-size:12px;padding:5px 8px" onchange="etUnitChange(this.value)" ${!f.state?'disabled':''}>
+        <option value="">${f.state ? 'All Units in ' + esc(f.state) : '— Select State first —'}</option>
+        ${visUnits.map(u => `<option value="${esc(u.unit_code)}" ${f.unit_code===u.unit_code?'selected':''}>${esc(u.unit_name)}</option>`).join('')}
       </select>
       <div style="margin-left:auto;display:flex;gap:6px">
         <button class="btn${st.tab==='entry'?' pri':''} sm" onclick="etSetTab('entry')">📝 Entry</button>
@@ -7085,68 +7123,90 @@ function etFilterBar() {
   </div>`;
 }
 
-function etEntryTab() {
-  const st      = etState();
-  const f       = st.filters;
-  const emps    = st.employees || [];
-  const my      = f.month_year || currentMonthYear();
-  const [y,mo]  = my.split('-');
-  const moLabel = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)] + ' ' + y;
+// Returns visible units based on current state/unit filter
+function etVisibleUnits() {
+  const st   = etState();
+  const f    = st.filters;
+  const opts = st.filterOpts || { units: [] };
+  let units  = opts.units || [];
+  if (f.state)     units = units.filter(u => u.state_nm === f.state);
+  if (f.unit_code) units = units.filter(u => u.unit_code === f.unit_code);
+  return units;
+}
 
-  const TARGET_FIELDS = [
-    { key: 'growth_copies',   label: 'Supply Growth (Copies)',  placeholder: 'e.g. 500',     unit: 'copies' },
-    { key: 'growth_pct',      label: 'Growth % Target',          placeholder: 'e.g. 3.5',     unit: '%' },
-    { key: 'collection',      label: 'Collection Target (₹)',    placeholder: 'e.g. 2500000', unit: '₹' },
-    { key: 'agency_visits',   label: 'Agency Visit Target',      placeholder: 'e.g. 100',     unit: 'visits' },
-    { key: 'survey',          label: 'Survey Target',            placeholder: 'e.g. 150',     unit: 'surveys' },
-    { key: 'attendance_days', label: 'Attendance Target (Days)', placeholder: 'e.g. 26',      unit: 'days' },
+function etEntryTab() {
+  const st    = etState();
+  const f     = st.filters;
+  const my    = f.month_year || currentMonthYear();
+  const units = etVisibleUnits();
+
+  if (f.state && !st.targetsLoaded && !st._loading.targets) etLoadTargets();
+
+  if (!f.state) {
+    return `<div class="card" style="padding:32px;text-align:center;color:var(--muted)">
+      <div style="font-size:36px;margin-bottom:8px">🗺</div>
+      <div style="font-weight:700;margin-bottom:4px">Select a State to enter targets</div>
+      <div style="font-size:12px">Choose Rajasthan, MP, CG, or National from the filter above</div>
+    </div>`;
+  }
+
+  const COLS = [
+    { key: 'supply_copies',   label: 'Target Copies',  ph: 'e.g. 450000',  w: '130px' },
+    { key: 'collection',      label: 'Collection (₹)', ph: 'e.g. 2500000', w: '140px' },
+    { key: 'agency_visits',   label: 'Agency Visits',  ph: 'e.g. 800',     w: '110px' },
+    { key: 'attendance_days', label: 'Man-Days',        ph: 'e.g. 520',     w: '100px' },
   ];
 
-  const empRow = e => {
-    const sel = st.formEmp === e.emp_code;
-    return `<div class="rowbtn" onclick="etSelectEmp('${esc(e.emp_code)}','${esc(e.emp_name||e.emp_code)}','${esc(e.unit_code||'')}') "
-       style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--brd2);background:${sel?'var(--chart-1-pale,#eff6ff)':'transparent'}">
-      <div style="width:28px;height:28px;border-radius:50%;background:${sel?'var(--chart-1)':'var(--surface-2)'};display:flex;align-items:center;justify-content:center;font-size:10px;color:${sel?'#fff':'var(--ink)'};flex-shrink:0">
-        ${sel ? '✓' : esc((e.emp_name||e.emp_code||'?').charAt(0).toUpperCase())}
-      </div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:13px;font-weight:${sel?'700':'500'}">${esc(e.emp_name||e.emp_code)}</div>
-        <div style="font-size:10.5px;color:var(--muted)">${esc(e.unit_name||e.unit_code||'')} · ${esc(e.emp_code)}</div>
-      </div>
-    </div>`;
+  const unitRow = u => {
+    const uc       = u.unit_code;
+    const tgts     = st.unitTargets[uc] || {};
+    const isSaving = !!st.saving[uc];
+    const isSaved  = !!st.saved[uc];
+    return `<tr style="${isSaved ? 'background:#f0fdf4' : ''}">
+      <td style="font-weight:600;font-size:12.5px;white-space:nowrap;min-width:140px">
+        ${esc(u.unit_name || u.unit_code)}
+        <div style="font-size:10px;color:var(--muted)">${esc(u.unit_code)}</div>
+      </td>
+      ${COLS.map(c => `<td style="padding:5px 6px">
+        <input type="number" class="inp" style="width:${c.w};font-size:12px;padding:4px 7px"
+          placeholder="${esc(c.ph)}"
+          value="${tgts[c.key] != null ? tgts[c.key] : ''}"
+          oninput="etFieldChange('${esc(uc)}','${c.key}',this.value)">
+      </td>`).join('')}
+      <td style="white-space:nowrap;padding:5px 8px">
+        <button class="btn pri sm" onclick="etSaveUnit('${esc(uc)}','${esc(f.state)}')" ${isSaving?'disabled':''}>
+          ${isSaving ? '⏳' : isSaved ? '✅ Saved' : '💾 Save'}
+        </button>
+      </td>
+    </tr>`;
   };
 
-  const formPanel = st.formEmp ? `<div class="card" style="padding:16px;margin-bottom:12px">
-    <div style="font-weight:700;font-size:14px;margin-bottom:4px">Monthly Targets — ${moLabel}</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:14px">${esc(st.formEmpName)} · ${esc(st.formUnitCode)}</div>
-    ${st._loading.formTargets ? `<div style="font-size:12px;color:var(--muted)">Loading existing targets…</div>` : `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-      ${TARGET_FIELDS.map(tf => `<div>
-        <label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:3px">${esc(tf.label)}</label>
-        <div style="display:flex;align-items:center;gap:4px">
-          <input class="inp" type="number" style="flex:1;font-size:13px;padding:6px 8px" placeholder="${esc(tf.placeholder)}"
-            value="${st.formTargets[tf.key]||''}"
-            oninput="etState().formTargets['${tf.key}']=this.value">
-          <span style="font-size:11px;color:var(--muted);flex-shrink:0">${esc(tf.unit)}</span>
-        </div>
-      </div>`).join('')}
+  return `<div class="card" style="overflow:hidden">
+    <div style="padding:10px 14px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="font-weight:700;font-size:13px">
+        Monthly Targets — ${etMonthLabel(my)}
+        <span style="font-weight:400;color:var(--muted)"> · ${esc(f.state)}${f.unit_code ? ' · ' + esc(units[0]?.unit_name || f.unit_code) : ''}</span>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        ${st.saveError ? `<span style="color:var(--red);font-size:11px">⚠ ${esc(st.saveError)}</span>` : ''}
+        <button class="btn sm" onclick="etSaveAll()">💾 Save All</button>
+        <button class="btn sm" onclick="etState().unitTargets={};etState().targetsLoaded=false;render()">↺ Reload</button>
+      </div>
     </div>
-    ${st.formError ? `<div style="color:var(--red);font-size:12px;margin-bottom:8px">⚠ ${esc(st.formError)}</div>` : ''}
-    ${st.formSaved ? `<div style="color:var(--grn);font-size:12px;margin-bottom:8px">✅ Targets saved successfully!</div>` : ''}
-    <button class="btn pri" onclick="etSaveTargets()" ${st.formSaving?'disabled':''}>
-      ${st.formSaving?'⏳ Saving…':'💾 Save Targets'}
-    </button>`}
-  </div>` : `<div class="card" style="padding:20px;text-align:center;color:var(--muted);font-size:13px;margin-bottom:12px">
-    ← Select an executive to set targets
-  </div>`;
-
-  return formPanel + `<div class="card" style="overflow:hidden">
-    <div style="padding:10px 14px;border-bottom:1px solid var(--brd2);font-weight:700;font-size:13px">
-      Executives — ${moLabel} ${f.unit_code ? `· ${esc((st.filterOpts?.units||[]).find(u=>u.unit_code===f.unit_code)?.unit_name||f.unit_code)}` : ''}
-    </div>
-    ${st._loading.employees ? `<div style="padding:20px;text-align:center;color:var(--muted)">Loading executives…</div>` :
-      emps.length ? emps.map(empRow).join('') :
-      `<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">No executives found. Select a unit above.</div>`}
+    ${st._loading.targets
+      ? `<div style="padding:32px;text-align:center;color:var(--muted)">Loading saved targets…</div>`
+      : units.length === 0
+        ? `<div style="padding:32px;text-align:center;color:var(--muted)">No units found for selected filter</div>`
+        : `<div style="overflow-x:auto">
+            <table>
+              <thead><tr>
+                <th style="white-space:nowrap">Branch / Unit</th>
+                ${COLS.map(c => `<th style="white-space:nowrap">${esc(c.label)}</th>`).join('')}
+                <th></th>
+              </tr></thead>
+              <tbody>${units.map(unitRow).join('')}</tbody>
+            </table>
+          </div>`}
   </div>`;
 }
 
@@ -7156,58 +7216,64 @@ function etAchievementTab() {
   if (st._loading.achievement || !st.achievement) {
     return `<div style="padding:40px;text-align:center;color:var(--muted)">Loading achievement data…</div>`;
   }
-  const { results=[], month_year:my, from, to, day_in_month, days_total } = st.achievement;
-  const [y, mo] = (my||'').split('-');
-  const moLabel = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)||0] + ' ' + y;
-  const isCurrent = my === currentMonthYear();
 
-  const scoreColor = s => s>=100?'var(--grn)':s>=80?'#f59e0b':s>=60?'#f97316':'var(--red)';
-  const scoreBg    = s => s>=100?'#dcfce7':s>=80?'#fef9c3':s>=60?'#ffedd5':'#fee2e2';
+  const { results = [], month_year: my, day_in_month, days_total } = st.achievement;
+  const isCurrent = my === currentMonthYear();
+  const moLabel   = etMonthLabel(my);
+
   const pBar = (actual, target, color) => {
-    if (!target) return '<div style="color:var(--muted);font-size:11px">No target</div>';
-    const pct = Math.min(Math.round(actual/target*100), 200);
+    if (!target) return `<div style="color:var(--muted);font-size:11px">No target</div>`;
+    const pct = Math.min(Math.round(actual / target * 100), 999);
     return `<div style="display:flex;align-items:center;gap:4px">
       <div style="flex:1;height:5px;background:var(--brd2);border-radius:3px;overflow:hidden">
         <div style="height:100%;width:${Math.min(pct,100)}%;background:${color};border-radius:3px"></div>
       </div>
-      <span style="font-size:10px;color:${color};font-weight:700;width:30px;text-align:right">${pct}%</span>
+      <span style="font-size:10px;color:${color};font-weight:700;width:34px;text-align:right">${pct}%</span>
     </div>`;
   };
 
-  const execRow = (r, idx) => {
-    const a  = r.actuals || {};
-    const t  = r.targets || {};
-    const ac = r.achievement || {};
-    const sc = r.overall_score;
+  const unitRow = (r, idx) => {
+    const a  = r.actuals     || {};
+    const t  = r.targets     || {};
     const p  = r.pacing;
-    const hasTarget = r.has_targets;
-    return `<tr style="${idx%2?'background:var(--surface-2)':''}">
-      <td style="font-weight:600;font-size:12.5px;white-space:nowrap">
-        <span onclick="epDrillExec('${esc(r.emp_code)}','${esc(r.emp_code)}')" style="cursor:pointer;color:var(--chart-1)">${esc(r.emp_code)}</span>
+    const sc = r.overall_score;
+    return `<tr style="${idx % 2 ? 'background:var(--surface-2)' : ''}">
+      <td style="font-weight:600;font-size:12.5px;white-space:nowrap;min-width:130px">
+        ${esc(r.unit_name || r.unit_code)}
+        <div style="font-size:10px;color:var(--muted)">${esc(r.unit_code)}</div>
       </td>
-      <td>
-        <div style="font-size:12px">${etFmtN(a.growth_copies)} copies</div>
-        ${pBar(Math.max(0,a.growth_copies||0), t.growth_copies, '#22c55e')}
-        ${a.growth_pct!=null ? `<div style="font-size:10px;color:var(--muted)">Growth: ${a.growth_pct>0?'+':''}${etPct(a.growth_pct)}</div>` : ''}
+      <td style="min-width:140px">
+        <div style="font-size:12px;font-weight:600">${etFmtN(a.supply_curr)}</div>
+        <div style="font-size:10px;color:var(--muted)">Tgt: ${etFmtN(t.supply_copies)} · Prev: ${etFmtN(a.supply_prev)}</div>
+        ${pBar(a.supply_curr || 0, t.supply_copies, '#22c55e')}
+        ${a.growth_pct != null ? `<div style="font-size:10px;color:${a.growth_pct>=0?'var(--grn)':'var(--red)'}">${a.growth_pct>=0?'+':''}${etPct(a.growth_pct)} vs prev</div>` : ''}
+        ${p && t.supply_copies ? `<div style="font-size:10px;color:var(--muted)">Proj: ${etFmtN(p.projected_supply)}</div>` : ''}
       </td>
-      <td>
-        <div style="font-size:12px">${etFmtC(a.collection)}</div>
-        ${pBar(a.collection||0, t.collection, '#6366f1')}
+      <td style="min-width:140px">
+        <div style="font-size:12px;font-weight:600">${etFmtC(a.collection)}</div>
+        <div style="font-size:10px;color:var(--muted)">Tgt: ${etFmtC(t.collection)}</div>
+        ${pBar(a.collection || 0, t.collection, '#6366f1')}
         ${p && t.collection ? `<div style="font-size:10px;color:var(--muted)">Proj: ${etFmtC(p.projected_collection)}</div>` : ''}
       </td>
-      <td>
-        <div style="font-size:12px">${etFmtN(a.agency_visits)}</div>
-        ${pBar(a.agency_visits||0, t.agency_visits, '#f59e0b')}
+      <td style="min-width:120px">
+        <div style="font-size:12px;font-weight:600">${etFmtN(a.agency_visits)}</div>
+        <div style="font-size:10px;color:var(--muted)">Tgt: ${etFmtN(t.agency_visits)}</div>
+        ${pBar(a.agency_visits || 0, t.agency_visits, '#f59e0b')}
       </td>
-      <td>
-        <div style="font-size:12px">${etFmtN(a.attendance_days)} days</div>
-        ${pBar(a.attendance_days||0, t.attendance_days, '#8b5cf6')}
+      <td style="min-width:110px">
+        <div style="font-size:12px;font-weight:600">${etFmtN(a.attendance_days)} days</div>
+        <div style="font-size:10px;color:var(--muted)">Tgt: ${etFmtN(t.attendance_days)}</div>
+        ${pBar(a.attendance_days || 0, t.attendance_days, '#8b5cf6')}
       </td>
-      <td style="text-align:center">
-        ${sc!=null ? `<div style="display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:50%;background:${scoreBg(sc)};color:${scoreColor(sc)};font-weight:800;font-size:13px">${sc}</div>` : '<span style="color:var(--muted);font-size:11px">—</span>'}
+      <td style="text-align:center;width:54px">
+        ${sc != null
+          ? `<div style="display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:50%;background:${etScoreBg(sc)};color:${etScoreColor(sc)};font-weight:800;font-size:13px">${sc}</div>`
+          : `<span style="color:var(--muted);font-size:11px">—</span>`}
       </td>
-      ${isCurrent && p ? `<td style="font-size:10.5px;color:var(--muted);white-space:nowrap">${p.days_done}/${p.days_total}d<br>${p.pct_days_done}% done</td>` : `<td style="color:var(--muted);font-size:11px">—</td>`}
-      <td>${hasTarget ? '' : '<span style="font-size:10.5px;color:var(--red)">No target set</span>'}</td>
+      ${isCurrent && p
+        ? `<td style="font-size:10.5px;color:var(--muted);white-space:nowrap">Day ${p.days_done}/${p.days_in_month}<br>${p.pct_days_done}% done</td>`
+        : `<td style="color:var(--muted);font-size:11px">—</td>`}
+      <td>${r.has_targets ? '' : '<span style="font-size:10.5px;color:var(--red)">No target</span>'}</td>
     </tr>`;
   };
 
@@ -7225,28 +7291,29 @@ function etAchievementTab() {
         </div>
         <div style="font-size:11px;color:var(--muted)">Day ${day_in_month} of ${days_total} · ${Math.round(day_in_month/days_total*100)}% month complete</div>
       </div>
-      ${noTarget > 0 ? `<div style="color:var(--red);font-size:12px">⚠ ${noTarget} executive${noTarget>1?'s':''} without targets</div>` : ''}
+      ${noTarget > 0 ? `<div style="color:var(--red);font-size:12px">⚠ ${noTarget} unit${noTarget>1?'s':''} without targets</div>` : ''}
       <button class="btn sm" onclick="etRefreshAchievement()">↺ Refresh</button>
     </div>` : ''}
     <div class="card" style="overflow:hidden">
       <div style="padding:10px 14px;border-bottom:1px solid var(--brd2);font-weight:700;font-size:13px">
-        Target vs Achievement — ${moLabel} (${results.length} executives)
+        Target vs Achievement — ${moLabel} (${results.length} units)
       </div>
       <div style="overflow-x:auto">
         <table>
           <thead><tr>
-            <th>Executive</th>
-            <th>Supply Growth</th>
+            <th>Branch / Unit</th>
+            <th>Supply Copies</th>
             <th>Collection</th>
             <th>Agency Visits</th>
-            <th>Attendance</th>
-            <th class="r" style="width:50px">Score</th>
-            <th>${isCurrent?'Progress':''}</th>
+            <th>Man-Days</th>
+            <th style="width:54px;text-align:center">Score</th>
+            <th>${isCurrent ? 'Pace' : ''}</th>
             <th></th>
           </tr></thead>
           <tbody>
-            ${results.length ? results.map((r,i)=>execRow(r,i)).join('') :
-              '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--muted)">No data for this period</td></tr>'}
+            ${results.length
+              ? results.map((r, i) => unitRow(r, i)).join('')
+              : '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--muted)">No data. Select a state above.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -7256,7 +7323,7 @@ function etAchievementTab() {
 
 VIEWS.exec_targets = () => {
   const st = etState();
-  return pagehead('Monthly Targets', 'Set and track monthly targets per executive · supply growth · collection · visits · attendance') +
+  return pagehead('Monthly Targets', 'State → branch level targets · supply copies · collection · visits · man-days') +
     etFilterBar() +
     (st.tab === 'achievement' ? etAchievementTab() : etEntryTab());
 };
