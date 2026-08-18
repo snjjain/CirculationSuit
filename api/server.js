@@ -3787,8 +3787,9 @@ app.get('/api/collection/kpis', async (req, res) => {
       q(`SELECT payment_cat, -COALESCE(SUM(amount),0) amt FROM agency_collection WHERE is_valid=1 ${clause} GROUP BY payment_cat`, params),
       q(`SELECT MAX(coll_date) last_date, MIN(coll_date) first_date FROM agency_collection WHERE is_valid=1 ${clause}`, params),
     ]);
-    const cash    = (modes.rows.find(r=>r.payment_cat==='Cash')||{}).amt || 0;
-    const digital = modes.rows.filter(r=>r.payment_cat!=='Cash').reduce((s,r)=>s+Number(r.amt||0),0);
+    const CASH_CATS = new Set(['EXECUTIVE CASH', 'Cash']);
+    const cash    = modes.rows.filter(r=>CASH_CATS.has(r.payment_cat)).reduce((s,r)=>s+Number(r.amt||0),0);
+    const digital = modes.rows.filter(r=>!CASH_CATS.has(r.payment_cat)).reduce((s,r)=>s+Number(r.amt||0),0);
     res.json({
       total_collection:   Number(total.rows[0].tot),
       total_txn:          Number(total.rows[0].txn),
