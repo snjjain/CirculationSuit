@@ -16,6 +16,25 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
   const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 
+  // Cache the DISTINCT agcd set from supply_data (8M+ rows, ~60s cold scan).
+  // Valid for 30 min — active-agency membership changes slowly.
+  let _activeAgcdCache = null;
+  let _activeAgcdAt    = 0;
+  async function getActiveAgcds() {
+    const AGE = 30 * 60 * 1000; // 30 minutes
+    if (_activeAgcdCache && Date.now() - _activeAgcdAt < AGE) return _activeAgcdCache;
+    const { rows } = await q(
+      "SELECT DISTINCT agcd FROM supply_data WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY) AND sup_copy > 0"
+    );
+    _activeAgcdCache = new Set(rows.map(r => r.agcd));
+    _activeAgcdAt    = Date.now();
+    return _activeAgcdCache;
+  }
+
+  // Warm up the active-agency cache immediately on module load (background).
+  // This means the first API request finds the cache ready instead of waiting 60s.
+  setTimeout(() => getActiveAgcds().catch(() => {}), 500);
+
   // Separate query to get unit_code → unit_name (avoids cross-table collation JOIN issues)
   async function getUnitNameMap() {
     const { rows } = await q('SELECT unit_code, unit_name FROM pub_unit_master');
@@ -165,27 +184,25 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const execWith = Math.min(execTotal, (execWithRows[0]?.cnt || 0) + (execWithRows[1]?.cnt || 0));
 
       // ─ Agencies coverage ─
-      // Agency breakdown — use supply_data (last 60 days) to determine active supply;
-      // exclude agencies with no current supply AND no outstanding (purely dormant records)
+      // Use cached active-agency set (avoids 60s supply_data full-scan on every request).
+      // agency_master and agency_outstanding are queried separately; counts computed in JS.
       const amSc = sc.replace(/AND unit_code/g, 'AND am.unit').replace(/unit_code IN/g, 'am.unit IN');
-      const { rows: agTotalRows } = await q(
-        `SELECT
-           COUNT(*) AS total,
-           SUM(CASE WHEN hs.agcd IS NOT NULL THEN 1 ELSE 0 END) AS active,
-           SUM(CASE WHEN hs.agcd IS NULL     THEN 1 ELSE 0 END) AS closed,
-           SUM(CASE WHEN hs.agcd IS NOT NULL AND COALESCE(ao.cl_amt,0) > 0 THEN 1 ELSE 0 END) AS active_with_os,
-           SUM(CASE WHEN hs.agcd IS NULL     AND COALESCE(ao.cl_amt,0) > 0 THEN 1 ELSE 0 END) AS closed_with_os
-         FROM agency_master am
-         LEFT JOIN (
-           SELECT DISTINCT agcd
-           FROM supply_data
-           WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY) AND sup_copy > 0
-         ) hs ON hs.agcd = am.agcd
-         LEFT JOIN agency_outstanding ao ON ao.ag_code = am.agcd AND ao.period_label = 'CURRENT'
-         WHERE (hs.agcd IS NOT NULL OR COALESCE(ao.cl_amt, 0) > 0)${amSc}`,
-        sp
-      );
-      const agRow = agTotalRows[0] || {};
+      const activeAgcds = await getActiveAgcds();
+      const [{ rows: amIdRows }, { rows: osRows }] = await Promise.all([
+        q(`SELECT agcd FROM agency_master am WHERE 1=1${amSc}`, sp),
+        q(`SELECT ag_code, MAX(cl_amt) AS cl_amt FROM agency_outstanding WHERE period_label='CURRENT' GROUP BY ag_code`),
+      ]);
+      const osMap = new Map(osRows.map(r => [String(r.ag_code), Number(r.cl_amt) || 0]));
+      let _total=0, _active=0, _closed=0, _activeOs=0, _closedOs=0;
+      for (const { agcd } of amIdRows) {
+        const isAct = activeAgcds.has(String(agcd));
+        const os    = osMap.get(String(agcd)) || 0;
+        if (!isAct && !os) continue;
+        _total++;
+        if (isAct) { _active++; if (os) _activeOs++; }
+        else        { _closed++; if (os) _closedOs++; }
+      }
+      const agRow = { total: _total, active: _active, closed: _closed, active_with_os: _activeOs, closed_with_os: _closedOs };
       const agVisited = Number(av.uniq_agencies || 0);
       const agActive  = Number(agRow.active || 0);
 
@@ -815,21 +832,21 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
         notInParams = visitedAgcds;
       }
 
+      // Use cached active-agency set instead of slow supply_data subquery
+      const activeAgcdsUv = await getActiveAgcds();
+      const activeListUv  = [...activeAgcdsUv];
+      const uvPh = activeListUv.length ? activeListUv.map(() => '?').join(',') : "'__none__'";
       const { rows: agencies } = await q(
         `SELECT am.agcd, am.ag_name, am.unit AS unit_code, am.unit_name,
                 am.city_name AS city, am.dist_name AS district,
                 am.ag_class_name AS ag_class, am.executive_name AS assigned_exec,
                 ao.cl_amt AS outstanding
          FROM agency_master am
-         JOIN (
-           SELECT DISTINCT agcd FROM supply_data
-           WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY) AND sup_copy > 0
-         ) hs ON hs.agcd = am.agcd
          LEFT JOIN agency_outstanding ao ON ao.ag_code = am.agcd AND ao.period_label = 'CURRENT'
-         WHERE 1=1 ${amWhere} ${notInClause}
+         WHERE am.agcd IN (${uvPh}) ${amWhere} ${notInClause}
          ORDER BY COALESCE(ao.cl_amt,0) DESC, am.unit, am.ag_name
          LIMIT 500`,
-        [...sp, ...notInParams]
+        [...activeListUv, ...sp, ...notInParams]
       );
 
       res.json({ period: { from, to }, count: agencies.length, agencies });
