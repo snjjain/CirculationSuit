@@ -533,4 +533,392 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
+
+  // ══ SUPPLY GROWTH (current period vs equivalent previous period) ══════════════
+  app.get('/api/exec-perf/growth', async (req, res) => {
+    try {
+      const { from, to } = parseDates(req.query);
+      const unitList = await buildUnitList(req);
+
+      // Previous period = same number of days, immediately before
+      const fromD = new Date(from + 'T00:00:00');
+      const toD   = new Date(to   + 'T00:00:00');
+      const diffMs   = toD - fromD;
+      const prevToD  = new Date(fromD.getTime() - 86400000); // day before from
+      const prevFromD= new Date(prevToD.getTime() - diffMs);
+      const prevFrom = prevFromD.toISOString().slice(0, 10);
+      const prevTo   = prevToD.toISOString().slice(0, 10);
+
+      const amCl  = unitCl('am.unit', unitList);
+      const subCl = unitCl('unit',    unitList);
+
+      const [currR, prevR] = await Promise.all([
+        q(`SELECT am.executive_code,
+                  SUM(CASE WHEN sd.sup_type_code='A' THEN sd.sup_copy ELSE 0 END) agent_sale,
+                  SUM(CASE WHEN sd.sup_type_code='C' THEN sd.sup_copy ELSE 0 END) cash_sale,
+                  SUM(sd.sup_copy) total_supply
+           FROM supply_data sd
+           JOIN (SELECT DISTINCT unit, agcd, executive_code FROM agency_master
+                 WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}) am
+             ON sd.unit_code=am.unit AND sd.agcd=am.agcd
+           WHERE sd.supply_date BETWEEN ? AND ?
+           GROUP BY am.executive_code`, [...subCl.p, from, to]),
+
+        q(`SELECT am.executive_code, SUM(sd.sup_copy) total_supply
+           FROM supply_data sd
+           JOIN (SELECT DISTINCT unit, agcd, executive_code FROM agency_master
+                 WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}) am
+             ON sd.unit_code=am.unit AND sd.agcd=am.agcd
+           WHERE sd.supply_date BETWEEN ? AND ?
+           GROUP BY am.executive_code`, [...subCl.p, prevFrom, prevTo]),
+      ]);
+
+      const prevMap = {};
+      for (const r of prevR.rows) prevMap[r.executive_code] = N(r.total_supply);
+
+      let totalCurr = 0, totalPrev = 0, agentCurr = 0, cashCurr = 0;
+      const byExec = currR.rows.map(r => {
+        const curr = N(r.total_supply), prev = prevMap[r.executive_code] || 0;
+        const diff = curr - prev;
+        const pct  = prev > 0 ? R1(diff / prev * 100) : null;
+        totalCurr += curr; totalPrev += prevMap[r.executive_code] || 0;
+        agentCurr += N(r.agent_sale); cashCurr += N(r.cash_sale);
+        return { executive_code: r.executive_code, curr, prev, diff, pct };
+      });
+
+      const totalDiff = totalCurr - totalPrev;
+      const totalPct  = totalPrev > 0 ? R1(totalDiff / totalPrev * 100) : null;
+
+      res.json({
+        from, to, prev_from: prevFrom, prev_to: prevTo,
+        total_curr: totalCurr, total_prev: totalPrev,
+        total_diff: totalDiff, total_pct: totalPct,
+        agent_curr: agentCurr, cash_curr: cashCurr,
+        by_exec: byExec,
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ══ DCR SUMMARY (visits + attendance per exec) ════════════════════════════════
+  app.get('/api/exec-perf/dcr', async (req, res) => {
+    try {
+      const { from, to } = parseDates(req.query);
+      const unitList = await buildUnitList(req);
+      const ucd = unitCl('unit_code', unitList);
+      const today = new Date().toISOString().slice(0, 10);
+
+      const [visitsR, attendR, todayVisitR] = await Promise.all([
+        q(`SELECT emp_code, COUNT(*) visits, COUNT(DISTINCT mark_attn_date) active_days,
+                  COUNT(DISTINCT visit_to_main_code) agencies_visited
+           FROM dcr_agency_visit
+           WHERE mark_attn_date BETWEEN ? AND ?
+             AND emp_code IS NOT NULL AND emp_code != ''${ucd.cl}
+           GROUP BY emp_code`, [from, to, ...ucd.p]),
+
+        q(`SELECT emp_code, COUNT(DISTINCT attn_date) attn_days,
+                  MIN(TIME(created_dt)) first_time, MAX(TIME(created_dt)) last_time
+           FROM dcr_center_attendance
+           WHERE attn_date BETWEEN ? AND ?
+             AND emp_code IS NOT NULL AND emp_code != ''${ucd.cl}
+           GROUP BY emp_code`, [from, to, ...ucd.p]),
+
+        // Who has ANY DCR record today
+        q(`SELECT DISTINCT emp_code FROM dcr_agency_visit
+           WHERE mark_attn_date = ? AND emp_code IS NOT NULL${ucd.cl}
+           UNION
+           SELECT DISTINCT emp_code FROM dcr_center_attendance
+           WHERE attn_date = ? AND emp_code IS NOT NULL${ucd.cl}`,
+          [today, ...ucd.p, today, ...ucd.p]),
+      ]);
+
+      const attendMap = {};
+      for (const r of attendR.rows) attendMap[r.emp_code] = r;
+
+      const activeToday = new Set(todayVisitR.rows.map(r => r.emp_code));
+
+      const byExec = visitsR.rows.map(r => {
+        const att = attendMap[r.emp_code] || {};
+        return {
+          emp_code:         r.emp_code,
+          visits:           N(r.visits),
+          active_days:      N(r.active_days),
+          agencies_visited: N(r.agencies_visited),
+          attn_days:        N(att.attn_days),
+          active_today:     activeToday.has(r.emp_code),
+        };
+      });
+
+      // Aggregate
+      const totalVisits    = byExec.reduce((s, r) => s + r.visits, 0);
+      const totalActiveExec= byExec.filter(r => r.visits > 0).length;
+
+      res.json({
+        from, to, today,
+        total_visits:     totalVisits,
+        execs_active:     totalActiveExec,
+        execs_active_today: activeToday.size,
+        by_exec: byExec,
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ══ LAST VISIT ANALYSIS ══════════════════════════════════════════════════════
+  // Queries agency_master and dcr_agency_visit SEPARATELY then merges in JS
+  // (avoids utf8mb4_unicode_ci vs utf8mb4_0900_ai_ci cross-table JOIN error)
+  async function buildLastVisitData(unitList) {
+    const amCl  = unitCl('unit',      unitList);  // agency_master: plain 'unit' column
+    const ucdCl = unitCl('unit_code', unitList);  // dcr tables: 'unit_code' column
+
+    const [agenciesR, visitsR] = await Promise.all([
+      q(`SELECT DISTINCT agcd, unit, ag_name, unit_name, dist_name, city_name, executive_code, executive_name
+         FROM agency_master
+         WHERE executive_code IS NOT NULL AND executive_code != ''${amCl.cl}
+           AND (supply_stop_flag IS NULL OR supply_stop_flag != 'Y')
+           AND suspend_date IS NULL`, amCl.p),
+
+      // Last visit per (unit_code, visit_to_main_code) from dcr_agency_visit only
+      q(`SELECT unit_code, visit_to_main_code, MAX(mark_attn_date) last_visit
+         FROM dcr_agency_visit
+         WHERE visit_to_main_code IS NOT NULL AND visit_to_main_code != ''${ucdCl.cl}
+         GROUP BY unit_code, visit_to_main_code`, ucdCl.p),
+    ]);
+
+    // Build visit map: key = unit_code + '|' + agcd
+    const visitMap = new Map();
+    for (const r of visitsR.rows) {
+      visitMap.set(`${r.unit_code}|${r.visit_to_main_code}`, r.last_visit);
+    }
+
+    return { agencies: agenciesR.rows, visitMap };
+  }
+
+  app.get('/api/exec-perf/last-visit', async (req, res) => {
+    try {
+      const unitList = await buildUnitList(req);
+      const today    = new Date().toISOString().slice(0, 10);
+      const now      = new Date(today);
+      const daysDiff = d => d ? Math.floor((now - new Date(d)) / 86400000) : null;
+
+      const { agencies, visitMap } = await buildLastVisitData(unitList);
+
+      const buckets = { today: 0, d1_3: 0, d4_7: 0, d8_15: 0, d15plus: 0, never: 0 };
+      for (const r of agencies) {
+        const lv = visitMap.get(`${r.unit}|${r.agcd}`) || null;
+        const d  = daysDiff(lv);
+        if (d === null) buckets.never++;
+        else if (d === 0) buckets.today++;
+        else if (d <= 3)  buckets.d1_3++;
+        else if (d <= 7)  buckets.d4_7++;
+        else if (d <= 15) buckets.d8_15++;
+        else              buckets.d15plus++;
+      }
+
+      res.json({ today, total: agencies.length, buckets });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // GET /api/exec-perf/last-visit/agencies?bucket=today|d1_3|d4_7|d8_15|d15plus|never
+  app.get('/api/exec-perf/last-visit/agencies', async (req, res) => {
+    try {
+      const bucket   = String(req.query.bucket || 'never');
+      const unitList = await buildUnitList(req);
+      const today    = new Date().toISOString().slice(0, 10);
+      const now      = new Date(today);
+      const daysDiff = d => d ? Math.floor((now - new Date(d)) / 86400000) : null;
+
+      const { agencies, visitMap } = await buildLastVisitData(unitList);
+
+      const inBucket = d => {
+        if (bucket === 'never')   return d === null;
+        if (bucket === 'today')   return d === 0;
+        if (bucket === 'd1_3')    return d >= 1  && d <= 3;
+        if (bucket === 'd4_7')    return d >= 4  && d <= 7;
+        if (bucket === 'd8_15')   return d >= 8  && d <= 15;
+        if (bucket === 'd15plus') return d > 15;
+        return false;
+      };
+
+      const filtered = agencies
+        .map(r => ({ ...r, last_visit: visitMap.get(`${r.unit}|${r.agcd}`) || null, days_since: daysDiff(visitMap.get(`${r.unit}|${r.agcd}`) || null) }))
+        .filter(r => inBucket(r.days_since))
+        .sort((a, b) => (b.days_since || 9999) - (a.days_since || 9999))
+        .slice(0, 200);
+
+      res.json({ bucket, count: filtered.length, agencies: filtered });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ══ SMART ALERTS ══════════════════════════════════════════════════════════════
+  app.get('/api/exec-perf/alerts', async (req, res) => {
+    try {
+      const { from, to } = parseDates(req.query);
+      const unitList = await buildUnitList(req);
+      const amCl     = unitCl('am.unit',      unitList);
+      const subCl    = unitCl('unit',          unitList);
+      const ucd      = unitCl('unit_code',     unitList);
+      const today    = new Date().toISOString().slice(0, 10);
+
+      const cutoff15 = new Date();
+      cutoff15.setDate(cutoff15.getDate() - 15);
+      const dt15 = cutoff15.toISOString().slice(0, 10);
+
+      const [
+        allExecsR, activeTodayR,
+        osHighR, supplyFallR,
+      ] = await Promise.all([
+        // All active executives in scope
+        q(`SELECT DISTINCT am.executive_code, MAX(am.executive_name) exec_name, MIN(am.unit) unit_code
+           FROM agency_master am
+           LEFT JOIN exec_master em ON em.executive_code=am.executive_code
+           WHERE am.executive_code IS NOT NULL AND am.executive_code != ''${amCl.cl}
+             AND (em.executive_code IS NULL OR (em.is_active_pli='Y' AND em.exec_designation='EXEC'))
+           GROUP BY am.executive_code`, amCl.p),
+
+        // Execs active today (any DCR record)
+        q(`SELECT DISTINCT emp_code FROM dcr_agency_visit
+           WHERE mark_attn_date=? AND emp_code IS NOT NULL${ucd.cl}
+           UNION SELECT DISTINCT emp_code FROM dcr_center_attendance
+           WHERE attn_date=? AND emp_code IS NOT NULL${ucd.cl}`,
+          [today, ...ucd.p, today, ...ucd.p]),
+
+        // Agencies with outstanding > 0 (at risk)
+        q(`SELECT COUNT(DISTINCT ao.ag_code) n
+           FROM agency_outstanding ao
+           JOIN agency_master am ON am.agcd=ao.ag_code AND am.unit=ao.unit_code
+           WHERE ao.period_label='CURRENT' AND ao.cl_amt > 0${amCl.cl}`, amCl.p),
+
+        // Execs with supply decline vs prev period
+        q(`SELECT COUNT(*) n FROM (
+             SELECT am.executive_code,
+                    SUM(CASE WHEN sd.supply_date BETWEEN ? AND ? THEN sd.sup_copy ELSE 0 END) curr,
+                    SUM(CASE WHEN sd.supply_date < ? THEN sd.sup_copy ELSE 0 END) prev
+             FROM supply_data sd
+             JOIN (SELECT DISTINCT unit, agcd, executive_code FROM agency_master
+                   WHERE executive_code IS NOT NULL${subCl.cl}) am
+               ON sd.unit_code=am.unit AND sd.agcd=am.agcd
+             WHERE sd.supply_date >= DATE_SUB(?, INTERVAL 60 DAY)
+             GROUP BY am.executive_code
+             HAVING prev > 0 AND curr < prev
+           ) t`, [from, to, from, from, ...subCl.p]),
+      ]);
+
+      // Visit data — queried separately to avoid cross-collation JOIN between agency_master and dcr_agency_visit
+      const { agencies, visitMap } = await buildLastVisitData(unitList);
+      let noVisit15Count = 0;
+      let neverVisitedCount = 0;
+      for (const ag of agencies) {
+        const lastVisit = visitMap.get(`${ag.unit}|${ag.agcd}`);
+        if (!lastVisit) {
+          neverVisitedCount++;
+        } else if (lastVisit <= dt15) {
+          noVisit15Count++;
+        }
+      }
+
+      const activeToday  = new Set(activeTodayR.rows.map(r => r.emp_code));
+      const totalExecs   = allExecsR.rows.length;
+      const inactiveToday= allExecsR.rows.filter(r => !activeToday.has(r.executive_code));
+
+      const alerts = [];
+
+      if (inactiveToday.length > 0) alerts.push({
+        key:     'no_visit_today',
+        type:    'danger',
+        icon:    '🔴',
+        message: `${inactiveToday.length} executive${inactiveToday.length > 1 ? 's' : ''} have no DCR activity today`,
+        count:   inactiveToday.length,
+        detail:  inactiveToday.map(r => ({ exec_code: r.executive_code, exec_name: r.exec_name, unit_code: r.unit_code })),
+      });
+
+      if (noVisit15Count > 0) alerts.push({
+        key: 'visit_pending_15d', type: 'warning', icon: '🟠',
+        message: `${noVisit15Count} agencies not visited in the last 15 days`,
+        count: noVisit15Count, detail: [],
+      });
+
+      if (neverVisitedCount > 0) alerts.push({
+        key: 'never_visited', type: 'danger', icon: '🔴',
+        message: `${neverVisitedCount} agencies have NEVER been visited`,
+        count: neverVisitedCount, detail: [],
+      });
+
+      const osHigh = N(osHighR.rows[0]?.n);
+      if (osHigh > 0) alerts.push({
+        key: 'os_outstanding', type: 'warning', icon: '🟠',
+        message: `${osHigh} agencies have outstanding balance`,
+        count: osHigh, detail: [],
+      });
+
+      const supplyFall = N(supplyFallR.rows[0]?.n);
+      if (supplyFall > 0) alerts.push({
+        key: 'supply_declining', type: 'warning', icon: '🟡',
+        message: `${supplyFall} executives have declining supply vs previous period`,
+        count: supplyFall, detail: [],
+      });
+
+      res.json({ total_execs: totalExecs, active_today: activeToday.size, today, alerts });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ══ EMAIL TO REPORTING CHAIN ══════════════════════════════════════════════════
+  app.post('/api/exec-perf/email', async (req, res) => {
+    try {
+      const { exec_code, to_roles = ['circ_incharge'], subject, message } = req.body || {};
+      if (!exec_code || !subject || !message)
+        return res.status(400).json({ detail: 'exec_code, subject and message required' });
+
+      // Get hierarchy
+      const { rows: hier } = await q(
+        `SELECT edtn_incharge, edtn_incharge_name, circ_incharge, circ_incharge_name,
+                zonal_head, zonal_head_name, vp_circulation, vp_circulation_name
+         FROM exec_hierarchy_mapping WHERE exec_code=? LIMIT 1`, [exec_code]);
+
+      const h = hier[0] || {};
+      const roleMap = {
+        edtn_incharge:  { code: h.edtn_incharge,   name: h.edtn_incharge_name   },
+        circ_incharge:  { code: h.circ_incharge,   name: h.circ_incharge_name   },
+        zonal_head:     { code: h.zonal_head,       name: h.zonal_head_name      },
+        vp_circulation: { code: h.vp_circulation,  name: h.vp_circulation_name  },
+      };
+
+      const recipientCodes = to_roles
+        .map(r => roleMap[r]?.code)
+        .filter(Boolean);
+
+      if (!recipientCodes.length)
+        return res.status(400).json({ detail: 'No hierarchy members found for selected roles' });
+
+      // Look up emails in app_users
+      const ph = recipientCodes.map(() => '?').join(',');
+      const { rows: emailRows } = await q(
+        `SELECT person_code, name, email FROM app_users
+         WHERE person_code IN (${ph}) AND email IS NOT NULL AND email != '' AND is_active=1`,
+        recipientCodes);
+
+      const emails = emailRows.map(r => r.email).filter(Boolean);
+      if (!emails.length)
+        return res.status(404).json({
+          detail: 'No email addresses found for selected hierarchy members. Please configure email in user management.',
+          recipients_checked: recipientCodes,
+        });
+
+      const SMTP_HOST = process.env.SMTP_HOST, SMTP_USER = process.env.SMTP_USER;
+      if (!SMTP_HOST || !SMTP_USER)
+        return res.status(503).json({ detail: 'SMTP not configured in .env' });
+
+      const nodemailer = require('nodemailer');
+      const port       = parseInt(process.env.SMTP_PORT || '587', 10);
+      const transporter = nodemailer.createTransport({
+        host: SMTP_HOST, port, secure: port === 465,
+        auth: { user: SMTP_USER, pass: process.env.SMTP_PASSWORD },
+      });
+      const from = `"${process.env.SMTP_FROM_NAME || 'Patrika Vitran'}" <${process.env.SMTP_FROM_EMAIL || SMTP_USER}>`;
+      const html = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;white-space:pre-wrap">${
+        String(message).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`;
+
+      await transporter.sendMail({ from, to: emails.join(','), subject, text: message, html });
+
+      res.json({ ok: true, sent_to: emails, recipients: emailRows.map(r => ({ code: r.person_code, name: r.name, email: r.email })) });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
 };

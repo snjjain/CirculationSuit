@@ -9,6 +9,7 @@ const DASH_MENU = [
   ["collections",   "Collections",             "₹"],
   ["outstanding",   "Agency Outstanding",      "💰"],
   ["exec_perf",     "Executive Performance",   "👤"],
+  ["exec_targets",  "Monthly Targets",         "🎯"],
   ["agency_rating", "Agency Rating Engine",    "⭐"],
   ["short_payment", "Short Payment",           "📋"],
   ["transport",     "Taxi Dashboard",          "🚕"],
@@ -6091,11 +6092,15 @@ VIEWS.outstanding = () => {
 
 // ── State ────────────────────────────────────────────────────────────────────
 const epState = () => S.live.ep || (S.live.ep = {
-  filters: { from: monthStartISO(), to: todayISO(), state: '', unit_code: '', metric: 'collection_pct', top_n: 10 },
+  filters: { from: monthStartISO(), to: todayISO(), state: '', unit_code: '', metric: 'collection_pct', top_n: 10, period: 'month' },
   filterOpts: null, kpis: null, ranking: null,
   list: null, listPage: 1, listSearch: '', listSort: 'collection_pct', listSortDir: 'desc', _listKey: '',
   drillExec: '', drillExecName: '', drillExecData: null,
   drillAgency: '', drillUnitCode: '', drillAgencyName: '', drillAgencyData: null,
+  growth: null, dcr: null, lastVisit: null, alerts: null,
+  alertBucket: '', alertBucketData: null, alertBucketLoading: false,
+  alertExpanded: '',
+  emailCompose: null, emailSending: false, emailResult: null,
   _loading: {}, _error: {},
 });
 
@@ -6140,12 +6145,33 @@ function epFetch(key, path, extra) {
 }
 
 function epClearCache() {
-  const f = epState().filters;
+  const f    = epState().filters;
   const opts = epState().filterOpts;
-  S.live.ep = null; epState();
-  S.live.ep.filters = f;
+  S.live.ep  = null; epState();
+  S.live.ep.filters    = f;
   S.live.ep.filterOpts = opts;
 }
+
+// Period shortcut helpers
+function epPeriodToday()  {
+  const t = todayISO();
+  return { from: t, to: t, period: 'today' };
+}
+function epPeriodWeek() {
+  const d = new Date();
+  const dow = d.getDay() || 7; // Mon=1..Sun=7
+  const mon = new Date(d); mon.setDate(d.getDate() - (dow - 1));
+  return { from: mon.toISOString().slice(0, 10), to: todayISO(), period: 'week' };
+}
+function epPeriodMonth()  { return { from: monthStartISO(), to: todayISO(), period: 'month' }; }
+
+window.epSetPeriod = preset => {
+  const st = epState();
+  const p  = preset === 'today' ? epPeriodToday() : preset === 'week' ? epPeriodWeek() : epPeriodMonth();
+  epClearCache();
+  S.live.ep.filters = { ...epState().filters, ...p };
+  render();
+};
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 const epFmtN = v => (!v && v !== 0) ? '—' : Number(v).toLocaleString('en-IN');
@@ -6256,16 +6282,25 @@ function epFilterPanel() {
     ${visibleUnits.map(u => `<option value="${esc(u.unit_code)}" ${f.unit_code === u.unit_code ? 'selected' : ''}>${esc(u.unit_name)}</option>`).join('')}
   </select>`;
 
+  const period = f.period || 'month';
+  const btnSt = p => `font-size:11.5px;padding:4px 10px;border-radius:20px;cursor:pointer;font-weight:600;border:1.5px solid ${period===p?'var(--chart-1)':'var(--brd2)'};background:${period===p?'var(--chart-1)':'transparent'};color:${period===p?'#fff':'var(--ink)'}`;
+
   return `<div class="card" style="padding:10px 14px;margin-bottom:12px">
-    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-      <span style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Period</span>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
+      <button style="${btnSt('today')}"  onclick="epSetPeriod('today')">Today</button>
+      <button style="${btnSt('week')}"   onclick="epSetPeriod('week')">This Week</button>
+      <button style="${btnSt('month')}"  onclick="epSetPeriod('month')">This Month</button>
+      <span style="color:var(--brd2);margin:0 2px">|</span>
+      <span style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Custom</span>
       <input id="ep-from" type="date" class="inp" value="${esc(f.from)}" style="font-size:12px;padding:5px 8px">
       <span style="color:var(--muted);font-size:12px">to</span>
       <input id="ep-to" type="date" class="inp" value="${esc(f.to)}" style="font-size:12px;padding:5px 8px">
-      ${selState}
-      ${selUnit}
       <button class="btn pri sm" onclick="epApplyFilters()">Apply</button>
       ${hasFilter ? `<button class="btn sm" onclick="epClearFilters()">✕ Clear</button>` : ''}
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      ${selState}
+      ${selUnit}
       <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span style="font-size:11px;color:var(--muted)">Rank by</span>
         <select class="inp" style="font-size:12px;padding:5px 6px" onchange="epSetMetric(this.value)">
@@ -6286,15 +6321,16 @@ function epFilterPanel() {
 // ── KPI grid ──────────────────────────────────────────────────────────────────
 function epKpiGrid() {
   const st = epState();
-  const f  = st.filters;
   epFetch('kpis', 'kpis');
   if (!st.kpis) return `<div style="height:80px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px">Loading KPIs…</div>`;
   const k = st.kpis;
   return `<div class="vz-kgrid" style="margin-bottom:16px">
     ${vzKpi({ icon: '👤', label: 'Executives',       value: epFmtN(k.exec_count),        status: 'info', sub: `${epFmtN(k.agency_count)} agencies` })}
     ${vzKpi({ icon: '📦', label: 'Supply (Copies)',  value: epFmtN(k.total_supply),       status: 'info', sub: `${esc(k.from)} – ${esc(k.to)}` })}
+    ${epGrowthCard()}
     ${vzKpi({ icon: '₹',  label: 'Collection',       value: epFmtC(k.total_collection),   status: 'good', sub: 'Period total' })}
     ${vzKpi({ icon: '⚠',  label: 'Outstanding',      value: epFmtC(k.total_outstanding),  status: 'bad',  sub: 'Current balance' })}
+    ${epDcrCard()}
   </div>`;
 }
 
@@ -6350,6 +6386,271 @@ function epRankingCards() {
     ${card(bottom, botTitle, botSub, botTC, metric === 'outstanding')}
   </div>
   <div style="font-size:11px;color:var(--muted);margin-bottom:14px;text-align:right">${total} executives ranked · min supply filter: ${f.top_n > 0 ? 'off' : 'on'}</div>`;
+}
+
+// ── Growth card ───────────────────────────────────────────────────────────────
+function epGrowthCard() {
+  const st = epState();
+  const f  = st.filters;
+  if (!st.growth && !st._loading.growth) {
+    st._loading = st._loading || {};
+    st._loading.growth = true;
+    api.get(epApi('growth') + epQS())
+      .then(d => { epSnapshotFilters(); st.growth = d; st._loading.growth = false; if (S.screen === 'exec_perf') render(); })
+      .catch(() => { st._loading.growth = false; });
+  }
+  if (!st.growth) return `<div style="height:70px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px">Loading growth…</div>`;
+  const g = st.growth;
+  const pctColor = (v) => v > 0 ? 'var(--grn)' : v < 0 ? 'var(--red)' : 'var(--muted)';
+  const arrow = v => v > 0 ? '↑' : v < 0 ? '↓' : '→';
+  return vzKpi({
+    icon: '📈',
+    label: 'Supply Growth',
+    value: g.total_pct != null ? `${g.total_pct > 0 ? '+' : ''}${g.total_pct}%` : '—',
+    status: g.total_pct > 0 ? 'good' : g.total_pct < 0 ? 'bad' : 'info',
+    sub: `${arrow(g.total_diff)} ${Math.abs(g.total_diff || 0).toLocaleString('en-IN')} copies vs prev period`,
+  });
+}
+
+// ── DCR summary card ──────────────────────────────────────────────────────────
+function epDcrCard() {
+  const st = epState();
+  if (!st.dcr && !st._loading.dcr) {
+    st._loading = st._loading || {};
+    st._loading.dcr = true;
+    api.get(epApi('dcr') + epQS())
+      .then(d => { epSnapshotFilters(); st.dcr = d; st._loading.dcr = false; if (S.screen === 'exec_perf') render(); })
+      .catch(() => { st._loading.dcr = false; });
+  }
+  if (!st.dcr) return `<div style="height:70px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px">Loading DCR…</div>`;
+  const d = st.dcr;
+  return vzKpi({
+    icon: '📍',
+    label: 'DCR Visits',
+    value: epFmtN(d.total_visits),
+    status: d.total_visits > 0 ? 'good' : 'warn',
+    sub: `${d.execs_active} execs active · ${d.execs_active_today} active today`,
+  });
+}
+
+// ── Smart Alerts panel ────────────────────────────────────────────────────────
+window.epAlertBucket = (bucket) => {
+  const st = epState();
+  if (st.alertBucket === bucket && st.alertBucketData) {
+    st.alertBucket = ''; st.alertBucketData = null;
+  } else {
+    st.alertBucket = bucket; st.alertBucketData = null; st.alertBucketLoading = true;
+    api.get(epApi('last-visit/agencies') + epQS({ bucket }))
+      .then(d => { const s2 = epState(); s2.alertBucketData = d; s2.alertBucketLoading = false; if (S.screen === 'exec_perf') render(); })
+      .catch(() => { epState().alertBucketLoading = false; });
+  }
+  render();
+};
+
+window.epAlertDrillExec = (code) => epDrillExec(code, code);
+
+function epAlertsSection() {
+  const st = epState();
+  if (!st.alerts && !st._loading.alerts) {
+    st._loading = st._loading || {};
+    st._loading.alerts = true;
+    api.get(epApi('alerts') + epQS())
+      .then(d => { epSnapshotFilters(); st.alerts = d; st._loading.alerts = false; if (S.screen === 'exec_perf') render(); })
+      .catch(() => { st._loading.alerts = false; });
+  }
+  if (!st.alerts) return '';
+  const { alerts = [], active_today, total_execs } = st.alerts;
+  if (!alerts.length && active_today === total_execs) return '';
+
+  const alertRow = a => {
+    const hasDetail = a.key === 'no_visit_today' && a.detail?.length > 0;
+    return `<div style="padding:8px 12px;border-bottom:1px solid var(--brd2)">
+      <div style="display:flex;align-items:center;gap:8px;cursor:${hasDetail ? 'pointer' : 'default'}"
+           ${hasDetail ? `onclick="epState().alertExpanded='${a.key}'===epState().alertExpanded?'':('${a.key}');render()"` : ''}>
+        <span>${a.icon}</span>
+        <span style="flex:1;font-size:13px">${esc(a.message)}</span>
+        ${hasDetail ? `<span style="font-size:11px;color:var(--chart-1)">${st.alertExpanded===a.key?'▲':'▼'}</span>` : ''}
+      </div>
+      ${hasDetail && st.alertExpanded === a.key ? `<div style="margin-top:6px;padding:6px 0">
+        ${a.detail.slice(0, 20).map(e => `<span onclick="epAlertDrillExec('${esc(e.exec_code)}')" class="chip warn" style="cursor:pointer;margin:2px;font-size:11px">${esc(e.exec_name||e.exec_code)}</span>`).join('')}
+        ${a.detail.length > 20 ? `<span style="font-size:11px;color:var(--muted)">+${a.detail.length-20} more</span>` : ''}
+      </div>` : ''}
+    </div>`;
+  };
+
+  return `<div class="card" style="overflow:hidden;margin-bottom:12px">
+    <div style="padding:10px 14px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-weight:700;font-size:13px">⚡ Management Attention Required</div>
+        <div style="font-size:10.5px;color:var(--muted)">Team active today: ${active_today || 0} / ${total_execs || 0} executives</div>
+      </div>
+    </div>
+    ${alerts.length ? alerts.map(alertRow).join('') : `<div style="padding:12px 14px;font-size:12px;color:var(--grn)">✅ No critical alerts for this period</div>`}
+  </div>`;
+}
+
+// ── Last Visit Analysis section ───────────────────────────────────────────────
+function epLastVisitSection() {
+  const st = epState();
+  if (!st.lastVisit && !st._loading.lastVisit) {
+    st._loading = st._loading || {};
+    st._loading.lastVisit = true;
+    api.get(epApi('last-visit') + epQS())
+      .then(d => { epSnapshotFilters(); st.lastVisit = d; st._loading.lastVisit = false; if (S.screen === 'exec_perf') render(); })
+      .catch(() => { st._loading.lastVisit = false; });
+  }
+  if (!st.lastVisit) return '';
+  const { buckets = {}, total = 0 } = st.lastVisit;
+  if (!total) return '';
+
+  const BUCKET_CFG = [
+    { key: 'today',   label: 'Today',       color: '#22c55e', icon: '🟢' },
+    { key: 'd1_3',   label: '1–3 Days',     color: '#86efac', icon: '🟢' },
+    { key: 'd4_7',   label: '4–7 Days',     color: '#fbbf24', icon: '🟡' },
+    { key: 'd8_15',  label: '8–15 Days',    color: '#f97316', icon: '🟠' },
+    { key: 'd15plus',label: '>15 Days',      color: '#ef4444', icon: '🔴' },
+    { key: 'never',  label: 'Never Visited', color: '#7f1d1d', icon: '🔴' },
+  ];
+
+  const barRow = b => {
+    const count = buckets[b.key] || 0;
+    const pct   = total > 0 ? Math.round(count / total * 100) : 0;
+    const active= st.alertBucket === b.key;
+    return `<div style="cursor:pointer;padding:6px 12px;border-bottom:1px solid var(--brd2);background:${active?'var(--surface-2)':'transparent'}"
+         onclick="epAlertBucket('${b.key}')">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+        <span style="width:60px;font-size:11.5px;font-weight:600">${b.icon} ${esc(b.label)}</span>
+        <div style="flex:1;height:8px;background:var(--brd2);border-radius:4px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${b.color};border-radius:4px;transition:width .3s"></div>
+        </div>
+        <span style="width:54px;text-align:right;font-size:12px;font-weight:700">${count.toLocaleString('en-IN')}</span>
+        <span style="width:32px;text-align:right;font-size:10.5px;color:var(--muted)">${pct}%</span>
+      </div>
+    </div>`;
+  };
+
+  const bucketAgencies = st.alertBucketData?.agencies || [];
+  const bucketLoading  = st.alertBucketLoading;
+
+  return `<div class="card" style="overflow:hidden;margin-bottom:12px">
+    <div style="padding:10px 14px;border-bottom:1px solid var(--brd2)">
+      <div style="font-weight:700;font-size:13px">🗓 Agency Last Visit Analysis</div>
+      <div style="font-size:10.5px;color:var(--muted)">${total.toLocaleString('en-IN')} active agencies · click a bucket to see agency list</div>
+    </div>
+    ${BUCKET_CFG.map(barRow).join('')}
+    ${st.alertBucket && (bucketLoading || bucketAgencies.length > 0) ? `
+    <div style="padding:10px 14px;border-top:1px solid var(--brd2)">
+      ${bucketLoading ? `<div style="font-size:12px;color:var(--muted)">Loading agencies…</div>` : `
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">
+        ${BUCKET_CFG.find(b=>b.key===st.alertBucket)?.label||''} — ${bucketAgencies.length} agencies</div>
+      <div style="overflow-x:auto"><table><thead><tr>
+        <th>Agency</th><th>Unit</th><th>District</th><th>Executive</th><th class="r">Last Visit</th>
+      </tr></thead><tbody>
+        ${bucketAgencies.slice(0,50).map((a,i) => `<tr style="${i%2?'background:var(--surface-2)':''}">
+          <td><div style="font-weight:600;font-size:12px">${esc(a.ag_name||'—')}</div><div style="font-size:10px;color:var(--muted)">${esc(a.agcd)}</div></td>
+          <td style="font-size:11.5px;color:var(--muted)">${esc(a.unit_name||'—')}</td>
+          <td style="font-size:11.5px;color:var(--muted)">${esc(a.dist_name||a.city_name||'—')}</td>
+          <td><span onclick="epDrillExec('${esc(a.executive_code||'')}','${esc(a.executive_name||'')}')" style="cursor:pointer;color:var(--chart-1);font-size:12px">${esc(a.executive_name||'—')}</span></td>
+          <td class="r" style="font-size:11.5px">${a.last_visit ? esc(a.last_visit) + (a.days_since ? ` <small style="color:var(--muted)">(${a.days_since}d)</small>` : '') : '<span style="color:var(--red);font-weight:600">Never</span>'}</td>
+        </tr>`).join('')}
+        ${bucketAgencies.length > 50 ? `<tr><td colspan="5" style="text-align:center;padding:8px;color:var(--muted);font-size:11px">+${bucketAgencies.length-50} more</td></tr>` : ''}
+      </tbody></table></div>`}
+    </div>` : ''}
+  </div>`;
+}
+
+// ── Email compose modal ───────────────────────────────────────────────────────
+window.epOpenEmailFromDetail = () => {
+  const st = epState();
+  const d  = st.drillExecData;
+  if (!d) return;
+  const exec = d.exec || {};
+  st.emailCompose = {
+    execCode: exec.executive_code, execName: exec.exec_name || exec.executive_code,
+    hier: { edtn_incharge_name: exec.edtn_incharge_name||null, circ_incharge_name: exec.circ_incharge_name||null, zonal_head_name: exec.zonal_head_name||null, vp_circulation_name: exec.vp_circulation_name||null },
+    roles: ['circ_incharge'], subject: '', message: '',
+  };
+  st.emailResult = null;
+  render();
+};
+window.epOpenEmail = (execCode, execName, hier) => {
+  epState().emailCompose = { execCode, execName, hier, roles: ['circ_incharge'], subject: '', message: '' };
+  epState().emailResult  = null;
+  render();
+};
+window.epEmailRoleToggle = role => {
+  const ec = epState().emailCompose;
+  if (!ec) return;
+  const idx = ec.roles.indexOf(role);
+  if (idx >= 0) ec.roles.splice(idx, 1); else ec.roles.push(role);
+  render();
+};
+window.epSendEmail = async () => {
+  const st = epState();
+  const ec = st.emailCompose;
+  if (!ec || !ec.subject || !ec.message) { alert('Please fill subject and message'); return; }
+  st.emailSending = true; render();
+  try {
+    const r = await api.post('/api/exec-perf/email', { exec_code: ec.execCode, to_roles: ec.roles, subject: ec.subject, message: ec.message });
+    st.emailResult = r; st.emailSending = false; render();
+  } catch (e) { st.emailSending = false; st.emailResult = { error: String(e) }; render(); }
+};
+window.epCloseEmail = () => { epState().emailCompose = null; epState().emailResult = null; render(); };
+
+function epEmailModal() {
+  const st = epState();
+  const ec = st.emailCompose;
+  if (!ec) return '';
+
+  const ROLES = [
+    { key: 'edtn_incharge',  label: 'Edition Incharge',   name: ec.hier?.edtn_incharge_name  },
+    { key: 'circ_incharge',  label: 'Circ Incharge',      name: ec.hier?.circ_incharge_name  },
+    { key: 'zonal_head',     label: 'Zonal Head',          name: ec.hier?.zonal_head_name     },
+    { key: 'vp_circulation', label: 'VP Circulation',     name: ec.hier?.vp_circulation_name },
+  ].filter(r => r.name);
+
+  const result = st.emailResult;
+  const sending= st.emailSending;
+
+  return `<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)epCloseEmail()">
+    <div class="card" style="width:100%;max-width:540px;padding:20px;max-height:90vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
+        <div>
+          <div style="font-weight:800;font-size:16px">📧 Send Performance Alert</div>
+          <div style="font-size:12px;color:var(--muted)">Executive: ${esc(ec.execName)}</div>
+        </div>
+        <button class="btn sm" onclick="epCloseEmail()" style="flex-shrink:0">✕ Close</button>
+      </div>
+      ${result ? (result.error
+        ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;font-size:13px;color:#b91c1c;margin-bottom:12px">❌ ${esc(result.error || result.detail || 'Send failed')}</div>`
+        : `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;font-size:13px;color:#166534;margin-bottom:12px">✅ Email sent to: ${(result.sent_to||[]).join(', ')}</div>`) : ''}
+      ${ROLES.length ? `<div style="margin-bottom:12px">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Send To</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${ROLES.map(r => `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12.5px">
+            <input type="checkbox" ${ec.roles.includes(r.key)?'checked':''} onchange="epEmailRoleToggle('${r.key}')">
+            ${esc(r.label)}${r.name ? ` — <span style="color:var(--muted)">${esc(r.name)}</span>` : ''}
+          </label>`).join('')}
+        </div>
+      </div>` : `<div style="color:var(--red);font-size:12px;margin-bottom:12px">⚠ Hierarchy not found for this executive</div>`}
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Subject</div>
+        <input class="inp" style="width:100%;box-sizing:border-box" placeholder="Subject…"
+          value="${esc(ec.subject)}" oninput="epState().emailCompose.subject=this.value">
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Message</div>
+        <textarea class="inp" style="width:100%;box-sizing:border-box;height:120px;resize:vertical" placeholder="Message…"
+          oninput="epState().emailCompose.message=this.value">${esc(ec.message)}</textarea>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn pri" onclick="epSendEmail()" ${sending?'disabled':''} style="flex:1">
+          ${sending ? '⏳ Sending…' : '📨 Send Email'}
+        </button>
+        <button class="btn" onclick="epCloseEmail()">Cancel</button>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ── Full executive table ───────────────────────────────────────────────────────
@@ -6439,8 +6740,10 @@ function epExecTable() {
 
 // ── Main (list) view ──────────────────────────────────────────────────────────
 function epMainView() {
+  const st = epState();
   return pagehead('Executive Performance', 'Supply · Collection · Outstanding by executive · click any row to drill down') +
-    epFilterPanel() + epKpiGrid() + epRankingCards() + epExecTable();
+    epFilterPanel() + epKpiGrid() + epAlertsSection() + epLastVisitSection() + epRankingCards() + epExecTable() +
+    epEmailModal();
 }
 
 // ── Executive detail view ─────────────────────────────────────────────────────
@@ -6468,6 +6771,10 @@ function epExecDetailView() {
     ['VP Circulation',    exec.vp_circulation_name,  exec.vp_circulation],
   ].filter(([, name]) => name);
 
+  // DCR data for this exec from the preloaded dcr state (if available)
+  const dcrState = epState().dcr;
+  const dcrExec  = dcrState?.by_exec?.find(r => r.emp_code === exec.executive_code);
+
   const execInfoCard = `<div class="card" style="padding:14px 16px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
     <div style="flex:1;min-width:180px">
       <div style="font-size:17px;font-weight:800;margin-bottom:2px">${esc(exec.exec_name || exec.executive_code)}</div>
@@ -6481,6 +6788,17 @@ function epExecDetailView() {
             <span style="font-size:12.5px;font-weight:600">${esc(name)}</span>
           </div>`).join('')}
       </div>` : ''}
+      ${dcrExec ? `<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:12px">
+        <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Agency Visits</div><div style="font-size:15px;font-weight:700;color:var(--chart-1)">${dcrExec.visits}</div></div>
+        <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Agencies Covered</div><div style="font-size:15px;font-weight:700">${dcrExec.agencies_visited}</div></div>
+        <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Active Days</div><div style="font-size:15px;font-weight:700">${dcrExec.active_days}</div></div>
+        <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Today</div>
+          <div style="font-size:13px;font-weight:700;color:${dcrExec.active_today?'var(--grn)':'var(--red)'}">
+            ${dcrExec.active_today?'✅ Active':'❌ No Activity'}</div></div>
+      </div>` : ''}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+      ${chain.length ? `<button class="btn sm" onclick="epOpenEmailFromDetail()">📧 Email Incharge/ZH</button>` : ''}
     </div>
   </div>`;
 
@@ -6534,7 +6852,7 @@ function epExecDetailView() {
 
   return pagehead('Executive Performance', '') +
     `<button class="btn sm" onclick="epBack()" style="margin-bottom:10px">← Back</button>` +
-    bc + execInfoCard + kpis + agTable;
+    bc + execInfoCard + kpis + agTable + epEmailModal();
 }
 
 // ── Agency detail view ────────────────────────────────────────────────────────
@@ -6618,6 +6936,329 @@ VIEWS.exec_perf = () => {
   if (st.drillAgency) return epAgencyDetailView();
   if (st.drillExec)   return epExecDetailView();
   return epMainView();
+};
+
+/* ════════════════════════════════════════════════════════
+   MONTHLY TARGET MANAGEMENT
+   ════════════════════════════════════════════════════════ */
+
+const etState = () => S.live.et || (S.live.et = {
+  filters:     { month_year: '', unit_code: '', state: '' },
+  filterOpts:  null,
+  employees:   null,
+  targets:     null,         // target list (list tab)
+  achievement: null,         // target vs actual (achievement tab)
+  weights:     null,
+  thresholds:  null,
+  tab:         'entry',      // 'entry' | 'achievement'
+  formEmp:     '',
+  formEmpName: '',
+  formUnitCode:'',
+  formTargets: {},           // { growth_copies:'', growth_pct:'', collection:'', agency_visits:'', attendance_days:'', survey:'' }
+  formSaving:  false,
+  formSaved:   false,
+  formError:   '',
+  _loading:    {},
+});
+
+const etApi = p => `/api/targets/${p}`;
+const etFmtN = v => (!v && v !== 0) ? '—' : Number(v).toLocaleString('en-IN');
+const etFmtC = v => {
+  if (!v && v !== 0) return '—';
+  const n = Number(v);
+  if (Math.abs(n) >= 1e7) return '₹' + (n/1e7).toFixed(2) + ' Cr';
+  if (Math.abs(n) >= 1e5) return '₹' + (n/1e5).toFixed(2) + ' L';
+  return '₹' + Math.round(n).toLocaleString('en-IN');
+};
+const etPct = v => (!v && v !== 0) ? '—' : Number(v).toFixed(1) + '%';
+const etAchvColor = pct => {
+  if (pct == null) return 'var(--muted)';
+  if (pct >= 100)  return 'var(--grn)';
+  if (pct >= 80)   return '#f59e0b';
+  if (pct >= 60)   return '#f97316';
+  return 'var(--red)';
+};
+const etAchvBadge = pct => {
+  if (pct == null) return '';
+  const [bg, label] = pct >= 100 ? ['#dcfce7','Achieved'] : pct >= 80 ? ['#fef9c3','Near Target'] : pct >= 60 ? ['#ffedd5','Needs Attention'] : ['#fee2e2','Poor'];
+  return `<span style="background:${bg};color:${etAchvColor(pct)};padding:1px 7px;border-radius:20px;font-size:10.5px;font-weight:700">${pct}% · ${label}</span>`;
+};
+
+function etLoadFilters() {
+  const st = etState();
+  if (st.filterOpts || st._loading.filters) return;
+  st._loading.filters = true;
+  api.get(etApi('filters')).then(d => { st.filterOpts = d; st._loading.filters = false; if (S.screen==='exec_targets') render(); }).catch(()=>{st._loading.filters=false;});
+}
+function etLoadEmployees() {
+  const st = etState();
+  const f  = st.filters;
+  const qs = '?' + new URLSearchParams(Object.fromEntries(Object.entries({state:f.state,unit_code:f.unit_code}).filter(([,v])=>v))).toString();
+  st._loading.employees = true; st.employees = null;
+  api.get(etApi('employees') + qs).then(d => { st.employees = d?.employees||[]; st._loading.employees = false; if (S.screen==='exec_targets') render(); }).catch(()=>{st._loading.employees=false;});
+}
+function etLoadAchievement() {
+  const st = etState();
+  const f  = st.filters;
+  const qs = '?' + new URLSearchParams(Object.fromEntries(Object.entries({month_year:f.month_year,unit_code:f.unit_code,state:f.state}).filter(([,v])=>v))).toString();
+  st._loading.achievement = true; st.achievement = null;
+  api.get(etApi('achievement') + qs).then(d => { st.achievement = d; st._loading.achievement = false; if (S.screen==='exec_targets') render(); }).catch(()=>{st._loading.achievement=false;});
+}
+
+window.etSetTab = tab => { etState().tab = tab; etState().formSaved = false; if (tab==='achievement') etLoadAchievement(); render(); };
+window.etStateChange = v => { const st=etState(); st.filters.state=v; st.filters.unit_code=''; st.employees=null; st.achievement=null; render(); };
+window.etUnitChange  = v => { const st=etState(); st.filters.unit_code=v; st.employees=null; st.achievement=null; render(); };
+window.etMonthChange = v => { const st=etState(); st.filters.month_year=v; st.achievement=null; if(st.tab==='achievement') etLoadAchievement(); render(); };
+window.etSelectEmp   = (code, name, unitCode) => {
+  const st = etState();
+  if (st.formEmp === code) { st.formEmp=''; st.formEmpName=''; st.formUnitCode=''; } else {
+    st.formEmp=code; st.formEmpName=name; st.formUnitCode=unitCode;
+    // Pre-fill existing targets for this month
+    const my = st.filters.month_year || currentMonthYear();
+    st._loading.formTargets = true;
+    api.get(`${etApi('list')}?month_year=${encodeURIComponent(my)}&emp_code=${encodeURIComponent(code)}`)
+      .then(d => {
+        const st2 = etState();
+        st2.formTargets = {};
+        for (const t of (d?.targets||[])) st2.formTargets[t.target_type] = t.target_value;
+        st2._loading.formTargets = false;
+        if (S.screen==='exec_targets') render();
+      }).catch(()=>{ etState()._loading.formTargets=false; });
+  }
+  render();
+};
+window.etSaveTargets = async () => {
+  const st = etState();
+  if (!st.formEmp) { alert('Please select an employee'); return; }
+  const my = st.filters.month_year || currentMonthYear();
+  st.formSaving = true; st.formError = ''; render();
+  try {
+    await api.post('/api/targets', {
+      emp_code: st.formEmp, unit_code: st.formUnitCode,
+      month_year: my, targets: st.formTargets,
+    });
+    st.formSaving = false; st.formSaved = true; st.achievement = null; render();
+    setTimeout(() => { etState().formSaved = false; render(); }, 3000);
+  } catch (e) { st.formSaving = false; st.formError = String(e); render(); }
+};
+window.etRefreshAchievement = () => { etState().achievement=null; etLoadAchievement(); };
+
+function currentMonthYear() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+
+function etFilterBar() {
+  const st   = etState();
+  const f    = st.filters;
+  const opts = st.filterOpts || { states:[], units:[], months:[] };
+
+  if (!st.filterOpts) etLoadFilters();
+  if (!st.employees && !st._loading.employees) etLoadEmployees();
+
+  const months = opts.months?.length ? opts.months : [currentMonthYear()];
+  const selMy  = f.month_year || currentMonthYear();
+  const visUnits = f.state ? (opts.units||[]).filter(u => u.state_nm===f.state) : (opts.units||[]);
+
+  return `<div class="card" style="padding:10px 14px;margin-bottom:12px">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <select class="inp" style="font-size:12px;padding:5px 8px" onchange="etMonthChange(this.value)">
+        ${months.map(m => {
+          const [y,mo] = m.split('-');
+          const lbl = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)]+' '+y;
+          return `<option value="${esc(m)}" ${selMy===m?'selected':''}>${lbl}</option>`;
+        }).join('')}
+      </select>
+      <select class="inp" style="font-size:12px;padding:5px 8px" onchange="etStateChange(this.value)">
+        <option value="">All States</option>
+        ${(opts.states||[]).map(s=>`<option value="${esc(s)}" ${f.state===s?'selected':''}>${esc(s)}</option>`).join('')}
+      </select>
+      <select class="inp" style="font-size:12px;padding:5px 8px" onchange="etUnitChange(this.value)">
+        <option value="">All Units${f.state?' in '+esc(f.state):''}</option>
+        ${visUnits.map(u=>`<option value="${esc(u.unit_code)}" ${f.unit_code===u.unit_code?'selected':''}>${esc(u.unit_name)}</option>`).join('')}
+      </select>
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn${st.tab==='entry'?' pri':''} sm" onclick="etSetTab('entry')">📝 Entry</button>
+        <button class="btn${st.tab==='achievement'?' pri':''} sm" onclick="etSetTab('achievement')">📊 Achievement</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function etEntryTab() {
+  const st      = etState();
+  const f       = st.filters;
+  const emps    = st.employees || [];
+  const my      = f.month_year || currentMonthYear();
+  const [y,mo]  = my.split('-');
+  const moLabel = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)] + ' ' + y;
+
+  const TARGET_FIELDS = [
+    { key: 'growth_copies',   label: 'Supply Growth (Copies)',  placeholder: 'e.g. 500',     unit: 'copies' },
+    { key: 'growth_pct',      label: 'Growth % Target',          placeholder: 'e.g. 3.5',     unit: '%' },
+    { key: 'collection',      label: 'Collection Target (₹)',    placeholder: 'e.g. 2500000', unit: '₹' },
+    { key: 'agency_visits',   label: 'Agency Visit Target',      placeholder: 'e.g. 100',     unit: 'visits' },
+    { key: 'survey',          label: 'Survey Target',            placeholder: 'e.g. 150',     unit: 'surveys' },
+    { key: 'attendance_days', label: 'Attendance Target (Days)', placeholder: 'e.g. 26',      unit: 'days' },
+  ];
+
+  const empRow = e => {
+    const sel = st.formEmp === e.emp_code;
+    return `<div class="rowbtn" onclick="etSelectEmp('${esc(e.emp_code)}','${esc(e.emp_name||e.emp_code)}','${esc(e.unit_code||'')}') "
+       style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--brd2);background:${sel?'var(--chart-1-pale,#eff6ff)':'transparent'}">
+      <div style="width:28px;height:28px;border-radius:50%;background:${sel?'var(--chart-1)':'var(--surface-2)'};display:flex;align-items:center;justify-content:center;font-size:10px;color:${sel?'#fff':'var(--ink)'};flex-shrink:0">
+        ${sel ? '✓' : esc((e.emp_name||e.emp_code||'?').charAt(0).toUpperCase())}
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:${sel?'700':'500'}">${esc(e.emp_name||e.emp_code)}</div>
+        <div style="font-size:10.5px;color:var(--muted)">${esc(e.unit_name||e.unit_code||'')} · ${esc(e.emp_code)}</div>
+      </div>
+    </div>`;
+  };
+
+  const formPanel = st.formEmp ? `<div class="card" style="padding:16px;margin-bottom:12px">
+    <div style="font-weight:700;font-size:14px;margin-bottom:4px">Monthly Targets — ${moLabel}</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:14px">${esc(st.formEmpName)} · ${esc(st.formUnitCode)}</div>
+    ${st._loading.formTargets ? `<div style="font-size:12px;color:var(--muted)">Loading existing targets…</div>` : `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+      ${TARGET_FIELDS.map(tf => `<div>
+        <label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:3px">${esc(tf.label)}</label>
+        <div style="display:flex;align-items:center;gap:4px">
+          <input class="inp" type="number" style="flex:1;font-size:13px;padding:6px 8px" placeholder="${esc(tf.placeholder)}"
+            value="${st.formTargets[tf.key]||''}"
+            oninput="etState().formTargets['${tf.key}']=this.value">
+          <span style="font-size:11px;color:var(--muted);flex-shrink:0">${esc(tf.unit)}</span>
+        </div>
+      </div>`).join('')}
+    </div>
+    ${st.formError ? `<div style="color:var(--red);font-size:12px;margin-bottom:8px">⚠ ${esc(st.formError)}</div>` : ''}
+    ${st.formSaved ? `<div style="color:var(--grn);font-size:12px;margin-bottom:8px">✅ Targets saved successfully!</div>` : ''}
+    <button class="btn pri" onclick="etSaveTargets()" ${st.formSaving?'disabled':''}>
+      ${st.formSaving?'⏳ Saving…':'💾 Save Targets'}
+    </button>`}
+  </div>` : `<div class="card" style="padding:20px;text-align:center;color:var(--muted);font-size:13px;margin-bottom:12px">
+    ← Select an executive to set targets
+  </div>`;
+
+  return formPanel + `<div class="card" style="overflow:hidden">
+    <div style="padding:10px 14px;border-bottom:1px solid var(--brd2);font-weight:700;font-size:13px">
+      Executives — ${moLabel} ${f.unit_code ? `· ${esc((st.filterOpts?.units||[]).find(u=>u.unit_code===f.unit_code)?.unit_name||f.unit_code)}` : ''}
+    </div>
+    ${st._loading.employees ? `<div style="padding:20px;text-align:center;color:var(--muted)">Loading executives…</div>` :
+      emps.length ? emps.map(empRow).join('') :
+      `<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">No executives found. Select a unit above.</div>`}
+  </div>`;
+}
+
+function etAchievementTab() {
+  const st = etState();
+  if (!st.achievement && !st._loading.achievement) etLoadAchievement();
+  if (st._loading.achievement || !st.achievement) {
+    return `<div style="padding:40px;text-align:center;color:var(--muted)">Loading achievement data…</div>`;
+  }
+  const { results=[], month_year:my, from, to, day_in_month, days_total } = st.achievement;
+  const [y, mo] = (my||'').split('-');
+  const moLabel = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)||0] + ' ' + y;
+  const isCurrent = my === currentMonthYear();
+
+  const scoreColor = s => s>=100?'var(--grn)':s>=80?'#f59e0b':s>=60?'#f97316':'var(--red)';
+  const scoreBg    = s => s>=100?'#dcfce7':s>=80?'#fef9c3':s>=60?'#ffedd5':'#fee2e2';
+  const pBar = (actual, target, color) => {
+    if (!target) return '<div style="color:var(--muted);font-size:11px">No target</div>';
+    const pct = Math.min(Math.round(actual/target*100), 200);
+    return `<div style="display:flex;align-items:center;gap:4px">
+      <div style="flex:1;height:5px;background:var(--brd2);border-radius:3px;overflow:hidden">
+        <div style="height:100%;width:${Math.min(pct,100)}%;background:${color};border-radius:3px"></div>
+      </div>
+      <span style="font-size:10px;color:${color};font-weight:700;width:30px;text-align:right">${pct}%</span>
+    </div>`;
+  };
+
+  const execRow = (r, idx) => {
+    const a  = r.actuals || {};
+    const t  = r.targets || {};
+    const ac = r.achievement || {};
+    const sc = r.overall_score;
+    const p  = r.pacing;
+    const hasTarget = r.has_targets;
+    return `<tr style="${idx%2?'background:var(--surface-2)':''}">
+      <td style="font-weight:600;font-size:12.5px;white-space:nowrap">
+        <span onclick="epDrillExec('${esc(r.emp_code)}','${esc(r.emp_code)}')" style="cursor:pointer;color:var(--chart-1)">${esc(r.emp_code)}</span>
+      </td>
+      <td>
+        <div style="font-size:12px">${etFmtN(a.growth_copies)} copies</div>
+        ${pBar(Math.max(0,a.growth_copies||0), t.growth_copies, '#22c55e')}
+        ${a.growth_pct!=null ? `<div style="font-size:10px;color:var(--muted)">Growth: ${a.growth_pct>0?'+':''}${etPct(a.growth_pct)}</div>` : ''}
+      </td>
+      <td>
+        <div style="font-size:12px">${etFmtC(a.collection)}</div>
+        ${pBar(a.collection||0, t.collection, '#6366f1')}
+        ${p && t.collection ? `<div style="font-size:10px;color:var(--muted)">Proj: ${etFmtC(p.projected_collection)}</div>` : ''}
+      </td>
+      <td>
+        <div style="font-size:12px">${etFmtN(a.agency_visits)}</div>
+        ${pBar(a.agency_visits||0, t.agency_visits, '#f59e0b')}
+      </td>
+      <td>
+        <div style="font-size:12px">${etFmtN(a.attendance_days)} days</div>
+        ${pBar(a.attendance_days||0, t.attendance_days, '#8b5cf6')}
+      </td>
+      <td style="text-align:center">
+        ${sc!=null ? `<div style="display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:50%;background:${scoreBg(sc)};color:${scoreColor(sc)};font-weight:800;font-size:13px">${sc}</div>` : '<span style="color:var(--muted);font-size:11px">—</span>'}
+      </td>
+      ${isCurrent && p ? `<td style="font-size:10.5px;color:var(--muted);white-space:nowrap">${p.days_done}/${p.days_total}d<br>${p.pct_days_done}% done</td>` : `<td style="color:var(--muted);font-size:11px">—</td>`}
+      <td>${hasTarget ? '' : '<span style="font-size:10.5px;color:var(--red)">No target set</span>'}</td>
+    </tr>`;
+  };
+
+  const noTarget = results.filter(r => !r.has_targets).length;
+
+  return `<div>
+    ${isCurrent && day_in_month ? `<div class="card" style="padding:10px 16px;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:16px;align-items:center">
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Month Progress</div>
+        <div style="font-size:14px;font-weight:700">${moLabel}</div>
+      </div>
+      <div style="flex:1;min-width:160px">
+        <div style="height:8px;background:var(--brd2);border-radius:4px;overflow:hidden;margin-bottom:3px">
+          <div style="height:100%;width:${Math.round(day_in_month/days_total*100)}%;background:var(--chart-1);border-radius:4px"></div>
+        </div>
+        <div style="font-size:11px;color:var(--muted)">Day ${day_in_month} of ${days_total} · ${Math.round(day_in_month/days_total*100)}% month complete</div>
+      </div>
+      ${noTarget > 0 ? `<div style="color:var(--red);font-size:12px">⚠ ${noTarget} executive${noTarget>1?'s':''} without targets</div>` : ''}
+      <button class="btn sm" onclick="etRefreshAchievement()">↺ Refresh</button>
+    </div>` : ''}
+    <div class="card" style="overflow:hidden">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--brd2);font-weight:700;font-size:13px">
+        Target vs Achievement — ${moLabel} (${results.length} executives)
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr>
+            <th>Executive</th>
+            <th>Supply Growth</th>
+            <th>Collection</th>
+            <th>Agency Visits</th>
+            <th>Attendance</th>
+            <th class="r" style="width:50px">Score</th>
+            <th>${isCurrent?'Progress':''}</th>
+            <th></th>
+          </tr></thead>
+          <tbody>
+            ${results.length ? results.map((r,i)=>execRow(r,i)).join('') :
+              '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--muted)">No data for this period</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+
+VIEWS.exec_targets = () => {
+  const st = etState();
+  return pagehead('Monthly Targets', 'Set and track monthly targets per executive · supply growth · collection · visits · attendance') +
+    etFilterBar() +
+    (st.tab === 'achievement' ? etAchievementTab() : etEntryTab());
 };
 
 /* ════════════════════════════════════════════════════════
@@ -9892,7 +10533,7 @@ function navGroups() {
   if (u.dashboard) {
     const fieldIds = ["routes", "collections", "complaints", "partners"];
     // mgmtIds are always shown to hl≤4 regardless of saved navScreens (handles screens added after a user's navScreens was last saved)
-    const mgmtIds  = ["command", "ai_insights", "supply_dash", "exec_perf", "agency_rating"];
+    const mgmtIds  = ["command", "ai_insights", "supply_dash", "exec_perf", "exec_targets", "agency_rating"];
     const items = DASH_MENU
       .filter(([id]) => (hl <= 4 && mgmtIds.includes(id)) || (u.navScreens ? u.navScreens.includes(id) : (hl <= 4 || fieldIds.includes(id))))
       .filter(([id]) => permAllows(id, 'view') !== false)   // explicit rights-matrix deny hides the screen

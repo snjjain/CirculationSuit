@@ -4341,6 +4341,9 @@ require('./dcr_analytics')({ app, q, getScopeUnitCodes });
 // ── Executive Performance Dashboard ───────────────────────────────────────────
 require('./exec_performance')({ app, q, getScopeUnitCodes });
 
+// ── Monthly Target Management ──────────────────────────────────────────────────
+require('./exec_targets')({ app, q, getScopeUnitCodes });
+
 // ── Agency Rating Engine ───────────────────────────────────────────────────────
 require('./agency_rating')({ app, q, getScopeUnitCodes });
 
