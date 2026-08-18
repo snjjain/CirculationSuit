@@ -39,6 +39,8 @@ const MYSQL_CFG = {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+const SQLPLUS_TIMEOUT_MS = 25 * 60 * 1000; // 25 min per query — kills hung Oracle calls
+
 function runSqlplus(sqlFile) {
   return new Promise((resolve, reject) => {
     const connectStr = `${process.env.ORA_USER}/${process.env.ORA_PASSWORD}` +
@@ -53,8 +55,14 @@ function runSqlplus(sqlFile) {
     proc.stdin.write(`@"${sqlFile}"\n`);
     proc.stdin.write('EXIT\n');
     proc.stdin.end();
-    proc.on('close', code => resolve(code));
-    proc.on('error', reject);
+
+    const timer = setTimeout(() => {
+      try { proc.kill('SIGKILL'); } catch (_) {}
+      resolve(-1); // treat timeout as empty result — caller checks for spool file
+    }, SQLPLUS_TIMEOUT_MS);
+
+    proc.on('close', code => { clearTimeout(timer); resolve(code); });
+    proc.on('error', err  => { clearTimeout(timer); reject(err); });
   });
 }
 
@@ -418,7 +426,11 @@ async function runSync(opts = {}) {
       periods = monthRanges('2025-01', toYM).reverse(); // newest first
       onLog(`[dcr-sync] Backfill: ${periods.length} months (newest first)`);
     } else if (opts.from && opts.to) {
-      periods = [{ from: opts.from, to: opts.to }];
+      // Chunk into monthly periods — avoids huge single Oracle queries that hang
+      const fromYM = opts.from.slice(0, 7);
+      const toYM   = opts.to.slice(0, 7);
+      periods = monthRanges(fromYM, toYM);
+      onLog(`[dcr-sync] Range ${opts.from}→${opts.to}: ${periods.length} month(s)`);
     } else {
       // Daily: yesterday + today to catch late Oracle commits
       const fmt = d => d.toISOString().slice(0, 10);
