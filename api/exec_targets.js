@@ -39,7 +39,10 @@ module.exports = function registerExecTargets({ app, q, getScopeUnitCodes }) {
       await q('DELETE FROM exec_targets').catch(() => {});         // table was empty anyway
       await q('ALTER TABLE exec_targets DROP COLUMN emp_code').catch(() => {});
       await q('ALTER TABLE exec_targets MODIFY COLUMN unit_code VARCHAR(8) NOT NULL').catch(() => {});
-      await q('ALTER TABLE exec_targets ADD COLUMN IF NOT EXISTS state_code VARCHAR(20) AFTER unit_code').catch(() => {});
+      // ADD COLUMN IF NOT EXISTS not supported on all MySQL versions — check first
+      const chk = await q(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='exec_targets' AND COLUMN_NAME='state_code'`);
+      if (chk.rows.length === 0)
+        await q('ALTER TABLE exec_targets ADD COLUMN state_code VARCHAR(20) AFTER unit_code').catch(() => {});
       await q('ALTER TABLE exec_targets ADD UNIQUE KEY uq_unit_tgt (unit_code, month_year, target_type)').catch(() => {});
       await q('ALTER TABLE exec_targets ADD INDEX idx_month_state (month_year, state_code)').catch(() => {});
       console.log('[exec-targets] migrated schema to unit-wise');
