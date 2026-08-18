@@ -6433,6 +6433,68 @@ function epDcrCard() {
   });
 }
 
+// ── Today's Pulse — who is/isn't active today ─────────────────────────────────
+function epTodayPulse() {
+  const st = epState();
+  // Trigger parallel loads (epFetch deduplicates — safe to call multiple times)
+  epFetch('alerts', 'alerts');
+  epFetch('dcr',    'dcr');
+
+  if (!st.alerts && !st.dcr) {
+    return `<div class="card" style="padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:8px">
+      <div style="font-size:13px;color:var(--muted)">⏳ Loading today's activity…</div>
+    </div>`;
+  }
+
+  const alerts   = st.alerts || {};
+  const dcr      = st.dcr    || {};
+  const active   = Number(alerts.active_today ?? dcr.execs_active_today ?? 0);
+  const total    = Number(alerts.total_execs  ?? 0);
+  const noVisit  = (alerts.alerts || []).find(a => a.key === 'no_visit_today');
+  const inactive = noVisit?.detail || [];
+  const pct      = total > 0 ? Math.round(active / total * 100) : 0;
+  const barColor = pct >= 80 ? 'var(--grn)' : pct >= 50 ? '#f59e0b' : 'var(--red)';
+  const today    = dcr.today || alerts.today || new Date().toISOString().slice(0, 10);
+  const todayFmt = new Date(today + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  const inactiveChips = inactive.slice(0, 18).map(e =>
+    `<span onclick="epDrillExec('${esc(e.exec_code)}','${esc(e.exec_name||e.exec_code)}')"
+       title="Click to view ${esc(e.exec_name||e.exec_code)}"
+       style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:12px;background:#fee2e2;color:#991b1b;font-size:11px;font-weight:600;cursor:pointer;margin:2px 2px">
+      ❌ ${esc(e.exec_name || e.exec_code)}
+    </span>`
+  ).join('');
+
+  return `<div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:14px">
+      <div style="min-width:150px">
+        <div style="font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Today — ${todayFmt}</div>
+        <div style="display:flex;align-items:baseline;gap:5px;margin-top:4px">
+          <span style="font-size:28px;font-weight:800;color:${barColor};line-height:1">${active}</span>
+          <span style="font-size:13px;color:var(--muted)">/ ${total}</span>
+        </div>
+        <div style="font-size:11px;font-weight:600;margin-top:1px;color:${barColor}">
+          ${pct >= 80 ? '✅ Good field coverage' : pct >= 50 ? '⚠ Partial coverage' : total === 0 ? '— No scope data' : '🔴 Low field activity'}
+        </div>
+      </div>
+      <div style="flex:1;min-width:200px">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+          <div style="flex:1;height:10px;background:var(--brd2);border-radius:5px;overflow:hidden">
+            <div style="height:100%;width:${pct}%;background:${barColor};border-radius:5px;transition:width .4s"></div>
+          </div>
+          <span style="font-size:12px;font-weight:700;color:${barColor};min-width:34px">${pct}%</span>
+        </div>
+        ${inactive.length > 0
+          ? `<div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:4px">Not active today (${inactive.length}):</div>
+             <div style="line-height:1.8">${inactiveChips}${inactive.length > 18 ? `<span style="font-size:11px;color:var(--muted);margin-left:4px">+${inactive.length-18} more</span>` : ''}</div>`
+          : active > 0
+            ? `<div style="font-size:11px;color:var(--grn);margin-top:4px">✅ All executives with DCR access are active today</div>`
+            : `<div style="font-size:11px;color:var(--muted);margin-top:4px">No DCR activity recorded yet for today</div>`}
+      </div>
+    </div>
+  </div>`;
+}
+
 // ── Smart Alerts panel ────────────────────────────────────────────────────────
 window.epAlertBucket = (bucket) => {
   const st = epState();
@@ -6691,11 +6753,16 @@ function epExecTable() {
        </div>`
     : `<div style="font-size:11px;color:var(--muted);margin:8px 16px">${total} executives</div>`;
 
+  // Build DCR lookup for "Active Today" column
+  const dcrByExec = {};
+  (st.dcr?.by_exec || []).forEach(r => { dcrByExec[r.emp_code] = r; });
+  const hasDcr = !!st.dcr;
+
   return `<div class="card" style="overflow:hidden;margin-bottom:16px">
     <div style="padding:12px 16px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <div>
-        <div style="font-weight:700;font-size:13px">All Executives</div>
-        <div style="font-size:10.5px;color:var(--muted)">Click a row to view agencies</div>
+        <div style="font-weight:700;font-size:13px">Executive Scorecard</div>
+        <div style="font-size:10.5px;color:var(--muted)">Click a row → executive detail with agencies</div>
       </div>
       <div style="flex:1;min-width:180px">
         <input class="inp" placeholder="Search executive or unit…" value="${esc(st.listSearch || '')}"
@@ -6706,31 +6773,40 @@ function epExecTable() {
       <table>
         <thead>
           <tr>
-            <th style="width:32px">#</th>
-            ${th('exec_name',      'Executive',    false)}
+            <th style="width:28px">#</th>
+            ${th('exec_name',      'Executive',   false)}
             <th>Unit</th>
-            ${th('agencies',       'Agencies',     true)}
-            ${th('supply',         'Supply',       true)}
-            ${th('collection',     'Collection',   true)}
-            ${th('collection_pct', 'Coll %',       true)}
-            ${th('outstanding',    'Outstanding',  true)}
+            <th style="text-align:center;white-space:nowrap">Today</th>
+            ${th('agencies',       'Agencies',    true)}
+            ${th('supply',         'Supply',      true)}
+            ${th('collection',     'Collection',  true)}
+            ${th('collection_pct', 'Coll %',      true)}
+            ${th('outstanding',    'Outstanding', true)}
           </tr>
         </thead>
         <tbody>
-          ${rows.map((r, i) => `<tr class="rowbtn" onclick="epDrillExec('${esc(r.executive_code)}','${esc(r.exec_name || '')}')" style="${i % 2 ? 'background:var(--surface-2)' : ''}">
-            <td style="color:var(--muted);font-size:11px">${r.rank || i + 1}</td>
-            <td>
-              <div style="font-weight:600;font-size:13px">${esc(r.exec_name || '—')}</div>
-              <div style="font-size:10.5px;color:var(--muted)">${esc(r.state_name || '')}${r.executive_code ? ' · ' + esc(r.executive_code) : ''}</div>
-            </td>
-            <td style="font-size:12px;color:var(--muted)">${esc(r.main_unit_name || r.units || '—')}</td>
-            <td class="r">${epFmtN(r.agency_count)}</td>
-            <td class="r" style="font-weight:600">${epFmtN(r.total_supply)}</td>
-            <td class="r" style="color:var(--grn);font-weight:600">${epFmtC(r.total_collection)}</td>
-            <td class="r" style="color:${epPctColor(r.collection_pct)};font-weight:700">${epPct(r.collection_pct)}</td>
-            <td class="r" style="color:var(--red);font-weight:600">${epFmtC(r.total_outstanding)}</td>
-          </tr>`).join('')}
-          ${!rows.length ? `<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--muted)">No executives found for this period / filter</td></tr>` : ''}
+          ${rows.map((r, i) => {
+            const dcrRow = dcrByExec[r.executive_code];
+            const todayCell = !hasDcr ? '<td style="text-align:center;color:var(--muted)">—</td>'
+              : dcrRow?.active_today
+                ? '<td style="text-align:center;font-size:15px" title="Active today">✅</td>'
+                : '<td style="text-align:center;font-size:15px" title="No activity today">❌</td>';
+            return `<tr class="rowbtn" onclick="epDrillExec('${esc(r.executive_code)}','${esc(r.exec_name || '')}')" style="${i % 2 ? 'background:var(--surface-2)' : ''}">
+              <td style="color:var(--muted);font-size:11px">${r.rank || i + 1}</td>
+              <td>
+                <div style="font-weight:600;font-size:13px">${esc(r.exec_name || '—')}</div>
+                <div style="font-size:10.5px;color:var(--muted)">${esc(r.state_name || '')}${r.executive_code ? ' · ' + esc(r.executive_code) : ''}</div>
+              </td>
+              <td style="font-size:12px;color:var(--muted)">${esc(r.main_unit_name || r.units || '—')}</td>
+              ${todayCell}
+              <td class="r">${epFmtN(r.agency_count)}</td>
+              <td class="r" style="font-weight:600">${epFmtN(r.total_supply)}</td>
+              <td class="r" style="color:var(--grn);font-weight:600">${epFmtC(r.total_collection)}</td>
+              <td class="r" style="color:${epPctColor(r.collection_pct)};font-weight:700">${epPct(r.collection_pct)}</td>
+              <td class="r" style="color:var(--red);font-weight:600">${epFmtC(r.total_outstanding)}</td>
+            </tr>`;
+          }).join('')}
+          ${!rows.length ? `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--muted)">No executives found for this period / filter</td></tr>` : ''}
         </tbody>
       </table>
     </div>
@@ -6740,10 +6816,9 @@ function epExecTable() {
 
 // ── Main (list) view ──────────────────────────────────────────────────────────
 function epMainView() {
-  const st = epState();
-  return pagehead('Executive Performance', 'Supply · Collection · Outstanding by executive · click any row to drill down') +
-    epFilterPanel() + epKpiGrid() + epAlertsSection() + epLastVisitSection() + epRankingCards() + epExecTable() +
-    epEmailModal();
+  return pagehead('Executive Performance', 'Daily team view — field activity · supply · collection · outstanding · click any row to drill down') +
+    epFilterPanel() + epTodayPulse() + epKpiGrid() + epExecTable() +
+    epAlertsSection() + epLastVisitSection() + epEmailModal();
 }
 
 // ── Executive detail view ─────────────────────────────────────────────────────
@@ -6953,6 +7028,8 @@ const etState = () => S.live.et || (S.live.et = {
   saving:       {},        // { unitCode: true }
   saved:        {},        // { unitCode: true } flash feedback
   saveError:    '',
+  drill:        null,      // { unit_code, unit_name } — unit being drilled in achievement tab
+  drillExecs:   null,      // exec data from /api/exec-perf/list for drilled unit
   _loading:     {},
 });
 
@@ -7069,6 +7146,24 @@ window.etSaveAll = async () => {
   }
 };
 window.etRefreshAchievement = () => { etState().achievement = null; etLoadAchievement(); };
+
+// ── Achievement tab drill-down: unit → executives ─────────────────────────────
+window.etDrillUnit = (unitCode, unitName) => {
+  const st  = etState();
+  const row = (st.achievement?.results || []).find(r => r.unit_code === unitCode) || null;
+  st.drill      = { unit_code: unitCode, unit_name: unitName, row };
+  st.drillExecs = null;
+  const f  = st.filters;
+  const my = f.month_year || currentMonthYear();
+  const from = my + '-01';
+  const [y, m] = my.split('-').map(Number);
+  const to = my === currentMonthYear() ? todayISO() : new Date(y, m, 0).toISOString().slice(0, 10);
+  api.get(`/api/exec-perf/list?unit_code=${encodeURIComponent(unitCode)}&from=${from}&to=${to}&per_page=100&sort=collection&dir=desc`)
+    .then(d => { const s2 = etState(); s2.drillExecs = d; if (S.screen === 'exec_targets') render(); })
+    .catch(() => {});
+  render();
+};
+window.etDrillBack = () => { const st = etState(); st.drill = null; st.drillExecs = null; render(); };
 
 function currentMonthYear() {
   const d = new Date();
@@ -7237,10 +7332,11 @@ function etAchievementTab() {
     const t  = r.targets     || {};
     const p  = r.pacing;
     const sc = r.overall_score;
-    return `<tr style="${idx % 2 ? 'background:var(--surface-2)' : ''}">
+    const safeName = (r.unit_name || r.unit_code).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return `<tr class="rowbtn" onclick="etDrillUnit('${esc(r.unit_code)}','${safeName}')" style="cursor:pointer;${idx % 2 ? 'background:var(--surface-2)' : ''}">
       <td style="font-weight:600;font-size:12.5px;white-space:nowrap;min-width:130px">
-        ${esc(r.unit_name || r.unit_code)}
-        <div style="font-size:10px;color:var(--muted)">${esc(r.unit_code)}</div>
+        <span style="color:var(--chart-1)">${esc(r.unit_name || r.unit_code)}</span>
+        <div style="font-size:10px;color:var(--muted)">${esc(r.unit_code)} · click to drill ›</div>
       </td>
       <td style="min-width:140px">
         <div style="font-size:12px;font-weight:600">${etFmtN(a.supply_curr)}</div>
@@ -7321,8 +7417,106 @@ function etAchievementTab() {
   </div>`;
 }
 
+// ── Unit drill-down view (Achievement → Executives) ───────────────────────────
+function etUnitDetailView() {
+  const st = etState();
+  const { unit_code, unit_name, row } = st.drill;
+  const a  = (row && row.actuals) || {};
+  const t  = (row && row.targets) || {};
+  const sc = row && row.overall_score;
+  const f  = st.filters;
+  const my = f.month_year || currentMonthYear();
+
+  const pBarMini = (actual, target, color) => {
+    if (!target) return '';
+    const pct = Math.min(Math.round(actual / target * 100), 100);
+    return `<div style="height:4px;background:var(--brd2);border-radius:2px;overflow:hidden;margin-top:3px;width:70px">
+      <div style="height:100%;width:${pct}%;background:${color}"></div>
+    </div>`;
+  };
+
+  const bc = `<div style="font-size:12px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <span onclick="etDrillBack()" style="cursor:pointer;color:var(--chart-1);font-weight:500">Monthly Targets</span>
+    <span style="color:var(--muted)">›</span>
+    <span style="color:var(--ink);font-weight:700">${esc(unit_name)}</span>
+  </div>`;
+
+  const unitSummary = `<div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;margin-bottom:12px">
+      <div style="flex:1;min-width:160px">
+        <div style="font-size:17px;font-weight:800">${esc(unit_name)}</div>
+        <div style="font-size:11px;color:var(--muted)">${esc(unit_code)} · ${etMonthLabel(my)}</div>
+      </div>
+      ${sc != null ? `<div style="display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:50%;background:${etScoreBg(sc)};color:${etScoreColor(sc)};font-weight:800;font-size:16px">Score<br style="display:none">${sc}</div>` : ''}
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:20px">
+      <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Supply Copies</div>
+        <div style="font-size:16px;font-weight:700">${etFmtN(a.supply_curr)}</div>
+        <div style="font-size:10px;color:var(--muted)">Target: ${etFmtN(t.supply_copies)}</div>
+        ${pBarMini(a.supply_curr||0, t.supply_copies, '#22c55e')}</div>
+      <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Collection</div>
+        <div style="font-size:16px;font-weight:700">${etFmtC(a.collection)}</div>
+        <div style="font-size:10px;color:var(--muted)">Target: ${etFmtC(t.collection)}</div>
+        ${pBarMini(a.collection||0, t.collection, '#6366f1')}</div>
+      <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Agency Visits</div>
+        <div style="font-size:16px;font-weight:700">${etFmtN(a.agency_visits)}</div>
+        <div style="font-size:10px;color:var(--muted)">Target: ${etFmtN(t.agency_visits)}</div>
+        ${pBarMini(a.agency_visits||0, t.agency_visits, '#f59e0b')}</div>
+      <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Man-Days</div>
+        <div style="font-size:16px;font-weight:700">${etFmtN(a.attendance_days)}</div>
+        <div style="font-size:10px;color:var(--muted)">Target: ${etFmtN(t.attendance_days)}</div>
+        ${pBarMini(a.attendance_days||0, t.attendance_days, '#8b5cf6')}</div>
+    </div>
+  </div>`;
+
+  const execData = st.drillExecs;
+  let execCard = '';
+  if (!execData) {
+    execCard = `<div class="card" style="padding:32px;text-align:center;color:var(--muted)">Loading executives for ${esc(unit_name)}…</div>`;
+  } else {
+    const rows = execData.rows || [];
+    execCard = `<div class="card" style="overflow:hidden">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--brd2)">
+        <div style="font-weight:700;font-size:13px">Executives — ${esc(unit_name)} (${rows.length})</div>
+        <div style="font-size:10.5px;color:var(--muted)">Supply · Collection · Outstanding for ${etMonthLabel(my)}</div>
+      </div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr>
+          <th style="width:28px">#</th>
+          <th>Executive</th>
+          <th class="r">Agencies</th>
+          <th class="r">Supply</th>
+          <th class="r">Collection</th>
+          <th class="r">Coll %</th>
+          <th class="r">Outstanding</th>
+        </tr></thead>
+        <tbody>
+          ${rows.length ? rows.map((r, i) => `<tr style="${i%2?'background:var(--surface-2)':''}">
+            <td style="color:var(--muted);font-size:11px">${i+1}</td>
+            <td>
+              <div style="font-weight:600;font-size:13px">${esc(r.exec_name||'—')}</div>
+              <div style="font-size:10.5px;color:var(--muted)">${esc(r.executive_code)}</div>
+            </td>
+            <td class="r">${etFmtN(r.agency_count)}</td>
+            <td class="r" style="font-weight:600">${etFmtN(r.total_supply)}</td>
+            <td class="r" style="color:var(--grn);font-weight:600">${etFmtC(r.total_collection)}</td>
+            <td class="r" style="color:${etScoreColor(r.collection_pct||0)};font-weight:700">${etPct(r.collection_pct)}</td>
+            <td class="r" style="color:var(--red);font-weight:600">${etFmtC(r.total_outstanding)}</td>
+          </tr>`).join('')
+          : `<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--muted)">No executive data found for this unit/period</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>`;
+  }
+
+  return pagehead('Monthly Targets', '') +
+    `<button class="btn sm" onclick="etDrillBack()" style="margin-bottom:10px">← Back to Units</button>` +
+    bc + unitSummary + execCard;
+}
+
 VIEWS.exec_targets = () => {
   const st = etState();
+  if (st.drill) return etUnitDetailView();
   return pagehead('Monthly Targets', 'State → branch level targets · supply copies · collection · visits · man-days') +
     etFilterBar() +
     (st.tab === 'achievement' ? etAchievementTab() : etEntryTab());

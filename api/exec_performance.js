@@ -91,7 +91,12 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
     const subCl  = unitCl('unit',      unitList);  // subquery — no alias, plain column name
     const ouCl   = unitCl('unit_code', unitList);  // agency_outstanding
 
-    const [base, supply, collection, outstanding] = await Promise.all([
+    // Supply/collection are aggregated per (unit,agcd) with DIRECT filters (uses
+    // idx_sd_unit / idx_valid_date), then mapped to executives in JS. The old
+    // derived-table JOIN forced a nested-loop plan that ran for minutes.
+    const sdCl = unitCl('unit_code', unitList);
+
+    const [base, mapping, supply, collection, outstanding] = await Promise.all([
       // Base: EXEC executives only.
       // LEFT JOIN exec_master so the dashboard works even before the Oracle sync populates it.
       // When exec_master has data: only include is_active_pli='Y' + exec_designation='EXEC'.
@@ -110,27 +115,22 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
          GROUP BY am.executive_code
          ORDER BY exec_name`, amCl.p),
 
-      // Supply — join to DISTINCT (unit,agcd) to avoid DPCD fan-out from agency_master
-      // subCl params come FIRST because the subquery placeholder appears before the date placeholders
-      q(`SELECT am.executive_code, SUM(sd.sup_copy) total_supply
-         FROM supply_data sd
-         JOIN (SELECT DISTINCT unit, agcd, executive_code
-               FROM agency_master
-               WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}
-              ) am ON sd.unit_code = am.unit AND sd.agcd = am.agcd
-         WHERE sd.supply_date BETWEEN ? AND ?
-         GROUP BY am.executive_code`, [...subCl.p, from, to]),
+      // (unit, agcd) → executive mapping
+      q(`SELECT DISTINCT unit, agcd, executive_code
+         FROM agency_master
+         WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}`, subCl.p),
 
-      // Collection — same DISTINCT join to avoid DPCD fan-out
-      q(`SELECT am2.executive_code,
-                -SUM(CASE WHEN ac.amount < 0 THEN ac.amount ELSE 0 END) total_collection
-         FROM agency_collection ac
-         JOIN (SELECT DISTINCT unit, agcd, executive_code
-               FROM agency_master
-               WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}
-              ) am2 ON am2.unit = ac.unit_code AND am2.agcd = ac.ag_code
-         WHERE ac.is_valid = 1 AND ac.coll_date BETWEEN ? AND ?
-         GROUP BY am2.executive_code`, [...subCl.p, from, to]),
+      // Supply per (unit, agcd) — single range scan
+      q(`SELECT unit_code, agcd, SUM(sup_copy) total
+         FROM supply_data
+         WHERE supply_date BETWEEN ? AND ?${sdCl.cl}
+         GROUP BY unit_code, agcd`, [from, to, ...sdCl.p]),
+
+      // Collection per (unit, agcd) — single range scan
+      q(`SELECT unit_code, ag_code, -SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) total
+         FROM agency_collection
+         WHERE is_valid = 1 AND coll_date BETWEEN ? AND ?${sdCl.cl}
+         GROUP BY unit_code, ag_code`, [from, to, ...sdCl.p]),
 
       // Outstanding — always CURRENT period snapshot
       q(`SELECT exec_code, SUM(cl_amt) total_outstanding
@@ -140,11 +140,20 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
          GROUP BY exec_code`, ouCl.p),
     ]);
 
-    // Build lookup maps
+    // Map (unit|agcd) → exec, then roll supply/collection up to executives in JS
+    const agExecMap = new Map();
+    for (const r of mapping.rows) agExecMap.set(`${r.unit}|${r.agcd}`, r.executive_code);
+
     const supMap = {}, colMap = {}, ouMap = {};
-    supply.rows.forEach(r      => { supMap[r.executive_code] = N(r.total_supply); });
-    collection.rows.forEach(r  => { colMap[r.executive_code] = N(r.total_collection); });
-    outstanding.rows.forEach(r => { ouMap[r.exec_code]       = N(r.total_outstanding); });
+    for (const r of supply.rows) {
+      const ex = agExecMap.get(`${r.unit_code}|${r.agcd}`);
+      if (ex) supMap[ex] = (supMap[ex] || 0) + N(r.total);
+    }
+    for (const r of collection.rows) {
+      const ex = agExecMap.get(`${r.unit_code}|${r.ag_code}`);
+      if (ex) colMap[ex] = (colMap[ex] || 0) + N(r.total);
+    }
+    outstanding.rows.forEach(r => { ouMap[r.exec_code] = N(r.total_outstanding); });
 
     const data = base.rows.map(r => {
       const sup  = supMap[r.executive_code] || 0;
@@ -534,47 +543,75 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
+  // ── Shared per-exec supply aggregation (heaviest query in this module) ────────
+  // Cached 3 min + in-flight dedup: growth and alerts both need the same
+  // curr/prev-period aggregation, so concurrent dashboard loads share one DB scan.
+  const _sCache    = new Map();
+  const _sInflight = new Map();
+  const SUP_TTL    = 180000;
+
+  function supplyByExec(from, to, unitList) {
+    const key = `${from}|${to}|${unitList === null ? '__all__' : [...unitList].sort().join(',')}`;
+    const hit = _sCache.get(key);
+    if (hit && (Date.now() - hit.ts) < SUP_TTL) return Promise.resolve(hit.rows);
+    if (_sInflight.has(key)) return _sInflight.get(key);
+    const subCl = unitCl('unit',      unitList);
+    const sdCl  = unitCl('unit_code', unitList);
+    // Direct-filter scans merged in JS — the old derived-table JOIN forced a
+    // nested-loop plan on supply_data that ran for minutes.
+    const p = Promise.all([
+      q(`SELECT DISTINCT unit, agcd, executive_code FROM agency_master
+         WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}`, subCl.p),
+      q(`SELECT unit_code, agcd,
+                SUM(CASE WHEN sup_type_code='A' THEN sup_copy ELSE 0 END) agent_sale,
+                SUM(CASE WHEN sup_type_code='C' THEN sup_copy ELSE 0 END) cash_sale,
+                SUM(sup_copy) total_supply
+         FROM supply_data
+         WHERE supply_date BETWEEN ? AND ?${sdCl.cl}
+         GROUP BY unit_code, agcd`, [from, to, ...sdCl.p]),
+    ]).then(([mapR, supR]) => {
+      const agExec = new Map();
+      for (const r of mapR.rows) agExec.set(`${r.unit}|${r.agcd}`, r.executive_code);
+      const byExec = new Map();
+      for (const r of supR.rows) {
+        const ex = agExec.get(`${r.unit_code}|${r.agcd}`);
+        if (!ex) continue;
+        let e = byExec.get(ex);
+        if (!e) byExec.set(ex, e = { executive_code: ex, agent_sale: 0, cash_sale: 0, total_supply: 0 });
+        e.agent_sale += N(r.agent_sale); e.cash_sale += N(r.cash_sale); e.total_supply += N(r.total_supply);
+      }
+      const rows = [...byExec.values()];
+      _sCache.set(key, { ts: Date.now(), rows }); _sInflight.delete(key);
+      return rows;
+    }).catch(e => { _sInflight.delete(key); throw e; });
+    _sInflight.set(key, p);
+    return p;
+  }
+
+  // Previous period = same number of days, immediately before `from`
+  function prevPeriod(from, to) {
+    const fromD = new Date(from + 'T00:00:00');
+    const toD   = new Date(to   + 'T00:00:00');
+    const prevToD   = new Date(fromD.getTime() - 86400000);
+    const prevFromD = new Date(prevToD.getTime() - (toD - fromD));
+    return { prevFrom: prevFromD.toISOString().slice(0, 10), prevTo: prevToD.toISOString().slice(0, 10) };
+  }
+
   // ══ SUPPLY GROWTH (current period vs equivalent previous period) ══════════════
   app.get('/api/exec-perf/growth', async (req, res) => {
     try {
       const { from, to } = parseDates(req.query);
       const unitList = await buildUnitList(req);
+      const { prevFrom, prevTo } = prevPeriod(from, to);
 
-      // Previous period = same number of days, immediately before
-      const fromD = new Date(from + 'T00:00:00');
-      const toD   = new Date(to   + 'T00:00:00');
-      const diffMs   = toD - fromD;
-      const prevToD  = new Date(fromD.getTime() - 86400000); // day before from
-      const prevFromD= new Date(prevToD.getTime() - diffMs);
-      const prevFrom = prevFromD.toISOString().slice(0, 10);
-      const prevTo   = prevToD.toISOString().slice(0, 10);
-
-      const amCl  = unitCl('am.unit', unitList);
-      const subCl = unitCl('unit',    unitList);
-
-      const [currR, prevR] = await Promise.all([
-        q(`SELECT am.executive_code,
-                  SUM(CASE WHEN sd.sup_type_code='A' THEN sd.sup_copy ELSE 0 END) agent_sale,
-                  SUM(CASE WHEN sd.sup_type_code='C' THEN sd.sup_copy ELSE 0 END) cash_sale,
-                  SUM(sd.sup_copy) total_supply
-           FROM supply_data sd
-           JOIN (SELECT DISTINCT unit, agcd, executive_code FROM agency_master
-                 WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}) am
-             ON sd.unit_code=am.unit AND sd.agcd=am.agcd
-           WHERE sd.supply_date BETWEEN ? AND ?
-           GROUP BY am.executive_code`, [...subCl.p, from, to]),
-
-        q(`SELECT am.executive_code, SUM(sd.sup_copy) total_supply
-           FROM supply_data sd
-           JOIN (SELECT DISTINCT unit, agcd, executive_code FROM agency_master
-                 WHERE executive_code IS NOT NULL AND executive_code != ''${subCl.cl}) am
-             ON sd.unit_code=am.unit AND sd.agcd=am.agcd
-           WHERE sd.supply_date BETWEEN ? AND ?
-           GROUP BY am.executive_code`, [...subCl.p, prevFrom, prevTo]),
+      const [currRows, prevRows] = await Promise.all([
+        supplyByExec(from, to, unitList),
+        supplyByExec(prevFrom, prevTo, unitList),
       ]);
+      const currR = { rows: currRows };
 
       const prevMap = {};
-      for (const r of prevR.rows) prevMap[r.executive_code] = N(r.total_supply);
+      for (const r of prevRows) prevMap[r.executive_code] = N(r.total_supply);
 
       let totalCurr = 0, totalPrev = 0, agentCurr = 0, cashCurr = 0;
       const byExec = currR.rows.map(r => {
@@ -749,6 +786,10 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
   });
 
   // ══ SMART ALERTS ══════════════════════════════════════════════════════════════
+  // Cached 3 min per scope — heavy national-level aggregation hit on every dashboard load
+  const _alertCache = new Map();
+  const ALERT_TTL   = 180000;
+
   app.get('/api/exec-perf/alerts', async (req, res) => {
     try {
       const { from, to } = parseDates(req.query);
@@ -758,13 +799,21 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const ucd      = unitCl('unit_code',     unitList);
       const today    = new Date().toISOString().slice(0, 10);
 
+      const cacheKey = `${from}|${to}|${today}|${unitList === null ? '__all__' : [...unitList].sort().join(',')}`;
+      const hit = _alertCache.get(cacheKey);
+      if (hit && (Date.now() - hit.ts) < ALERT_TTL) return res.json(hit.data);
+
       const cutoff15 = new Date();
       cutoff15.setDate(cutoff15.getDate() - 15);
       const dt15 = cutoff15.toISOString().slice(0, 10);
 
+      // Supply-decline check reuses supplyByExec (shared cache with /growth —
+      // same curr/prev periods, so a dashboard load runs the heavy scan once).
+      const { prevFrom, prevTo } = prevPeriod(from, to);
+
       const [
         allExecsR, activeTodayR,
-        osHighR, supplyFallR,
+        osHighR, supCurrRows, supPrevRows,
       ] = await Promise.all([
         // All active executives in scope
         q(`SELECT DISTINCT am.executive_code, MAX(am.executive_name) exec_name, MIN(am.unit) unit_code
@@ -787,20 +836,18 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
            JOIN agency_master am ON am.agcd=ao.ag_code AND am.unit=ao.unit_code
            WHERE ao.period_label='CURRENT' AND ao.cl_amt > 0${amCl.cl}`, amCl.p),
 
-        // Execs with supply decline vs prev period
-        q(`SELECT COUNT(*) n FROM (
-             SELECT am.executive_code,
-                    SUM(CASE WHEN sd.supply_date BETWEEN ? AND ? THEN sd.sup_copy ELSE 0 END) curr,
-                    SUM(CASE WHEN sd.supply_date < ? THEN sd.sup_copy ELSE 0 END) prev
-             FROM supply_data sd
-             JOIN (SELECT DISTINCT unit, agcd, executive_code FROM agency_master
-                   WHERE executive_code IS NOT NULL${subCl.cl}) am
-               ON sd.unit_code=am.unit AND sd.agcd=am.agcd
-             WHERE sd.supply_date >= DATE_SUB(?, INTERVAL 60 DAY)
-             GROUP BY am.executive_code
-             HAVING prev > 0 AND curr < prev
-           ) t`, [from, to, from, from, ...subCl.p]),
+        supplyByExec(from, to, unitList),
+        supplyByExec(prevFrom, prevTo, unitList),
       ]);
+
+      // Supply decline: compare curr vs prev per exec in JS
+      const prevSupMap = {};
+      for (const r of supPrevRows) prevSupMap[r.executive_code] = N(r.total_supply);
+      let supplyFallCount = 0;
+      for (const r of supCurrRows) {
+        const prev = prevSupMap[r.executive_code] || 0;
+        if (prev > 0 && N(r.total_supply) < prev) supplyFallCount++;
+      }
 
       // Visit data — queried separately to avoid cross-collation JOIN between agency_master and dcr_agency_visit
       const { agencies, visitMap } = await buildLastVisitData(unitList);
@@ -849,14 +896,15 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
         count: osHigh, detail: [],
       });
 
-      const supplyFall = N(supplyFallR.rows[0]?.n);
-      if (supplyFall > 0) alerts.push({
+      if (supplyFallCount > 0) alerts.push({
         key: 'supply_declining', type: 'warning', icon: '🟡',
-        message: `${supplyFall} executives have declining supply vs previous period`,
-        count: supplyFall, detail: [],
+        message: `${supplyFallCount} executives have declining supply vs previous period`,
+        count: supplyFallCount, detail: [],
       });
 
-      res.json({ total_execs: totalExecs, active_today: activeToday.size, today, alerts });
+      const payload = { total_execs: totalExecs, active_today: activeToday.size, today, alerts };
+      _alertCache.set(cacheKey, { ts: Date.now(), data: payload });
+      res.json(payload);
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 

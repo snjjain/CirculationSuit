@@ -1,7 +1,7 @@
-/* Patrika Vitran Suite — offline cache */
-const CACHE = "patrika-vitran-v156";
+﻿/* Patrika Vitran Suite â€” offline cache */
+const CACHE = "patrika-vitran-v157";
 const ASSETS = [
-  "./", "./index.html", "./css/app.css?v=9", "./js/data.js?v=21", "./js/app.js?v=156",
+  "./", "./index.html", "./css/app.css?v=9", "./js/data.js?v=21", "./js/app.js?v=157",
   "./manifest.webmanifest", "./assets/patrika-logo.png", "./assets/icon-192.png", "./assets/icon-512.png"
 ];
 self.addEventListener("install", e => {
@@ -14,7 +14,7 @@ self.addEventListener("fetch", e => {
   if (e.request.method !== "GET") return;
   const url = new URL(e.request.url);
   // Only cache same-origin static assets. API/data calls (cross-origin, e.g. :8001) must
-  // go straight to the network — never intercepted or cached by the SW (they are dynamic
+  // go straight to the network â€” never intercepted or cached by the SW (they are dynamic
   // and caching them adds latency and risks serving stale data).
   if (url.origin !== self.location.origin) return;
   e.respondWith(
