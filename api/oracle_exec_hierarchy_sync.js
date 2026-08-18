@@ -199,6 +199,10 @@ async function ensureTables(conn) {
 
 // ── Generic full-replace loader ───────────────────────────────────────────────
 async function fullReplace(conn, tableName, rows, insertSql, mapRow) {
+  if (!rows.length) {
+    log(`  ${tableName}: 0 rows from Oracle — skipping truncate to preserve existing data`);
+    return 0;
+  }
   await conn.execute(`TRUNCATE TABLE ${tableName}`);
   let count = 0;
   for (let i = 0; i < rows.length; i += 200) {
