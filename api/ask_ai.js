@@ -810,7 +810,7 @@ module.exports = function registerAskAI(ctx) {
 
     // ── 15. DCR visit summary — by executive, unit, or purpose ──────────────
     {
-      match: /\b(dcr|field visit|agency visit|visit summary|kitne.*visit|visit.*kitne|executive.*visit|visit.*executive|visit.*report|visit.*performance)\b/i,
+      match: /\bdcr\b|field visit|agency visit|visit summary|kitne.*visit|visit.*kitne|executive.*visit|visit.*executive|visit.*report|visit.*performance/i,
       build: (question, scope) => {
         const byUnit  = /unit|branch/i.test(question);
         const byPurp  = /purpose/i.test(question);
@@ -851,7 +851,7 @@ module.exports = function registerAskAI(ctx) {
 
     // ── 16. Executives with no/low visits ────────────────────────────────────
     {
-      match: /\b(no visit|zero visit|inactive exec|exec.*not visit|visit.*nahi|field.*absent|absent.*field)\b/i,
+      match: /no.*visit|zero.*visit|visit.*zero|inactive exec|exec.*not visit|not.*visit.*exec|visit.*nahi|visit.*नहीं|नहीं.*visit|field.*absent|absent.*field|without.*visit|visit.*without/i,
       build: (question, scope) => ({
         understood: 'Executives with 0 DCR agency visits in the last 7 days (but active in last 30)',
         queries: [{ purpose: 'Inactive executives', sql: `
@@ -878,7 +878,7 @@ module.exports = function registerAskAI(ctx) {
 
     // ── 17. Agencies not visited in N days ───────────────────────────────────
     {
-      match: /\b(agenc.*not visit|not visit.*agenc|unvisit|visit gap|visit baaki|coverage gap|agency coverage)\b/i,
+      match: /agenc.*not visit|not visit.*agenc|unvisit|visit gap|visit baaki|coverage gap|agency coverage|agenc.*visit.*\d+.*day|\d+.*day.*agenc.*visit/i,
       build: (question, scope) => {
         const days = (question.match(/(\d+)\s*day/) || [])[1] || '30';
         return {
@@ -915,8 +915,7 @@ module.exports = function registerAskAI(ctx) {
 
     // ── 18. Executive target achievement ──────────────────────────────────────
     {
-      match: /\b(target|achievement|achieved|lakshy|lakhshy|best exec|worst exec|top exec|performer)\b/i,
-      guard: /exec|branch|unit|month/i,
+      match: /target.*achiev|achiev.*target|exec.*target|target.*exec|target.*last month|monthly target|लक्ष्य|best exec|worst exec|top exec|performer/i,
       build: (question, scope) => ({
         understood: 'Executive target vs achievement — monthly (latest data)',
         queries: [{ purpose: 'Target vs actual by executive', sql: `
