@@ -3878,6 +3878,11 @@ app.get('/api/collection/behavior-trend', async (req, res) => {
           months: {}, app_txn: 0, cash_txn: 0, dig_txn: 0, app_amt: 0, cash_amt: 0, dig_amt: 0, total_amt: 0,
         };
         const a = byAg[k];
+        // Keep the most-recent payment date across all months (rows are oldest-first)
+        if (r.last_payment && String(r.last_payment) > String(a.last_payment || '')) {
+          a.last_payment = r.last_payment;
+          a.days_since   = +r.days_since;
+        }
         a.months[r.mon] = { app_txn:+r.app_txn, cash_txn:+r.cash_txn, dig_txn:+r.dig_txn, app_amt:+r.app_amt, cash_amt:+r.cash_amt, dig_amt:+r.dig_amt, txn:+r.txn, amount:+r.amount };
         a.app_txn += +r.app_txn; a.cash_txn += +r.cash_txn; a.dig_txn += +r.dig_txn;
         a.app_amt += +r.app_amt; a.cash_amt += +r.cash_amt; a.dig_amt += +r.dig_amt; a.total_amt += +r.amount;
