@@ -363,7 +363,7 @@ module.exports = function registerSupplyDash(ctx) {
       const S = on(sc2, 'unit_code');
       const SM = on(sc2, 'am.unit');
 
-      const [zeroSupply, negGrowth, abnormal, highOS] = await Promise.all([
+      const [zeroSupply, negGrowth, abnormal, highOS, noVisit] = await Promise.all([
         // active agents with no supply on current day but supply on prev day
         q(`SELECT ag_name, unit_name, prv copies_lost FROM (
              SELECT agcd, MAX(ag_name) ag_name, MAX(unit_name) unit_name,
@@ -401,6 +401,18 @@ module.exports = function registerSupplyDash(ctx) {
            WHERE ao.period_label='CURRENT' AND ao.cl_amt > 100000
              AND ao.last_supply_copies > 100${on(sc2, 'ao.unit_code')}
            ORDER BY ao.cl_amt DESC LIMIT 50`, sc2.params),
+        // agents active in last 14 days with no DCR visit in last 30 days
+        q(`SELECT s.agcd, MAX(s.ag_name) ag_name, MAX(s.unit_name) unit_name,
+                  SUM(s.sup_copy) total_copies, MAX(v.mark_attn_date) last_visit
+           FROM supply_data s
+           LEFT JOIN dcr_agency_visit v
+             ON v.visit_to_main_code = s.agcd AND v.unit_code = s.unit_code
+             AND v.mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+           WHERE s.supply_date >= DATE_SUB(?, INTERVAL 14 DAY)${S}
+           GROUP BY s.agcd
+           HAVING MAX(v.mark_attn_date) IS NULL OR DATEDIFF(CURDATE(), MAX(v.mark_attn_date)) > 30
+           ORDER BY (MAX(v.mark_attn_date) IS NULL) DESC, DATEDIFF(CURDATE(), MAX(v.mark_attn_date)) DESC
+           LIMIT 50`, [d.cur, ...sc2.params]),
       ]);
 
       res.json({
@@ -409,7 +421,7 @@ module.exports = function registerSupplyDash(ctx) {
         negative_growth: negGrowth.rows,
         abnormal_growth: abnormal.rows,
         high_outstanding: highOS.rows,
-        no_visit: [], // DCR data pending
+        no_visit: noVisit.rows,
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
@@ -866,7 +878,7 @@ module.exports = function registerSupplyDash(ctx) {
         WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
           ${clause.replace('{col}', 'loc_id')}
         GROUP BY loc_id, hwk_cent_code, DATE(supply_date)
-        ORDER BY loc_id, hwk_cent_code, supply_date DESC`,
+        ORDER BY loc_id, hwk_cent_code, DATE(supply_date) DESC`,
         [days, ...params]);
 
       // Pivot rows into { unit+center → { date → { last_entry, txn_count, total_copies } } }

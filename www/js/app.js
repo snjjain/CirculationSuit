@@ -2433,7 +2433,8 @@ function _supdExceptions(st) {
       r => `<tr><td><b>${esc(r.ag_name)}</b></td><td>${esc(r.unit_name)}</td><td class="r num">${_supdN(r.prior)}</td><td class="r num">${_supdN(r.recent)}</td><td class="r num" style="color:var(--grn)">+${r.change_pct}%</td></tr>`)
     + sect('💰 High Outstanding (>₹1L) with Active Supply', 'var(--red)', d.high_outstanding || [], ['Agent', 'Branch', '>Outstanding', '>Last Supply'],
       r => `<tr><td><b>${esc(r.ag_name)}</b></td><td>${esc(r.unit_name)}</td><td class="r num" style="color:var(--red)">${_supdINR(Number(r.outstanding))}</td><td class="r num">${_supdN(r.last_supply_copies)}</td></tr>`)
-    + `<div class="card pad" style="color:var(--muted);font-size:11.5px">🚶 "No DCR Visit" exceptions will appear once the DCR visit sync is added.</div>`;
+    + sect('🚶 No DCR Visit in Last 30 Days', 'var(--muted)', d.no_visit || [], ['Agent', 'Branch', '>Supply (14d)', 'Last Visit'],
+      r => `<tr><td><b>${esc(r.ag_name)}</b></td><td>${esc(r.unit_name)}</td><td class="r num">${_supdN(r.total_copies)}</td><td style="color:var(--red)">${r.last_visit ? esc(String(r.last_visit).slice(0, 10)) : '—'}</td></tr>`);
 }
 
 /* ── Sale view: Agent Sale vs Cash Sale (default) + drill-downs with breadcrumbs ── */
@@ -2716,7 +2717,7 @@ VIEWS.supply_dash = () => {
                     execs: _supdExecs, trend: _supdTrend, exceptions: _supdExceptions,
                     receipt: _supdReceipt };
   const dataNote = st.filters && st.filters.data_upto
-    ? `<div style="font-size:11px;color:var(--muted);text-align:center;margin-top:8px">Agency/Credit sale data up to <b>${esc(String(st.filters.data_upto).slice(0, 10))}</b> · Hawker/Cash sale &amp; DCR visit data pending sync · 5-year history loading</div>`
+    ? `<div style="font-size:11px;color:var(--muted);text-align:center;margin-top:8px">Agent/Credit sale data up to <b>${esc(String(st.filters.data_upto).slice(0, 10))}</b> · Hawker/Cash sale &amp; DCR synced daily</div>`
     : '';
   return pagehead('Supply Dashboard', 'Agency supply · growth & reduction · exceptions — decision view for HO, ZH, Incharge & Executives') + `
     <style>._cmd-strip-item{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px}</style>
@@ -4855,7 +4856,7 @@ function colAgenciesTab() {
 /* ── Behaviour drill-down: State → Unit → Agency with 6-month payment mode trend ── */
 function _colBhLoad(key, level, stateQ, branchQ) {
   const st = colState();
-  if (st['_bh_l_' + key] || st['bh' + key]) return;
+  if (st['_bh_l_' + key] || st['bh' + key] || st['_bh_err_' + key]) return;
   st['_bh_l_' + key] = true;
   const p = new URLSearchParams({ level });
   if (stateQ)  p.set('state',  stateQ);
@@ -4863,13 +4864,14 @@ function _colBhLoad(key, level, stateQ, branchQ) {
   fetch(colApi() + '/behavior-trend?' + p.toString(), { headers: api.h() })
     .then(r => r.json())
     .then(d => { st['bh' + key] = d; st['_bh_l_' + key] = false; if (S.screen === 'collections') render(); })
-    .catch(() => { st['_bh_l_' + key] = false; if (S.screen === 'collections') render(); });
+    .catch(() => { st['_bh_l_' + key] = false; st['_bh_err_' + key] = true; if (S.screen === 'collections') render(); });
 }
 window.colBhDrill = (state, branch) => {
   const st = colState();
   st.bhDrillState = state || ''; st.bhDrillUnit = branch || '';
   st.bhUnit = null; st.bhAgency = null;
   st['_bh_l_Unit'] = false; st['_bh_l_Agency'] = false;
+  st['_bh_err_Unit'] = false; st['_bh_err_Agency'] = false;
   render();
 };
 
@@ -4999,8 +5001,11 @@ function colBehaviorTab() {
   const backAll  = `<button class="btn sm" style="margin-bottom:10px" onclick="colBhDrill('','')">← All States</button>`;
   const backState = `<button class="btn sm" style="margin-bottom:10px;margin-left:6px" onclick="colBhDrill('${esc(st.bhDrillState).replace(/'/g,"\\'")}','')">← ${esc(st.bhDrillState)}</button>`;
 
+  const bhErr = msg => `<div class="card pad" style="color:var(--muted)">⚠️ ${msg} <button class="btn sm" style="margin-left:8px" onclick="colState()['_bh_err_State']=false;colState()['_bh_err_Unit']=false;colState()['_bh_err_Agency']=false;render()">Retry</button></div>`;
+
   // Level 0 — State
   if (!st.bhDrillState) {
+    if (st['_bh_err_State']) return summary + bhErr('Could not load behaviour data.');
     if (!st.bhState) return summary + _cmdSkel();
     return summary + _colBhStateTable(st.bhState);
   }
@@ -5008,11 +5013,13 @@ function colBehaviorTab() {
   // Level 1 — Unit (state selected)
   if (!st.bhDrillUnit) {
     _colBhLoad('Unit', 'unit', st.bhDrillState, '');
+    if (st['_bh_err_Unit']) return summary + backAll + bhErr('Could not load unit data.');
     return summary + backAll + (!st.bhUnit ? _cmdSkel() : _colBhUnitTable(st.bhUnit, st.bhDrillState));
   }
 
   // Level 2 — Agency (state + unit selected)
   _colBhLoad('Agency', 'agency', st.bhDrillState, st.bhDrillUnit);
+  if (st['_bh_err_Agency']) return summary + backAll + backState + bhErr('Could not load agency data.');
   return summary + backAll + backState + (!st.bhAgency ? _cmdSkel() : _colBhAgencyTable(st.bhAgency, st.bhDrillState, st.bhDrillUnit));
 }
 
