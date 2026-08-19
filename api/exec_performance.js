@@ -642,7 +642,9 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const { from, to } = parseDates(req.query);
       const unitList = await buildUnitList(req);
       const ucd = unitCl('unit_code', unitList);
-      const today = new Date().toISOString().slice(0, 10);
+      // Use D-1: sync runs nightly, today's field data is always incomplete
+      const _d1 = new Date(); _d1.setDate(_d1.getDate() - 1);
+      const today = _d1.toISOString().slice(0, 10);
 
       const [visitsR, attendR, todayVisitR] = await Promise.all([
         q(`SELECT emp_code, COUNT(*) visits, COUNT(DISTINCT mark_attn_date) active_days,
@@ -797,7 +799,9 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const amCl     = unitCl('am.unit',      unitList);
       const subCl    = unitCl('unit',          unitList);
       const ucd      = unitCl('unit_code',     unitList);
-      const today    = new Date().toISOString().slice(0, 10);
+      // Use D-1: sync runs nightly, today's field data is always incomplete
+      const _d1 = new Date(); _d1.setDate(_d1.getDate() - 1);
+      const today    = _d1.toISOString().slice(0, 10);
 
       const cacheKey = `${from}|${to}|${today}|${unitList === null ? '__all__' : [...unitList].sort().join(',')}`;
       const hit = _alertCache.get(cacheKey);
@@ -872,7 +876,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
         key:     'no_visit_today',
         type:    'danger',
         icon:    '🔴',
-        message: `${inactiveToday.length} executive${inactiveToday.length > 1 ? 's' : ''} have no DCR activity today`,
+        message: `${inactiveToday.length} executive${inactiveToday.length > 1 ? 's' : ''} had no DCR activity prev day (${today})`,
         count:   inactiveToday.length,
         detail:  inactiveToday.map(r => ({ exec_code: r.executive_code, exec_name: r.exec_name, unit_code: r.unit_code })),
       });

@@ -6626,11 +6626,11 @@ function epDcrCard() {
     label: 'DCR Visits',
     value: epFmtN(d.total_visits),
     status: d.total_visits > 0 ? 'good' : 'warn',
-    sub: `${d.execs_active} execs active · ${d.execs_active_today} active today`,
+    sub: `${d.execs_active} execs active · ${d.execs_active_today} active prev day`,
   });
 }
 
-// ── Today's Pulse — who is/isn't active today ─────────────────────────────────
+// ── Prev Day Pulse — who was/wasn't active yesterday ────────────────────────────
 function epTodayPulse() {
   const st = epState();
   // Trigger parallel loads (epFetch deduplicates — safe to call multiple times)
@@ -6639,7 +6639,7 @@ function epTodayPulse() {
 
   if (!st.alerts && !st.dcr) {
     return `<div class="card" style="padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:8px">
-      <div style="font-size:13px;color:var(--muted)">⏳ Loading today's activity…</div>
+      <div style="font-size:13px;color:var(--muted)">⏳ Loading field activity…</div>
     </div>`;
   }
 
@@ -6665,7 +6665,7 @@ function epTodayPulse() {
   return `<div class="card" style="padding:14px 16px;margin-bottom:12px">
     <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:14px">
       <div style="min-width:150px">
-        <div style="font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Today — ${todayFmt}</div>
+        <div style="font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Prev Day — ${todayFmt}</div>
         <div style="display:flex;align-items:baseline;gap:5px;margin-top:4px">
           <span style="font-size:28px;font-weight:800;color:${barColor};line-height:1">${active}</span>
           <span style="font-size:13px;color:var(--muted)">/ ${total}</span>
@@ -6682,11 +6682,11 @@ function epTodayPulse() {
           <span style="font-size:12px;font-weight:700;color:${barColor};min-width:34px">${pct}%</span>
         </div>
         ${inactive.length > 0
-          ? `<div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:4px">Not active today (${inactive.length}):</div>
+          ? `<div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:4px">Not active prev day (${inactive.length}):</div>
              <div style="line-height:1.8">${inactiveChips}${inactive.length > 18 ? `<span style="font-size:11px;color:var(--muted);margin-left:4px">+${inactive.length-18} more</span>` : ''}</div>`
           : active > 0
-            ? `<div style="font-size:11px;color:var(--grn);margin-top:4px">✅ All executives with DCR access are active today</div>`
-            : `<div style="font-size:11px;color:var(--muted);margin-top:4px">No DCR activity recorded yet for today</div>`}
+            ? `<div style="font-size:11px;color:var(--grn);margin-top:4px">✅ All executives were active prev day</div>`
+            : `<div style="font-size:11px;color:var(--muted);margin-top:4px">No DCR activity found for prev day</div>`}
       </div>
     </div>
   </div>`;
@@ -6741,7 +6741,7 @@ function epAlertsSection() {
     <div style="padding:10px 14px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;justify-content:space-between">
       <div>
         <div style="font-weight:700;font-size:13px">⚡ Management Attention Required</div>
-        <div style="font-size:10.5px;color:var(--muted)">Team active today: ${active_today || 0} / ${total_execs || 0} executives</div>
+        <div style="font-size:10.5px;color:var(--muted)">Team active prev day: ${active_today || 0} / ${total_execs || 0} executives</div>
       </div>
     </div>
     ${alerts.length ? alerts.map(alertRow).join('') : `<div style="padding:12px 14px;font-size:12px;color:var(--grn)">✅ No critical alerts for this period</div>`}
@@ -6986,8 +6986,8 @@ function epExecTable() {
             const dcrRow = dcrByExec[r.executive_code];
             const todayCell = !hasDcr ? '<td style="text-align:center;color:var(--muted)">—</td>'
               : dcrRow?.active_today
-                ? '<td style="text-align:center;font-size:15px" title="Active today">✅</td>'
-                : '<td style="text-align:center;font-size:15px" title="No activity today">❌</td>';
+                ? '<td style="text-align:center;font-size:15px" title="Active prev day">✅</td>'
+                : '<td style="text-align:center;font-size:15px" title="No activity prev day">❌</td>';
             return `<tr class="rowbtn" onclick="epDrillExec('${esc(r.executive_code)}','${esc(r.exec_name || '')}')" style="${i % 2 ? 'background:var(--surface-2)' : ''}">
               <td style="color:var(--muted);font-size:11px">${r.rank || i + 1}</td>
               <td>
@@ -7064,7 +7064,7 @@ function epExecDetailView() {
         <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Agency Visits</div><div style="font-size:15px;font-weight:700;color:var(--chart-1)">${dcrExec.visits}</div></div>
         <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Agencies Covered</div><div style="font-size:15px;font-weight:700">${dcrExec.agencies_visited}</div></div>
         <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Active Days</div><div style="font-size:15px;font-weight:700">${dcrExec.active_days}</div></div>
-        <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Today</div>
+        <div><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Prev Day</div>
           <div style="font-size:13px;font-weight:700;color:${dcrExec.active_today?'var(--grn)':'var(--red)'}">
             ${dcrExec.active_today?'✅ Active':'❌ No Activity'}</div></div>
       </div>` : ''}
