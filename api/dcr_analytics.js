@@ -251,9 +251,9 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const unitWhere = sc ? sc.replace(/AND unit_code/g, 'AND unit_code').trim() : '';
       const amWhere   = sc ? sc.replace(/AND unit_code/g, 'AND am.unit').replace(/unit_code IN/g, 'am.unit IN').trim() : '';
 
-      // Query 1: GPS from Oracle dcr_agency_visit
+      // Query 1: GPS from Oracle dcr_agency_visit (include unit_code for composite key)
       const { rows: oracleGps } = await q(
-        `SELECT visit_to_main_code AS agcd,
+        `SELECT visit_to_main_code AS agcd, unit_code,
                 CAST(latitude AS DECIMAL(10,6)) AS lat, CAST(longitude AS DECIMAL(10,6)) AS lng,
                 visit_date, executive_name, visit_remarks, visit_purpose, id
          FROM dcr_agency_visit
@@ -266,7 +266,7 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       );
       // Query 2: GPS from new DCR app
       const { rows: appGps } = await q(
-        `SELECT target_code AS agcd, lat, lng, visit_date, staff_name AS executive_name,
+        `SELECT target_code AS agcd, unit_code, lat, lng, visit_date, staff_name AS executive_name,
                 remarks AS visit_remarks, purpose AS visit_purpose, id
          FROM dcr_visit
          WHERE target_type = 'agent' AND lat IS NOT NULL AND lng IS NOT NULL
@@ -276,55 +276,65 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
         sp
       );
 
-      // Merge: latest GPS per agcd (Oracle preferred if same date)
+      // Merge: latest GPS per unit_code+agcd (composite key — same agcd can exist in multiple units)
       const gpsMap = {};
-      [...appGps, ...oracleGps].forEach(r => { // oracle overrides app for same agcd
-        if (!gpsMap[r.agcd] || r.visit_date > gpsMap[r.agcd].visit_date)
-          gpsMap[r.agcd] = { lat: Number(r.lat), lng: Number(r.lng), last_visit_date: r.visit_date,
+      [...appGps, ...oracleGps].forEach(r => {
+        const key = (r.unit_code || '') + '|' + (r.agcd || '');
+        if (!gpsMap[key] || r.visit_date > gpsMap[key].visit_date)
+          gpsMap[key] = { lat: Number(r.lat), lng: Number(r.lng), last_visit_date: r.visit_date,
             last_exec_name: r.executive_name, last_remarks: r.visit_remarks, last_purpose: r.visit_purpose };
       });
 
-      const agcdList = Object.keys(gpsMap);
+      // Collect unique agcds for agency_master lookup
+      const agcdList = [...new Set(Object.keys(gpsMap).map(k => k.split('|')[1]).filter(Boolean))];
       if (!agcdList.length) return res.json({ count: 0, agencies: [] });
 
       const ph2 = agcdList.map(() => '?').join(',');
       const { rows: agencies } = await q(
-        `SELECT am.agcd, am.ag_name, am.unit AS unit_code, am.unit_name,
-                am.dist_name AS district, am.city_name AS city,
+        `SELECT am.agcd, am.unit AS unit_code, am.unit_name,
+                am.ag_name, am.dist_name AS district, am.city_name AS city,
                 am.ag_class_name AS ag_class, am.field_officer_name AS field_officer,
                 am.executive_name AS assigned_exec,
                 CASE WHEN am.supply_stop_flag = 'Y' OR (am.suspend_date IS NOT NULL AND am.suspend_date <= CURDATE())
                 THEN 'Inactive' ELSE 'Active' END AS status
          FROM agency_master am
          WHERE am.agcd IN (${ph2})
+           AND CAST(am.dpcd AS UNSIGNED) = 1
          ${amWhere ? 'AND ' + amWhere.replace(/^\s*AND\s*/,'') : ''}
          ORDER BY am.unit, am.ag_name`,
         [...agcdList, ...sp]
       );
 
-      // Attach current supply (latest date per agency) — batch query
-      const agcds = agencies.map(a => a.agcd).filter(Boolean);
+      // Attach current supply (latest date per unit+agcd) — batch query
+      const unitAgcdPairs = agencies.map(a => a.unit_code + '|' + a.agcd);
       let supplyMap = {};
-      if (agcds.length) {
-        const ph = agcds.map(() => '?').join(',');
+      if (agcdList.length) {
+        const ph = agcdList.map(() => '?').join(',');
         const { rows: supRows } = await q(
-          `SELECT sd.agcd, sd.sup_copy, sd.supply_date
+          `SELECT sd.unit_code, sd.agcd, sd.sup_copy, sd.supply_date
            FROM supply_data sd
            JOIN (
-             SELECT agcd, MAX(supply_date) mxd FROM supply_data WHERE agcd IN (${ph}) GROUP BY agcd
-           ) mx ON mx.agcd = sd.agcd AND mx.mxd = sd.supply_date
+             SELECT unit_code, agcd, MAX(supply_date) mxd
+             FROM supply_data WHERE agcd IN (${ph}) GROUP BY unit_code, agcd
+           ) mx ON mx.unit_code = sd.unit_code AND mx.agcd = sd.agcd AND mx.mxd = sd.supply_date
            WHERE sd.agcd IN (${ph})`,
-          [...agcds, ...agcds]
+          [...agcdList, ...agcdList]
         );
-        supRows.forEach(r => { supplyMap[r.agcd] = { copies: r.sup_copy, date: r.supply_date }; });
+        supRows.forEach(r => { supplyMap[r.unit_code + '|' + r.agcd] = { copies: r.sup_copy, date: r.supply_date }; });
       }
 
-      const result = agencies.map(a => ({
-        ...a,
-        ...(gpsMap[a.agcd] || {}),
-        supply: supplyMap[a.agcd]?.copies || null,
-        supply_date: supplyMap[a.agcd]?.date || null,
-      }));
+      // Use composite key (unit_code|agcd) so each agency only gets GPS from its own unit's visits
+      const result = agencies
+        .map(a => {
+          const key = (a.unit_code || '') + '|' + a.agcd;
+          return {
+            ...a,
+            ...(gpsMap[key] || {}),
+            supply: supplyMap[key]?.copies || null,
+            supply_date: supplyMap[key]?.date || null,
+          };
+        })
+        .filter(a => a.lat != null);  // only agencies that have GPS from their own unit's visits
 
       res.json({ count: result.length, agencies: result });
     } catch (e) { res.status(500).json({ detail: e.message }); }
