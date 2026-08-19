@@ -4373,7 +4373,8 @@ function colState() {
     tab: 'overview', gran: 'monthly', agSearch: '', bSearch: '', loading: false, error: null,
     filters: { from: prevMonthRange().from, to: prevMonthRange().to, state:'', branch:'', district:'', ag_code:'', payment_cat:'' },
     opts: { states:[], branches:[], districts:[], payment_cats:[], agencies:[] },
-    kpis: null, trend: [], modes: [], agencies: [], behavior: [], appUsage: [],
+    kpis: null, trend: [], modes: [], agencies: [], appUsage: [],
+    bhDrillState: '', bhDrillUnit: '', bhState: null, bhUnit: null, bhAgency: null,
   });
 }
 
@@ -4433,20 +4434,18 @@ async function colFetch() {
   }
   try {
     const h = { headers: api.h() };
-    const [kpis, trend, modes, agencies, behavior, appUsage] = await Promise.all([
-      fetch(colApi() + '/kpis'            + colQS(), h).then(r=>r.json()),
-      fetch(colApi() + '/trend'           + colQS({granularity:st.gran}), h).then(r=>r.json()),
-      fetch(colApi() + '/payment-modes'   + colQS(), h).then(r=>r.json()),
-      fetch(colApi() + '/agencies'        + colQS({limit:300}), h).then(r=>r.json()),
-      fetch(colApi() + '/agency-behavior' + colQS({limit:300}), h).then(r=>r.json()),
-      fetch(colApi() + '/app-usage'       + colQS(), h).then(r=>r.json()),
+    const [kpis, trend, modes, agencies, appUsage] = await Promise.all([
+      fetch(colApi() + '/kpis'          + colQS(), h).then(r=>r.json()),
+      fetch(colApi() + '/trend'         + colQS({granularity:st.gran}), h).then(r=>r.json()),
+      fetch(colApi() + '/payment-modes' + colQS(), h).then(r=>r.json()),
+      fetch(colApi() + '/agencies'      + colQS({limit:300}), h).then(r=>r.json()),
+      fetch(colApi() + '/app-usage'     + colQS(), h).then(r=>r.json()),
     ]);
     Object.assign(st, {
       kpis,
       trend:    trend.rows    || [],
       modes:    modes.rows    || [],
       agencies: agencies.rows || [],
-      behavior: behavior.rows || [],
       appUsage: appUsage.rows || [],
     });
   } catch(e) { st.error = e.message; }
@@ -4853,55 +4852,168 @@ function colAgenciesTab() {
   </div>`;
 }
 
-function colBehaviorTab() {
+/* ── Behaviour drill-down: State → Unit → Agency with 6-month payment mode trend ── */
+function _colBhLoad(key, level, stateQ, branchQ) {
   const st = colState();
-  const q = (st.bSearch||'').toLowerCase();
-  const rows = (st.behavior||[]).filter(r =>
-    !q || (r.ag_name||'').toLowerCase().includes(q) || (r.ag_code||'').toLowerCase().includes(q)
-  );
-  // Group by state — Rajasthan, MP, CG, National order
-  const STATE_ORDER = ['RAJASTHAN', 'MP', 'CG', 'NATIONAL'];
-  const byState = {};
-  rows.forEach(r => { const s = r.state_name || '—'; (byState[s] = byState[s] || []).push(r); });
-  const states = Object.keys(byState).sort((a, b) => {
-    const ia = STATE_ORDER.indexOf(a), ib = STATE_ORDER.indexOf(b);
-    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  if (st['_bh_l_' + key] || st['bh' + key]) return;
+  st['_bh_l_' + key] = true;
+  const p = new URLSearchParams({ level });
+  if (stateQ)  p.set('state',  stateQ);
+  if (branchQ) p.set('branch', branchQ);
+  fetch(colApi() + '/behavior-trend?' + p.toString(), { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st['bh' + key] = d; st['_bh_l_' + key] = false; if (S.screen === 'collections') render(); })
+    .catch(() => { st['_bh_l_' + key] = false; if (S.screen === 'collections') render(); });
+}
+window.colBhDrill = (state, branch) => {
+  const st = colState();
+  st.bhDrillState = state || ''; st.bhDrillUnit = branch || '';
+  st.bhUnit = null; st.bhAgency = null;
+  st['_bh_l_Unit'] = false; st['_bh_l_Agency'] = false;
+  render();
+};
+
+function _colBhModeTag(type) {
+  const map = { app:['App','var(--grn)'], digital:['Digital','var(--blue)'], cash:['Cash','var(--gold)'] };
+  const [l, c] = map[type] || ['—','var(--muted)'];
+  return `<span style="background:${c}22;color:${c};font-size:10px;font-weight:700;padding:1px 7px;border-radius:20px">${l}</span>`;
+}
+
+function _colBhSparkline(monthData) {
+  const maxAmt = Math.max(...monthData.filter(Boolean).map(m => m.amount || 0), 1);
+  return `<div style="display:flex;gap:2px;align-items:flex-end;height:22px">` +
+    monthData.map(m => {
+      if (!m || m.amount <= 0) return `<div style="width:9px;height:4px;background:var(--brd);border-radius:2px;opacity:.35"></div>`;
+      const h = Math.max(4, Math.round(m.amount / maxAmt * 22));
+      const c = m.app_amt > m.cash_amt && m.app_amt > m.dig_amt ? 'var(--grn)'
+              : m.cash_amt > m.dig_amt ? 'var(--gold)' : 'var(--blue)';
+      return `<div style="width:9px;height:${h}px;background:${c};border-radius:2px" title="${colFmtC(m.amount)}"></div>`;
+    }).join('') + `</div>`;
+}
+
+function _colBhSummary(stData) {
+  if (!stData || !stData.rows) return '';
+  const t = stData.rows.reduce((acc, r) => { acc.agencies += r.agencies; acc.app += r.app_agencies; acc.cash += r.cash_agencies; acc.dig += r.dig_agencies; return acc; }, { agencies:0, app:0, cash:0, dig:0 });
+  return `<div class="vz-kgrid" style="margin-bottom:14px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+    ${vzKpi({ icon:'🏢', label:'Agencies · 6 Months', value: t.agencies.toLocaleString('en-IN'), status:'fl' })}
+    ${vzKpi({ icon:'📱', label:'App Users',   value: t.app.toLocaleString('en-IN'), status:'up' })}
+    ${vzKpi({ icon:'💳', label:'Digital Only', value: t.dig.toLocaleString('en-IN'), status:'up' })}
+    ${vzKpi({ icon:'💵', label:'Cash Payers',  value: t.cash.toLocaleString('en-IN'), status:'dn' })}
+  </div>`;
+}
+
+function _colBhStateTable(sd) {
+  const STATE_ORDER = ['RAJASTHAN','MADHYA PRADESH','CHHATTISGARH','NATIONAL'];
+  const rows = (sd.rows || []).slice().sort((a, b) => {
+    const ia = STATE_ORDER.indexOf((a.grp||'').toUpperCase()), ib = STATE_ORDER.indexOf((b.grp||'').toUpperCase());
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
-
-  const bRow = r => `<tr>
-    <td><b>${esc(r.ag_name||r.ag_code||'')}</b><br><small style="color:var(--muted)">${esc(r.ag_code||'')} · ${esc(r.branch_name||'')}</small></td>
-    <td style="font-size:12px">${r.last_payment||'—'}</td>
-    <td class="r" style="color:${Number(r.days_since)>60?'var(--red)':'var(--grn)'}">${r.days_since!=null?r.days_since+'d':'—'}</td>
-    <td class="r">${(r.num_payments||0).toLocaleString()}</td>
-    <td class="r num">${colFmtC(r.avg_amount)}</td>
-    <td class="r num">${colFmtC(r.highest)}</td>
-    <td class="r num">${colFmtC(r.lowest)}</td>
+  const tbl = rows.map(r => `<tr style="cursor:pointer" onclick="colBhDrill('${esc(r.grp).replace(/'/g,"\\'")}','')">
+    <td><b style="color:var(--acc)">${esc(r.grp)}</b></td>
+    <td class="r">${r.agencies.toLocaleString()}</td>
+    <td class="r">${_colBhModeTag('app')} <b>${r.app_agencies}</b> <small style="color:var(--muted)">(${r.agencies?Math.round(r.app_agencies/r.agencies*100):0}%)</small></td>
+    <td class="r">${_colBhModeTag('digital')} ${r.dig_agencies}</td>
+    <td class="r">${_colBhModeTag('cash')} ${r.cash_agencies}</td>
     <td class="r num">${colFmtC(r.total_amount)}</td>
-    <td class="r" style="color:var(--muted);font-size:11px">${r.freq_per_month!=null?Number(r.freq_per_month||0).toFixed(1)+'/mo':'—'}</td>
-  </tr>`;
-
-  const tbl = states.map(stName => {
-    const list = byState[stName];
-    const stTotal = list.reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
-    return `<tr style="background:var(--navy,#1C2B45);color:#fff;font-weight:700">
-      <td colspan="7">${esc(stName)} · ${list.length} agencies</td>
-      <td class="r num">${colFmtC(stTotal)}</td>
-      <td></td>
-    </tr>` + list.map(bRow).join('');
-  }).join('') || '<tr><td colspan="9" style="text-align:center;color:var(--muted)">No data</td></tr>';
-
-  return `<div class="vz-sec">
-    <div class="cardhead" style="padding:0 0 12px;flex-wrap:wrap;gap:8px">
-      <h3>Agency Payment Behaviour (${rows.length}) — State wise</h3>
-      <input placeholder="🔍 Search agency..." value="${esc(st.bSearch||'')}"
-        style="padding:5px 10px;border:1px solid var(--brd);border-radius:6px;background:var(--card);color:var(--ink);font-size:12px;width:180px"
-        oninput="colState().bSearch=this.value;render()">
+  </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--muted)">No data for last 6 months</td></tr>';
+  return `<div class="vz-sec"><div class="cardhead"><h3>Payment Mode Behaviour — State wise
+      <small style="font-weight:400;color:var(--muted);margin-left:6px">Rolling 6 months · click state to drill in</small></h3>
     </div>
     <div class="tablewrap"><table>
-      <thead><tr><th>Agency</th><th>Last Payment</th><th class="r">Days Since</th><th class="r"># Payments</th><th class="r">Avg Amount</th><th class="r">Highest</th><th class="r">Lowest</th><th class="r">Total</th><th class="r">Freq/Mo</th></tr></thead>
+      <thead><tr><th>State</th><th class="r">Agencies</th><th class="r">📱 App Users</th><th class="r">💳 Digital</th><th class="r">💵 Cash</th><th class="r">6M Collection</th></tr></thead>
       <tbody>${tbl}</tbody>
     </table></div>
   </div>`;
+}
+
+function _colBhUnitTable(ud, drillState) {
+  const rows = (ud.rows || []).slice().sort((a, b) => (b.total_amount||0) - (a.total_amount||0));
+  const tbl = rows.map(r => `<tr style="cursor:pointer" onclick="colBhDrill('${esc(drillState).replace(/'/g,"\\'")}','${esc(r.grp).replace(/'/g,"\\'")}')">
+    <td><b style="color:var(--acc)">${esc(r.grp)}</b></td>
+    <td class="r">${r.agencies.toLocaleString()}</td>
+    <td class="r">${_colBhModeTag('app')} <b>${r.app_agencies}</b> <small style="color:var(--muted)">(${r.agencies?Math.round(r.app_agencies/r.agencies*100):0}%)</small></td>
+    <td class="r">${_colBhModeTag('digital')} ${r.dig_agencies}</td>
+    <td class="r">${_colBhModeTag('cash')} ${r.cash_agencies}</td>
+    <td class="r num">${colFmtC(r.total_amount)}</td>
+  </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--muted)">No data</td></tr>';
+  return `<div class="vz-sec"><div class="cardhead"><h3>${esc(drillState)} — Unit wise
+      <small style="font-weight:400;color:var(--muted);margin-left:6px">Click unit to see agencies</small></h3>
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Unit</th><th class="r">Agencies</th><th class="r">📱 App Users</th><th class="r">💳 Digital</th><th class="r">💵 Cash</th><th class="r">6M Collection</th></tr></thead>
+      <tbody>${tbl}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function _colBhAgencyTable(ad, drillState, drillUnit) {
+  const { months, agencies } = ad;
+  const mHdr = months.map(m => `<th style="min-width:52px;text-align:center;font-size:10px;color:var(--muted)">${m.slice(5)}</th>`).join('');
+  const legnd = `<div style="display:flex;gap:12px;font-size:11px;color:var(--muted);margin-bottom:8px">
+    <span>● Legend:</span>
+    <span style="color:var(--grn);font-weight:600">█ App</span>
+    <span style="color:var(--blue);font-weight:600">█ Digital</span>
+    <span style="color:var(--gold);font-weight:600">█ Cash</span>
+    <span style="color:var(--brd);font-weight:600">█ No payment</span>
+  </div>`;
+  const tbl = agencies.map(a => {
+    const ds = Number(a.days_since);
+    const dormant = ds > 60;
+    const spark = _colBhSparkline(a.monthData);
+    const lastDate = a.last_payment ? String(a.last_payment).slice(0, 10) : '—';
+    return `<tr>
+      <td style="max-width:180px">
+        <b style="font-size:12px">${esc(a.ag_name || a.ag_code || '')}</b>
+        <br><small style="color:var(--muted)">${esc(a.ag_code||'')} · ${esc(a.branch_name||'')}</small>
+      </td>
+      <td style="text-align:center">${_colBhModeTag(a.dominant)}</td>
+      <td style="font-size:11px">${lastDate}</td>
+      <td class="r" style="color:${dormant?'var(--red)':'var(--grn)'};font-size:11px">${ds != null ? ds + 'd' : '—'}</td>
+      <td>${spark}</td>
+      ${a.monthData.map(m => {
+        if (!m) return `<td style="text-align:center;color:var(--muted);font-size:11px">—</td>`;
+        const c = m.app_amt > m.cash_amt && m.app_amt > m.dig_amt ? 'var(--grn)' : m.cash_amt > m.dig_amt ? 'var(--gold)' : 'var(--blue)';
+        return `<td style="text-align:right;font-size:11px;color:${c};font-weight:600">${colFmtC(m.amount)}</td>`;
+      }).join('')}
+    </tr>`;
+  }).join('') || '<tr><td colspan="9" style="text-align:center;color:var(--muted)">No data for this unit</td></tr>';
+  return `<div class="vz-sec">
+    <div class="cardhead"><h3>${esc(drillUnit)} — Agency wise payment trend
+      <small style="font-weight:400;color:var(--muted);margin-left:6px">${agencies.length} agencies · rolling 6 months</small></h3>
+    </div>
+    ${legnd}
+    <div class="tablewrap"><table>
+      <thead><tr><th>Agency</th><th style="text-align:center">Mode</th><th>Last Payment</th><th class="r">Age</th><th>Trend</th>${mHdr}</tr></thead>
+      <tbody>${tbl}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function colBehaviorTab() {
+  const st = colState();
+  // Always pre-load state level data
+  _colBhLoad('State', 'state', '', '');
+  const summary = _colBhSummary(st.bhState);
+
+  // Breadcrumb + back buttons
+  const backAll  = `<button class="btn sm" style="margin-bottom:10px" onclick="colBhDrill('','')">← All States</button>`;
+  const backState = `<button class="btn sm" style="margin-bottom:10px;margin-left:6px" onclick="colBhDrill('${esc(st.bhDrillState).replace(/'/g,"\\'")}','')">← ${esc(st.bhDrillState)}</button>`;
+
+  // Level 0 — State
+  if (!st.bhDrillState) {
+    if (!st.bhState) return summary + _cmdSkel();
+    return summary + _colBhStateTable(st.bhState);
+  }
+
+  // Level 1 — Unit (state selected)
+  if (!st.bhDrillUnit) {
+    _colBhLoad('Unit', 'unit', st.bhDrillState, '');
+    return summary + backAll + (!st.bhUnit ? _cmdSkel() : _colBhUnitTable(st.bhUnit, st.bhDrillState));
+  }
+
+  // Level 2 — Agency (state + unit selected)
+  _colBhLoad('Agency', 'agency', st.bhDrillState, st.bhDrillUnit);
+  return summary + backAll + backState + (!st.bhAgency ? _cmdSkel() : _colBhAgencyTable(st.bhAgency, st.bhDrillState, st.bhDrillUnit));
 }
 
 VIEWS.collections = () => {

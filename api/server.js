@@ -3823,6 +3823,88 @@ function colRegionWhere(region) {
 // Agency → executive map (main-agency rows of the agency master).
 const COL_EXEC_JOIN = `LEFT JOIN (SELECT unit, agcd, MAX(executive_name) executive_name FROM agency_master GROUP BY unit, agcd) am ON am.unit = ac.unit_code AND am.agcd = ac.ag_code`;
 
+// GET /api/collection/behavior-trend — agency payment-mode behaviour, 3 levels
+// level=state → state summary; level=unit → units within ?state=; level=agency → per-agency 6-month pivot
+app.get('/api/collection/behavior-trend', async (req, res) => {
+  try {
+    const sc    = await getColScopeFilter(req);
+    const level = req.query.level || 'state';
+    const stQ   = (req.query.state  || '').trim().toUpperCase();
+    const brQ   = (req.query.branch || '').trim();
+
+    // Rolling 6-month window (independent of dashboard date filter)
+    const d6 = new Date(); d6.setDate(1); d6.setMonth(d6.getMonth() - 5);
+    const since = d6.toISOString().slice(0, 10); // first day of 6 months ago
+
+    const geo = [], gp = [];
+    if (stQ) { geo.push(`UPPER(state_name) = ?`); gp.push(stQ); }
+    if (brQ) { geo.push('branch_name = ?');        gp.push(brQ); }
+    const geoC = geo.length ? ' AND ' + geo.join(' AND ') : '';
+    const base = `is_valid=1 AND coll_date >= ?${geoC}${sc.clause}`;
+    const bp   = [since, ...gp, ...sc.params];
+
+    const APP  = `payment_cat LIKE 'PAYMENT GAT%'`;
+    const CASH = `payment_cat IN ('EXECUTIVE CASH','Cash','CASH')`;
+    const DIG  = `(NOT (${APP}) AND NOT (${CASH}))`;
+
+    if (level === 'agency') {
+      // Build ordered 6-month labels
+      const months = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i);
+        months.push(d.toISOString().slice(0, 7)); // YYYY-MM
+      }
+      const { rows } = await q(`
+        SELECT ag_code, MAX(ag_name) ag_name, MAX(branch_name) branch_name, MAX(state_name) state_name,
+               MAX(coll_date) last_payment, DATEDIFF(CURDATE(), MAX(coll_date)) days_since,
+               DATE_FORMAT(coll_date,'%Y-%m') mon,
+               SUM(CASE WHEN ${APP}  THEN 1 ELSE 0 END) app_txn,
+               SUM(CASE WHEN ${CASH} THEN 1 ELSE 0 END) cash_txn,
+               SUM(CASE WHEN ${DIG}  THEN 1 ELSE 0 END) dig_txn,
+               -SUM(CASE WHEN ${APP}  THEN amount ELSE 0 END) app_amt,
+               -SUM(CASE WHEN ${CASH} THEN amount ELSE 0 END) cash_amt,
+               -SUM(CASE WHEN ${DIG}  THEN amount ELSE 0 END) dig_amt,
+               COUNT(*) txn, -SUM(amount) amount
+        FROM agency_collection WHERE ${base}
+        GROUP BY ag_code, DATE_FORMAT(coll_date,'%Y-%m')
+        ORDER BY branch_name, ag_name, mon`, bp);
+
+      const byAg = {};
+      for (const r of rows) {
+        const k = r.ag_code;
+        if (!byAg[k]) byAg[k] = {
+          ag_code: k, ag_name: r.ag_name, branch_name: r.branch_name, state_name: r.state_name,
+          last_payment: r.last_payment, days_since: +r.days_since,
+          months: {}, app_txn: 0, cash_txn: 0, dig_txn: 0, app_amt: 0, cash_amt: 0, dig_amt: 0, total_amt: 0,
+        };
+        const a = byAg[k];
+        a.months[r.mon] = { app_txn:+r.app_txn, cash_txn:+r.cash_txn, dig_txn:+r.dig_txn, app_amt:+r.app_amt, cash_amt:+r.cash_amt, dig_amt:+r.dig_amt, txn:+r.txn, amount:+r.amount };
+        a.app_txn += +r.app_txn; a.cash_txn += +r.cash_txn; a.dig_txn += +r.dig_txn;
+        a.app_amt += +r.app_amt; a.cash_amt += +r.cash_amt; a.dig_amt += +r.dig_amt; a.total_amt += +r.amount;
+      }
+      const agencies = Object.values(byAg).map(a => {
+        const dominant = a.app_amt >= a.cash_amt && a.app_amt >= a.dig_amt ? 'app'
+                       : a.cash_amt >= a.dig_amt ? 'cash' : 'digital';
+        return { ...a, dominant, monthData: months.map(m => a.months[m] || null) };
+      }).sort((a, b) => (a.branch_name||'').localeCompare(b.branch_name||'') || (a.ag_name||'').localeCompare(b.ag_name||''));
+      return res.json({ months, agencies });
+    }
+
+    // State or unit level aggregates
+    const grpExpr = level === 'unit' ? 'branch_name' : COL_REGION_CASE;
+    const { rows } = await q(`
+      SELECT ${grpExpr} grp, ${level === 'unit' ? 'MAX(state_name) state_name' : 'NULL state_name'},
+             COUNT(DISTINCT ag_code)                                   agencies,
+             COUNT(DISTINCT CASE WHEN ${APP}  THEN ag_code END)       app_agencies,
+             COUNT(DISTINCT CASE WHEN ${CASH} THEN ag_code END)       cash_agencies,
+             COUNT(DISTINCT CASE WHEN ${DIG}  THEN ag_code END)       dig_agencies,
+             -SUM(amount) total_amount, COUNT(*) total_txn
+      FROM agency_collection WHERE ${base}
+      GROUP BY grp ORDER BY total_amount DESC`, bp);
+    res.json({ rows: rows.map(r => ({ grp: r.grp, state_name: r.state_name || null, agencies: +r.agencies, app_agencies: +r.app_agencies, cash_agencies: +r.cash_agencies, dig_agencies: +r.dig_agencies, total_amount: +r.total_amount, total_txn: +r.total_txn })) });
+  } catch (e) { res.status(500).json({ detail: String(e) }); }
+});
+
 // GET /api/collection/state-summary — Level 1
 app.get('/api/collection/state-summary', async (req, res) => {
   try {
