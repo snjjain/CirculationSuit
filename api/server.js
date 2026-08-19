@@ -3742,8 +3742,8 @@ app.get('/api/collection/app-usage', async (req, res) => {
     const { rows } = await q(`
       SELECT state_name, branch_name,
              COUNT(DISTINCT ag_code) AS agencies,
-             COUNT(DISTINCT CASE WHEN payment_mode LIKE 'PAYMENT GAT%' THEN ag_code END) AS app_agencies,
-             -COALESCE(SUM(CASE WHEN payment_mode LIKE 'PAYMENT GAT%' THEN amount ELSE 0 END),0) AS app_amount,
+             COUNT(DISTINCT CASE WHEN payment_cat LIKE 'PAYMENT GAT%' THEN ag_code END) AS app_agencies,
+             -COALESCE(SUM(CASE WHEN payment_cat LIKE 'PAYMENT GAT%' THEN amount ELSE 0 END),0) AS app_amount,
              -COALESCE(SUM(amount),0) AS total_amount
       FROM agency_collection
       WHERE is_valid=1 ${clause}
