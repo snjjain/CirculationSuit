@@ -2166,7 +2166,7 @@ window.supdUnit = u => {
   ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
   render();
 };
-const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'execBreakdown', 'covidSummary', 'covidAgentStates', 'covidCashStates', 'brStates', 'brBranches', 'brL2'].forEach(k => { st[k] = null; });
+const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'receipt', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'execBreakdown', 'covidSummary', 'covidAgentStates', 'covidCashStates', 'brStates', 'brBranches', 'brL2'].forEach(k => { st[k] = null; });
 // State dropdown: cascade the Unit list to that state (data refreshes when Apply is pressed)
 window.supdSetState = (v) => {
   const st = _supdState();
