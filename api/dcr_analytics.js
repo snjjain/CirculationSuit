@@ -989,13 +989,14 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
         q(`SELECT ag_code, cl_amt FROM agency_outstanding
            WHERE period_label='CURRENT' AND cl_amt > 0${osCl}`, amP),
 
-        // Avg daily supply last 60 days (no unit filter — agcd is globally unique)
-        q(`SELECT agcd, ROUND(SUM(sup_copy)/GREATEST(COUNT(DISTINCT supply_date),1),0) avg_daily
+        // Avg daily supply last 60 days — unit_code+agcd is the unique key
+        q(`SELECT unit_code, agcd, ROUND(SUM(sup_copy)/GREATEST(COUNT(DISTINCT supply_date),1),0) avg_daily
            FROM supply_data
-           WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
-           GROUP BY agcd`, []),
+           WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)${osCl}
+           GROUP BY unit_code, agcd`, amP),
       ]);
 
+      // Key all maps by "unit_code|agcd" so same agcd across different units doesn't collide
       const visitMap = {}, osMap = {}, supMap = {};
       for (const r of visitR.rows) visitMap[r.ag_code] = { last: r.last_visit, cnt: +r.cnt };
       for (const r of osR.rows) osMap[r.ag_code] = +r.cl_amt;
