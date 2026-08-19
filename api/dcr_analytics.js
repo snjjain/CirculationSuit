@@ -925,4 +925,204 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       });
     } catch (e) { res.status(500).json({ detail: e.message }); }
   });
+
+  // ── GET /api/dcr-analytics/visit-analysis ─────────────────────────────────
+  app.get('/api/dcr-analytics/visit-analysis', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const from = isDate(req.query.from) ? req.query.from : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10);
+      const to   = isDate(req.query.to)   ? req.query.to   : new Date().toISOString().slice(0,10);
+      const { clause: sc, params: sp } = await resolveScope(req);
+
+      const [execRows, purposeRows, dailyRows] = await Promise.all([
+        q(`SELECT emp_code, MAX(executive_name) exec_name, MAX(unit_code) unit_code,
+                COUNT(*) total_visits, COUNT(DISTINCT visit_to_main_code) agencies_visited,
+                COUNT(DISTINCT mark_attn_date) active_days,
+                MAX(mark_attn_date) last_visit_date
+           FROM dcr_agency_visit
+           WHERE mark_attn_date BETWEEN ? AND ? AND emp_code IS NOT NULL AND emp_code != ''${sc}
+           GROUP BY emp_code ORDER BY total_visits DESC LIMIT 30`, [from, to, ...sp]),
+
+        q(`SELECT COALESCE(NULLIF(TRIM(visit_purpose),''), 'UNSPECIFIED') purpose, COUNT(*) cnt
+           FROM dcr_agency_visit
+           WHERE mark_attn_date BETWEEN ? AND ?${sc}
+           GROUP BY purpose ORDER BY cnt DESC LIMIT 8`, [from, to, ...sp]),
+
+        q(`SELECT DATE(mark_attn_date) visit_day, COUNT(*) cnt,
+                COUNT(DISTINCT emp_code) exec_cnt
+           FROM dcr_agency_visit
+           WHERE mark_attn_date BETWEEN ? AND ?${sc}
+           GROUP BY visit_day ORDER BY visit_day`, [from, to, ...sp]),
+      ]);
+
+      res.json({ from, to, executives: execRows.rows, purposes: purposeRows.rows, daily_trend: dailyRows.rows });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ── GET /api/dcr-analytics/agency-coverage ────────────────────────────────
+  app.get('/api/dcr-analytics/agency-coverage', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const from = isDate(req.query.from) ? req.query.from : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10);
+      const to   = isDate(req.query.to)   ? req.query.to   : new Date().toISOString().slice(0,10);
+      const { clause: sc, params: sp, unitCodes } = await resolveScope(req);
+
+      const amCl = unitCodes === null ? '' : (unitCodes.length ? ` AND unit IN (${unitCodes.map(()=>'?').join(',')})` : ' AND 1=0');
+      const amP  = unitCodes === null ? [] : (unitCodes.length ? unitCodes : []);
+      const osCl = unitCodes === null ? '' : (unitCodes.length ? ` AND unit_code IN (${unitCodes.map(()=>'?').join(',')})` : ' AND 1=0');
+
+      const [agR, visitR, osR] = await Promise.all([
+        q(`SELECT agcd, ag_name, unit_name, executive_name, executive_code, dist_name, city_name
+           FROM agency_master
+           WHERE executive_code IS NOT NULL AND executive_code != ''
+             AND (supply_stop_flag IS NULL OR supply_stop_flag != 'Y')
+             AND suspend_date IS NULL${amCl} LIMIT 3000`, amP),
+
+        q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, COUNT(*) cnt
+           FROM dcr_agency_visit
+           WHERE mark_attn_date BETWEEN ? AND ? AND visit_to_main_code IS NOT NULL${sc}
+           GROUP BY visit_to_main_code`, [from, to, ...sp]),
+
+        q(`SELECT ag_code, cl_amt FROM agency_outstanding
+           WHERE period_label='CURRENT' AND cl_amt > 0${osCl}`, amP),
+      ]);
+
+      const visitMap = {}, osMap = {};
+      for (const r of visitR.rows) visitMap[r.ag_code] = { last: r.last_visit, cnt: +r.cnt };
+      for (const r of osR.rows) osMap[r.ag_code] = +r.cl_amt;
+
+      const fromD = new Date(from), toD = new Date(to);
+      const rangeDays = Math.max(1, Math.round((toD - fromD) / 86400000));
+      const minCnt = Math.ceil(rangeDays / 14); // at least 2 per month
+
+      const notVisited = [], rarely = [], covered = [];
+      for (const ag of agR.rows) {
+        const v = visitMap[ag.agcd] || {};
+        const cnt = v.cnt || 0;
+        const os  = osMap[ag.agcd] || 0;
+        const rec = { agcd: ag.agcd, ag_name: ag.ag_name, unit_name: ag.unit_name, exec: ag.executive_name, city: ag.city_name || ag.dist_name, last_visit: v.last || null, visit_count: cnt, outstanding: os };
+        if (!cnt) notVisited.push(rec);
+        else if (cnt < minCnt) rarely.push(rec);
+        else covered.push(rec);
+      }
+      notVisited.sort((a, b) => b.outstanding - a.outstanding);
+      rarely.sort((a, b) => b.outstanding - a.outstanding);
+
+      res.json({
+        from, to, total: agR.rows.length,
+        not_visited: notVisited.slice(0, 200),
+        rarely_visited: rarely.slice(0, 100),
+        well_covered: covered.length,
+        coverage_pct: Math.round(covered.length / Math.max(agR.rows.length, 1) * 100),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ── GET /api/dcr-analytics/visit-remarks ─────────────────────────────────
+  app.get('/api/dcr-analytics/visit-remarks', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const from = isDate(req.query.from) ? req.query.from : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10);
+      const to   = isDate(req.query.to)   ? req.query.to   : new Date().toISOString().slice(0,10);
+      const { clause: sc, params: sp } = await resolveScope(req);
+      const emp = req.query.emp_code ? ` AND emp_code = ?` : '';
+      const ep  = req.query.emp_code ? [String(req.query.emp_code)] : [];
+
+      const { rows } = await q(
+        `SELECT id, DATE(mark_attn_date) visit_date, emp_code, executive_name, unit_code,
+                visit_to_main_code ag_code, center_name ag_name,
+                visit_purpose, visit_remarks, from_time, till_time,
+                followup_amount, followup_date
+         FROM dcr_agency_visit
+         WHERE mark_attn_date BETWEEN ? AND ?
+           AND visit_remarks IS NOT NULL AND TRIM(visit_remarks) != '' AND LOWER(TRIM(visit_remarks)) != 'no remarks'
+           ${sc}${emp}
+         ORDER BY mark_attn_date DESC, id DESC LIMIT 50`,
+        [from, to, ...sp, ...ep]
+      );
+      res.json({ from, to, visits: rows });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ── POST /api/dcr-analytics/analyze-remarks ───────────────────────────────
+  app.post('/api/dcr-analytics/analyze-remarks', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const { visits } = req.body || {};
+      if (!Array.isArray(visits) || !visits.length) return res.status(400).json({ detail: 'visits[] required' });
+      const API_KEY = process.env.ANTHROPIC_API_KEY;
+      if (!API_KEY) return res.status(503).json({ detail: 'ANTHROPIC_API_KEY not configured' });
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: API_KEY });
+      const batch = visits.slice(0, 25);
+      const visitList = batch.map((v, i) =>
+        `[${i+1}] ${v.visit_date||''} | Exec: ${v.executive_name||'-'} | Agency: ${v.ag_name||v.ag_code||'-'} | Purpose: ${v.purpose||'-'}\nRemarks: ${v.remarks}`
+      ).join('\n\n');
+
+      const resp = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2500,
+        messages: [{ role: 'user', content: `Analyze field visit notes from newspaper circulation executives. Remarks may be Hindi, English, or mixed language.\n\nFor each numbered visit, extract:\n- payment_received: cash received NOW during this visit (number, 0 if none)\n- commitment_amount: agent promised to pay (number, 0 if none)\n- commitment_date: promised payment date (YYYY-MM-DD or "soon" or null)\n- growth_commitment: newspaper copies increase committed (number, 0)\n- issue: main problem in 5-8 words in English (null if none)\n- status: exactly one of: "productive" | "partial" | "follow-up" | "no-response" | "info-only"\n\nReturn ONLY a valid JSON array, no prose:\n[{"idx":1,"payment_received":0,"commitment_amount":0,"commitment_date":null,"growth_commitment":0,"issue":null,"status":"info-only"},...]\n\nVisits:\n${visitList}` }]
+      });
+
+      const text = resp.content[0]?.text || '[]';
+      const jm = text.match(/\[[\s\S]*\]/);
+      const results = jm ? JSON.parse(jm[0]) : [];
+      res.json({ results, model: 'claude-haiku-4-5-20251001' });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ── POST /api/dcr-analytics/next-day-plan ────────────────────────────────
+  app.post('/api/dcr-analytics/next-day-plan', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const { emp_code, plan_date } = req.body || {};
+      if (!emp_code) return res.status(400).json({ detail: 'emp_code required' });
+      const API_KEY = process.env.ANTHROPIC_API_KEY;
+      if (!API_KEY) return res.status(503).json({ detail: 'ANTHROPIC_API_KEY not configured' });
+
+      const tDate = isDate(plan_date) ? plan_date : new Date(Date.now() + 86400000).toISOString().slice(0,10);
+
+      const [execR, agR, visitR, osR] = await Promise.all([
+        q(`SELECT MAX(executive_name) exec_name, MAX(unit_name) unit_name FROM agency_master WHERE executive_code=? LIMIT 1`, [emp_code]),
+        q(`SELECT agcd, ag_name, city_name, dist_name FROM agency_master WHERE executive_code=? AND (supply_stop_flag IS NULL OR supply_stop_flag!='Y') AND suspend_date IS NULL LIMIT 150`, [emp_code]),
+        q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, COUNT(*) cnt, MAX(visit_remarks) last_remarks, MAX(followup_amount) fup_amt, MAX(followup_date) fup_date FROM dcr_agency_visit WHERE emp_code=? AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY) GROUP BY visit_to_main_code`, [emp_code]),
+        q(`SELECT ao.ag_code, ao.cl_amt FROM agency_outstanding ao JOIN agency_master am ON am.agcd=ao.ag_code AND am.unit=ao.unit_code WHERE am.executive_code=? AND ao.period_label='CURRENT' AND ao.cl_amt>0`, [emp_code]),
+      ]);
+
+      const vMap = {}, osMap = {};
+      for (const r of visitR.rows) vMap[r.ag_code] = r;
+      for (const r of osR.rows) osMap[r.ag_code] = +r.cl_amt;
+
+      const execName = execR.rows[0]?.exec_name || emp_code;
+      const unitName = execR.rows[0]?.unit_name || '';
+
+      const agList = agR.rows.map(ag => {
+        const v = vMap[ag.agcd] || {};
+        const os = osMap[ag.agcd] || 0;
+        const days = v.last_visit ? Math.floor((Date.now() - new Date(v.last_visit)) / 86400000) : 999;
+        return { code: ag.agcd, name: ag.ag_name, city: ag.city_name || ag.dist_name, os, days, cnt60: +(v.cnt||0), last_rmk: (v.last_remarks||'').slice(0,80), fup_amt: +(v.fup_amt||0), fup_date: v.fup_date||'' };
+      }).sort((a,b) => b.os - a.os || b.days - a.days).slice(0, 40);
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: API_KEY });
+
+      const agText = agList.map((a,i) =>
+        `${i+1}. ${a.name} (${a.city||'-'}) | OS:Rs${a.os.toLocaleString('en-IN')} | Last visit:${a.days>=999?'Never':a.days+'d ago'} | 60d visits:${a.cnt60} | Followup:Rs${a.fup_amt} by ${a.fup_date||'?'} | Note:"${a.last_rmk}"`
+      ).join('\n');
+
+      const resp = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1800,
+        messages: [{ role: 'user', content: `You are a circulation manager at Rajasthan Patrika newspaper. Create a smart next-day field visit plan for executive ${execName} working in ${unitName} for the date ${tDate}.\n\nPrioritization logic:\n1. High outstanding balance (OS) = highest priority = needs recovery\n2. Pending followup commitment (fup_amt > 0) = visit to collect what was promised\n3. Not visited in 30+ days = coverage gap\n4. Never visited = must cover\n\nLimit to top 8 agencies. Write brief, actionable instructions.\n\nAgencies available:\n${agText}\n\nReturn ONLY valid JSON (no prose before or after):\n{"exec":"${execName}","unit":"${unitName}","date":"${tDate}","focus_message":"...motivational message in 1 line...","total_target":0,"visits":[{"rank":1,"ag_code":"...","ag_name":"...","city":"...","priority":"high|medium|low","action":"...collect/survey/followup instruction...","target_amount":0,"key_point":"...one critical thing to address..."}]}` }]
+      });
+
+      const text = resp.content[0]?.text || '{}';
+      const jm = text.match(/\{[\s\S]*\}/);
+      const plan = jm ? JSON.parse(jm[0]) : { error: 'Plan generation failed' };
+      res.json({ plan, exec_name: execName, unit_name: unitName });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
 };

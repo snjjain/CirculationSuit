@@ -945,7 +945,13 @@ let _dcrA = { tab: 'summary', summary: null, monthly: null, execs: null, mapData
                // Tour Route state
                tourExecs: null, _loadTE: false,
                tourEmpCode: '', tourDate: todayISO(),
-               tourData: null, _loadTour: false };
+               tourData: null, _loadTour: false,
+               // New tabs state
+               analysis: null, _loadAn: false,
+               coverage: null, _loadCov: false,
+               remarks: null, _loadRem: false, remEmpCode: '', aiResults: null, _analyzing: false,
+               planExecs: null, _loadPlanExecs: false,
+               planEmpCode: '', planDate: '', plan: null, _loadingPlan: false };
 let _dcrMap = null;     // Leaflet map — agency map tab
 let _dcrTourMap = null; // Leaflet map — tour route tab
 
@@ -1591,6 +1597,75 @@ window._dcrAStateChange = () => {
   }
 };
 
+function _dcrALoadAnalysis(force) {
+  if (_dcrA._loadAn || (_dcrA.analysis && !force)) return;
+  _dcrA._loadAn = true; _dcrA.analysis = null;
+  fetch(_dcrAUrl('visit-analysis'), { headers: api.h() })
+    .then(r => r.json()).then(d => { _dcrA.analysis = d; _dcrA._loadAn = false; if (S.screen === 'dcr_analytics') render(); })
+    .catch(() => { _dcrA.analysis = { _err: true }; _dcrA._loadAn = false; if (S.screen === 'dcr_analytics') render(); });
+}
+function _dcrALoadCoverage(force) {
+  if (_dcrA._loadCov || (_dcrA.coverage && !force)) return;
+  _dcrA._loadCov = true; _dcrA.coverage = null;
+  fetch(_dcrAUrl('agency-coverage'), { headers: api.h() })
+    .then(r => r.json()).then(d => { _dcrA.coverage = d; _dcrA._loadCov = false; if (S.screen === 'dcr_analytics') render(); })
+    .catch(() => { _dcrA.coverage = { _err: true }; _dcrA._loadCov = false; if (S.screen === 'dcr_analytics') render(); });
+}
+function _dcrALoadRemarks(force) {
+  if (_dcrA._loadRem || (_dcrA.remarks && !force)) return;
+  _dcrA._loadRem = true; _dcrA.remarks = null; _dcrA.aiResults = null;
+  const url = _dcrAUrl('visit-remarks') + (_dcrA.remEmpCode ? '&emp_code=' + encodeURIComponent(_dcrA.remEmpCode) : '');
+  fetch(url, { headers: api.h() })
+    .then(r => r.json()).then(d => { _dcrA.remarks = d; _dcrA._loadRem = false; if (S.screen === 'dcr_analytics') render(); })
+    .catch(() => { _dcrA.remarks = { _err: true }; _dcrA._loadRem = false; if (S.screen === 'dcr_analytics') render(); });
+}
+function _dcrALoadPlanExecs() {
+  if (_dcrA._loadPlanExecs || _dcrA.planExecs) return;
+  // Reuse tourExecs if already loaded
+  if (_dcrA.tourExecs?.executives) { _dcrA.planExecs = _dcrA.tourExecs.executives; return; }
+  _dcrA._loadPlanExecs = true;
+  const qs = `${_dcrA.unit_code?'unit_code='+encodeURIComponent(_dcrA.unit_code):''}${_dcrA.state?'&state='+encodeURIComponent(_dcrA.state):''}`;
+  fetch(`${location.origin}/api/dcr-analytics/executive-list?${qs}`, { headers: api.h() })
+    .then(r => r.json()).then(d => { _dcrA.planExecs = d.executives || []; _dcrA._loadPlanExecs = false; if (S.screen === 'dcr_analytics') render(); })
+    .catch(() => { _dcrA.planExecs = []; _dcrA._loadPlanExecs = false; });
+}
+window.dcrAAnalyzeRemarks = async () => {
+  const visits = (_dcrA.remarks?.visits || []).map(v => ({
+    visit_date: v.visit_date, executive_name: v.executive_name,
+    ag_name: v.ag_name || v.ag_code, purpose: v.visit_purpose,
+    remarks: v.visit_remarks,
+  }));
+  if (!visits.length) return;
+  _dcrA._analyzing = true; render();
+  try {
+    const r = await fetch('/api/dcr-analytics/analyze-remarks', {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visits }),
+    });
+    const d = await r.json();
+    _dcrA.aiResults = d.results || [];
+  } catch (_) { _dcrA.aiResults = []; }
+  _dcrA._analyzing = false;
+  if (S.screen === 'dcr_analytics') render();
+};
+window.dcrAGenPlan = async () => {
+  const code = _dcrA.planEmpCode;
+  if (!code) return;
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0,10);
+  const planDate = _dcrA.planDate || tomorrow;
+  _dcrA._loadingPlan = true; _dcrA.plan = null; render();
+  try {
+    const r = await fetch('/api/dcr-analytics/next-day-plan', {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emp_code: code, plan_date: planDate }),
+    });
+    const d = await r.json();
+    _dcrA.plan = d;
+  } catch (_) { _dcrA.plan = { _err: true }; }
+  _dcrA._loadingPlan = false;
+  if (S.screen === 'dcr_analytics') render();
+};
+
 window.dcrAApplyFilter = () => {
   _dcrA.from = document.getElementById('dcrA-from')?.value || _dcrA.from;
   _dcrA.to   = document.getElementById('dcrA-to')?.value   || _dcrA.to;
@@ -1599,6 +1674,10 @@ window.dcrAApplyFilter = () => {
   _dcrA.summary = _dcrA.monthly = _dcrA.execs = _dcrA.mapData = null;
   _dcrA._loadS = _dcrA._loadM = _dcrA._loadE = _dcrA._loadMap = false;
   _dcrA.tourExecs = null; _dcrA._loadTE = false;
+  _dcrA.analysis = null; _dcrA._loadAn = false;
+  _dcrA.coverage = null; _dcrA._loadCov = false;
+  _dcrA.remarks = null; _dcrA._loadRem = false; _dcrA.aiResults = null;
+  _dcrA.plan = null; _dcrA.planExecs = null; _dcrA._loadPlanExecs = false;
   if (_dcrMap) { _dcrMap.remove(); _dcrMap = null; }
   if (_dcrTourMap) { _dcrTourMap.remove(); _dcrTourMap = null; }
   render();
@@ -1644,21 +1723,328 @@ VIEWS.dcr_analytics = () => {
       </div>
     </div>`;
 
-  const tabs = `<div class="seg" style="margin-bottom:12px">
-    <button class="${tab==='summary'?'on':''}" onclick="dcrASetTab('summary')">📊 Summary</button>
-    <button class="${tab==='map'?'on':''}"     onclick="dcrASetTab('map')">📍 Agency Map</button>
-    <button class="${tab==='execs'?'on':''}"   onclick="dcrASetTab('execs')">👤 Executives</button>
-    <button class="${tab==='tour'?'on':''}"    onclick="dcrASetTab('tour')">🗺 Tour Route</button>
+  const tabs = `<div class="seg" style="margin-bottom:12px;flex-wrap:wrap;gap:4px">
+    <button class="${tab==='summary'?'on':''}"  onclick="dcrASetTab('summary')">📊 Summary</button>
+    <button class="${tab==='map'?'on':''}"      onclick="dcrASetTab('map')">📍 Agency Map</button>
+    <button class="${tab==='execs'?'on':''}"    onclick="dcrASetTab('execs')">👤 Executives</button>
+    <button class="${tab==='tour'?'on':''}"     onclick="dcrASetTab('tour')">🗺 Tour Route</button>
+    <button class="${tab==='analysis'?'on':''}" onclick="dcrASetTab('analysis')">📈 Visit Analysis</button>
+    <button class="${tab==='coverage'?'on':''}" onclick="dcrASetTab('coverage')">⚠️ Agency Coverage</button>
+    <button class="${tab==='remarks'?'on':''}"  onclick="dcrASetTab('remarks')">💬 AI Remarks</button>
+    <button class="${tab==='plan'?'on':''}"     onclick="dcrASetTab('plan')">📋 Next Day Plan</button>
   </div>`;
 
   let body = '';
-  if (tab === 'summary') body = _dcrASummaryTab();
+  if (tab === 'summary')  body = _dcrASummaryTab();
   else if (tab === 'map') body = _dcrAMapTab();
   else if (tab === 'execs') body = _dcrAExecsTab();
   else if (tab === 'tour') body = _dcrATourTab();
+  else if (tab === 'analysis') body = _dcrAAnalysisTab();
+  else if (tab === 'coverage') body = _dcrACoverageTab();
+  else if (tab === 'remarks') body = _dcrARemarksTab();
+  else if (tab === 'plan') body = _dcrANextPlanTab();
 
   return hdr + filterBar + tabs + `<div class="card pad">${body}</div>`;
 };
+
+/* ── SVG mini chart helpers ── */
+function _dcrSvgBars(data, maxW, h) {
+  if (!data.length) return '';
+  const maxV = Math.max(...data.map(d => d.v), 1);
+  const rowH = Math.min(22, Math.floor(h / data.length));
+  const labelW = 140, barArea = maxW - labelW - 48;
+  const svgH = rowH * data.length;
+  const bars = data.map((d, i) => {
+    const bw = Math.round(d.v / maxV * barArea);
+    const y = i * rowH + 2;
+    const color = d.color || 'var(--chart-1)';
+    const label = (d.label || '').slice(0, 22);
+    return `<text x="${labelW - 6}" y="${y + rowH/2 + 4}" text-anchor="end" font-size="10" fill="var(--ink-2)">${esc(label)}</text>
+      <rect x="${labelW}" y="${y}" width="${Math.max(2, bw)}" height="${rowH - 4}" rx="3" fill="${color}" opacity=".85"/>
+      <text x="${labelW + bw + 4}" y="${y + rowH/2 + 4}" font-size="10" fill="var(--ink)">${d.v}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${maxW} ${svgH}" style="width:100%;max-width:${maxW}px;height:${svgH}px;display:block">${bars}</svg>`;
+}
+function _dcrSvgLine(points, maxW, svgH) {
+  if (!points.length) return '';
+  const maxV = Math.max(...points.map(p => p.v), 1);
+  const pad = 16;
+  const W = maxW - pad * 2, H = svgH - pad * 2;
+  const px = (i) => pad + i / Math.max(points.length - 1, 1) * W;
+  const py = (v) => pad + H - Math.round(v / maxV * H);
+  const pts = points.map((p, i) => `${px(i)},${py(p.v)}`).join(' ');
+  const fill = points.map((p, i) => `${px(i)},${py(p.v)}`).join(' ') + ` ${px(points.length-1)},${pad+H} ${pad},${pad+H}`;
+  const lastPt = points[points.length - 1];
+  const labels = points.filter((_, i) => i === 0 || i === points.length - 1 || i % Math.ceil(points.length / 5) === 0)
+    .map(p => `<text x="${px(points.indexOf(p))}" y="${pad + H + 12}" text-anchor="middle" font-size="9" fill="var(--ink-2)">${(p.label||'').slice(5)}</text>`).join('');
+  return `<svg viewBox="0 0 ${maxW} ${svgH}" style="width:100%;height:${svgH}px;display:block">
+    <defs><linearGradient id="dcrLG" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--chart-1)" stop-opacity=".25"/><stop offset="100%" stop-color="var(--chart-1)" stop-opacity="0"/></linearGradient></defs>
+    <polygon points="${fill}" fill="url(#dcrLG)"/>
+    <polyline points="${pts}" fill="none" stroke="var(--chart-1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    ${labels}
+    <circle cx="${px(points.length-1)}" cy="${py(lastPt.v)}" r="4" fill="var(--chart-1)"/>
+    <text x="${px(points.length-1)}" y="${py(lastPt.v)-7}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--chart-1)">${lastPt.v}</text>
+  </svg>`;
+}
+
+/* ── Analysis tab ── */
+function _dcrAAnalysisTab() {
+  _dcrALoadAnalysis();
+  const d = _dcrA.analysis;
+  if (_dcrA._loadAn) return '<div style="color:var(--ink-2);padding:40px 0;text-align:center">⏳ Loading visit analysis…</div>';
+  if (!d) return '<div style="color:var(--ink-2);padding:40px 0;text-align:center">No data yet — apply a filter</div>';
+  if (d._err) return '<div style="color:var(--red);padding:20px 0">Failed to load analysis data.</div>';
+
+  const execs = d.executives || [];
+  const purposes = d.purposes || [];
+  const daily = d.daily_trend || [];
+
+  const totalVisits = execs.reduce((s, e) => s + +e.total_visits, 0);
+  const totalExecs  = execs.length;
+  const totalAg     = execs.reduce((s, e) => s + +e.agencies_visited, 0);
+  const avgPerDay   = daily.length ? Math.round(totalVisits / daily.length) : 0;
+
+  const kpis = `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+    ${[['Total Visits', totalVisits, 'var(--chart-1)'], ['Active Execs', totalExecs, 'var(--grn)'], ['Agencies Covered', totalAg, 'var(--blue)'], ['Avg/Day', avgPerDay, 'var(--purple)']].map(([l,v,c]) =>
+      `<div style="flex:1;min-width:100px;background:var(--surface-2);border-radius:10px;padding:12px 14px">
+        <div style="font-size:10px;font-weight:700;color:var(--ink-2);text-transform:uppercase;letter-spacing:.05em">${l}</div>
+        <div style="font-size:24px;font-weight:800;color:${c};margin-top:2px">${v}</div>
+      </div>`).join('')}
+  </div>`;
+
+  const execBars = execs.slice(0, 12).map(e => ({ label: e.exec_name || e.emp_code, v: +e.total_visits, color: 'var(--chart-1)' }));
+  const purposeBars = purposes.map(p => ({ label: p.purpose.slice(0, 30), v: +p.cnt, color: 'var(--chart-2,#f59e0b)' }));
+  const linePts = daily.map(d => ({ label: String(d.visit_day).slice(0,10), v: +d.cnt }));
+
+  const charts = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+    <div style="background:var(--surface-2);border-radius:10px;padding:14px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin-bottom:10px">Visits by Executive</div>
+      ${execBars.length ? _dcrSvgBars(execBars, 380, execBars.length * 22) : '<div style="color:var(--ink-2);font-size:12px">No executive data</div>'}
+    </div>
+    <div style="background:var(--surface-2);border-radius:10px;padding:14px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin-bottom:10px">Visit Purpose Breakdown</div>
+      ${purposeBars.length ? _dcrSvgBars(purposeBars, 380, purposeBars.length * 22) : '<div style="color:var(--ink-2);font-size:12px">No purpose data</div>'}
+    </div>
+  </div>
+  <div style="background:var(--surface-2);border-radius:10px;padding:14px;margin-bottom:16px">
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin-bottom:10px">Daily Visit Trend</div>
+    ${linePts.length ? _dcrSvgLine(linePts, 760, 100) : '<div style="color:var(--ink-2);font-size:12px">No daily data</div>'}
+  </div>`;
+
+  const execTable = execs.length ? `
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin-bottom:8px">Executive Scorecard</div>
+    <div style="overflow-x:auto">
+    <table class="tbl" style="font-size:12px;min-width:560px">
+      <thead><tr><th>#</th><th style="text-align:left">Executive</th><th>Unit</th><th class="r">Visits</th><th class="r">Agencies</th><th class="r">Active Days</th><th>Last Visit</th></tr></thead>
+      <tbody>
+      ${execs.map((e,i) => `<tr>
+        <td style="color:var(--ink-2)">${i+1}</td>
+        <td><b>${esc(e.exec_name || e.emp_code)}</b></td>
+        <td style="font-size:11px;color:var(--ink-2)">${esc(e.unit_code||'')}</td>
+        <td class="r" style="font-weight:700;color:var(--chart-1)">${e.total_visits}</td>
+        <td class="r">${e.agencies_visited}</td>
+        <td class="r">${e.active_days}</td>
+        <td style="color:var(--ink-2);font-size:11px">${e.last_visit_date ? String(e.last_visit_date).slice(0,10) : '—'}</td>
+      </tr>`).join('')}
+      </tbody></table></div>` : '';
+
+  return kpis + charts + execTable;
+}
+
+/* ── Agency Coverage tab ── */
+function _dcrACoverageTab() {
+  _dcrALoadCoverage();
+  const d = _dcrA.coverage;
+  if (_dcrA._loadCov) return '<div style="color:var(--ink-2);padding:40px 0;text-align:center">⏳ Loading coverage data…</div>';
+  if (!d) return '<div style="color:var(--ink-2);padding:40px 0;text-align:center">No data — apply filter</div>';
+  if (d._err) return '<div style="color:var(--red);padding:20px 0">Failed to load coverage data.</div>';
+
+  const nv = d.not_visited || [], rv = d.rarely_visited || [];
+  const total = d.total || 1;
+  const pct = d.coverage_pct || 0;
+  const barColor = pct >= 80 ? 'var(--grn)' : pct >= 50 ? '#f59e0b' : 'var(--red)';
+
+  const kpis = `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+    ${[[total,'Total Agencies','var(--ink)'],[nv.length,'Not Visited','var(--red)'],[rv.length,'Rarely Visited (<2x)','#f59e0b'],[d.well_covered||0,'Well Covered','var(--grn)']].map(([v,l,c]) =>
+      `<div style="flex:1;min-width:110px;background:var(--surface-2);border-radius:10px;padding:12px 14px">
+        <div style="font-size:10px;font-weight:700;color:var(--ink-2);text-transform:uppercase">${l}</div>
+        <div style="font-size:24px;font-weight:800;color:${c};margin-top:2px">${v}</div>
+      </div>`).join('')}
+  </div>
+  <div style="background:var(--surface-2);border-radius:10px;padding:12px 14px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div style="font-size:12px;font-weight:700;min-width:60px">Coverage</div>
+      <div style="flex:1;height:12px;background:var(--brd2);border-radius:6px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:${barColor};border-radius:6px;transition:width .4s"></div>
+      </div>
+      <div style="font-size:14px;font-weight:800;color:${barColor};min-width:40px">${pct}%</div>
+    </div>
+    <div style="font-size:11px;color:var(--ink-2);margin-top:6px">${d.from} to ${d.to} · ${total} active agencies in scope</div>
+  </div>`;
+
+  const agRow = (ag, badge) => `<tr>
+    <td><b style="font-size:12px">${esc(ag.ag_name)}</b><br><span style="font-size:10px;color:var(--ink-2)">${esc(ag.agcd)} · ${esc(ag.city||'')}</span></td>
+    <td style="font-size:11px;color:var(--ink-2)">${esc(ag.unit_name||'')}</td>
+    <td style="font-size:11px">${esc(ag.exec||'—')}</td>
+    <td style="color:var(--ink-2);font-size:11px">${ag.last_visit ? String(ag.last_visit).slice(0,10) : '<span style="color:var(--red);font-weight:700">Never</span>'}</td>
+    <td class="r" style="font-size:11px">${ag.visit_count}</td>
+    <td class="r" style="font-weight:700;color:${ag.outstanding > 0 ? 'var(--red)' : 'var(--ink)'}">₹${(ag.outstanding||0).toLocaleString('en-IN')}</td>
+    <td>${badge}</td>
+  </tr>`;
+
+  const nvTable = nv.length ? `
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--red);margin-bottom:8px">🔴 Not Visited in Period (${nv.length})</div>
+    <div style="overflow-x:auto;margin-bottom:20px">
+    <table class="tbl" style="font-size:12px;min-width:600px">
+      <thead><tr><th style="text-align:left">Agency</th><th>Unit</th><th>Executive</th><th>Last Visit</th><th class="r">Cnt</th><th class="r">Outstanding</th><th>Status</th></tr></thead>
+      <tbody>${nv.slice(0,50).map(ag => agRow(ag, '<span style="background:#fee2e2;color:#991b1b;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:700">NO VISIT</span>')).join('')}</tbody>
+    </table></div>` : '';
+
+  const rvTable = rv.length ? `
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#f59e0b;margin-bottom:8px">🟡 Rarely Visited (${rv.length})</div>
+    <div style="overflow-x:auto">
+    <table class="tbl" style="font-size:12px;min-width:600px">
+      <thead><tr><th style="text-align:left">Agency</th><th>Unit</th><th>Executive</th><th>Last Visit</th><th class="r">Cnt</th><th class="r">Outstanding</th><th>Status</th></tr></thead>
+      <tbody>${rv.slice(0,30).map(ag => agRow(ag, '<span style="background:#fef3c7;color:#92400e;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:700">RARE</span>')).join('')}</tbody>
+    </table></div>` : '';
+
+  return kpis + nvTable + rvTable;
+}
+
+/* ── AI Remarks tab ── */
+function _dcrARemarksTab() {
+  const execs = (_dcrA.tourExecs?.executives || []);
+  if (!_dcrA.tourExecs) _dcrALoadTourExecs();
+
+  const execOpts = `<option value="">All Executives</option>` + execs.map(e =>
+    `<option value="${esc(e.emp_code)}" ${_dcrA.remEmpCode===e.emp_code?'selected':''}>${esc(e.name||e.emp_code)} [${esc(e.unit_name||'')}]</option>`
+  ).join('');
+
+  const filterBar = `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--brd2)">
+    <select id="remExecSel" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink);max-width:260px">${execOpts}</select>
+    <button class="btn sm pri" onclick="_dcrA.remEmpCode=document.getElementById('remExecSel').value;_dcrA.remarks=null;_dcrA._loadRem=false;_dcrA.aiResults=null;_dcrALoadRemarks();render()">Load Remarks</button>
+    ${(_dcrA.remarks?.visits||[]).length ? `<button class="btn sm" onclick="dcrAAnalyzeRemarks()" style="background:#7c3aed;color:#fff;border:none" ${_dcrA._analyzing?'disabled':''}>🤖 ${_dcrA._analyzing?'Analyzing…':'Analyze with AI'}</button>` : ''}
+    ${_dcrA._loadRem ? '<span style="font-size:12px;color:var(--ink-2)">Loading…</span>' : ''}
+    ${_dcrA._analyzing ? '<span style="font-size:12px;color:#7c3aed">⏳ Claude is reading remarks…</span>' : ''}
+  </div>`;
+
+  if (!_dcrA.remarks) return filterBar + `<div style="color:var(--ink-2);font-size:13px;padding:30px 0;text-align:center">Select an executive (or leave blank for all), then click Load Remarks</div>`;
+  if (_dcrA.remarks._err) return filterBar + `<div style="color:var(--red)">Failed to load remarks.</div>`;
+
+  const visits = _dcrA.remarks.visits || [];
+  if (!visits.length) return filterBar + `<div style="color:var(--ink-2);padding:20px 0">No visits with remarks found for this filter.</div>`;
+
+  const aiMap = {};
+  if (_dcrA.aiResults) _dcrA.aiResults.forEach((r, i) => { aiMap[i + 1] = r; });
+
+  const statusBadge = s => {
+    const colors = { productive: ['#d1fae5','#065f46'], partial: ['#dbeafe','#1e40af'], 'follow-up': ['#fef3c7','#92400e'], 'no-response': ['#fee2e2','#991b1b'], 'info-only': ['#f3f4f6','#374151'] };
+    const [bg, fg] = colors[s] || ['#f3f4f6','#374151'];
+    return `<span style="background:${bg};color:${fg};font-size:10px;padding:2px 7px;border-radius:10px;font-weight:700;white-space:nowrap">${(s||'').toUpperCase()}</span>`;
+  };
+
+  const rows = visits.map((v, i) => {
+    const ai = aiMap[i + 1] || {};
+    const hasAi = Object.keys(ai).length > 0;
+    return `<tr style="vertical-align:top">
+      <td style="white-space:nowrap;font-size:11px;color:var(--ink-2)">${String(v.visit_date||'').slice(0,10)}</td>
+      <td style="font-size:11px"><b>${esc(v.executive_name||v.emp_code||'')}</b><br><span style="color:var(--ink-2)">${esc(v.unit_code||'')}</span></td>
+      <td style="font-size:11px"><b>${esc(v.ag_name||v.ag_code||'')}</b></td>
+      <td style="font-size:10px;color:var(--ink-2)">${esc((v.visit_purpose||'').slice(0,25))}</td>
+      <td style="font-size:11px;max-width:220px;word-break:break-word;color:var(--ink)">${esc((v.visit_remarks||'').slice(0,160))}${(v.visit_remarks||'').length > 160 ? '…' : ''}</td>
+      ${hasAi ? `
+        <td class="r" style="font-size:12px;font-weight:700;color:${ai.payment_received>0?'var(--grn)':'var(--ink-2)'}">₹${(ai.payment_received||0).toLocaleString('en-IN')}</td>
+        <td style="font-size:11px;color:var(--chart-1)">${ai.commitment_amount ? `₹${ai.commitment_amount.toLocaleString('en-IN')} ${ai.commitment_date ? '('+ai.commitment_date+')' : ''}` : '—'}</td>
+        <td style="font-size:11px;color:var(--grn)">${ai.growth_commitment > 0 ? '+'+ai.growth_commitment+' copies' : '—'}</td>
+        <td style="font-size:10px;color:var(--red)">${esc(ai.issue||'—')}</td>
+        <td>${statusBadge(ai.status)}</td>
+      ` : `<td colspan="5" style="font-size:11px;color:var(--ink-2);font-style:italic">Click "Analyze with AI"</td>`}
+    </tr>`;
+  });
+
+  return filterBar + `
+    <div style="overflow-x:auto">
+    <table class="tbl" style="font-size:12px;min-width:800px">
+      <thead><tr>
+        <th>Date</th><th style="text-align:left">Executive</th><th style="text-align:left">Agency</th>
+        <th>Purpose</th><th style="text-align:left;min-width:200px">Remarks</th>
+        ${_dcrA.aiResults ? '<th class="r">Received</th><th>Commitment</th><th>Growth</th><th>Issue</th><th>Status</th>' : '<th colspan="5" style="color:#7c3aed">← AI Analysis (click button above)</th>'}
+      </tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table></div>
+    ${_dcrA.aiResults ? `<div style="margin-top:12px;padding:10px 14px;background:var(--surface-2);border-radius:8px;font-size:11px;color:var(--ink-2)">🤖 Analyzed by Claude Haiku · ${visits.length} visits · Hindi/English remarks parsed</div>` : ''}`;
+}
+
+/* ── Next Day Plan tab ── */
+function _dcrANextPlanTab() {
+  _dcrALoadPlanExecs();
+  const execs = _dcrA.tourExecs?.executives || _dcrA.planExecs || [];
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0,10);
+
+  const execOpts = `<option value="">— Select Executive —</option>` + execs.map(e =>
+    `<option value="${esc(e.emp_code)}" ${_dcrA.planEmpCode===e.emp_code?'selected':''}>${esc(e.name||e.emp_code)} [${esc(e.unit_name||e.unit_code||'')}]</option>`
+  ).join('');
+
+  const controls = `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--brd2)">
+    <select id="planExecSel" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink);max-width:280px">${execOpts}</select>
+    <input type="date" id="planDateIn" value="${_dcrA.planDate || tomorrow}" min="${tomorrow}" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink)">
+    <button class="btn sm pri" style="background:#7c3aed;color:#fff;border:none" onclick="_dcrA.planEmpCode=document.getElementById('planExecSel').value;_dcrA.planDate=document.getElementById('planDateIn').value;dcrAGenPlan()" ${_dcrA._loadingPlan?'disabled':''}>
+      ${_dcrA._loadingPlan ? '⏳ Generating…' : '🤖 Generate AI Plan'}
+    </button>
+    ${_dcrA._loadingPlan ? '<span style="font-size:12px;color:#7c3aed">Claude is analyzing agency data…</span>' : ''}
+  </div>`;
+
+  if (!_dcrA.plan && !_dcrA._loadingPlan) {
+    return controls + `<div style="color:var(--ink-2);font-size:13px;padding:30px 0;text-align:center">
+      <div style="font-size:32px;margin-bottom:10px">📋</div>
+      <div>Select an executive and plan date, then click "Generate AI Plan"</div>
+      <div style="font-size:11px;margin-top:6px">AI considers outstanding balance, pending followups, last visit dates, and past remarks to prioritize agencies</div>
+    </div>`;
+  }
+  if (_dcrA._loadingPlan) return controls + `<div style="color:var(--ink-2);padding:40px 0;text-align:center">⏳ Generating smart visit plan…</div>`;
+  if (_dcrA.plan?._err) return controls + `<div style="color:var(--red);padding:20px 0">Failed to generate plan.</div>`;
+
+  const p = _dcrA.plan?.plan || {};
+  const visits = p.visits || [];
+  const prioColor = s => s === 'high' ? '#ef4444' : s === 'medium' ? '#f59e0b' : '#6b7280';
+
+  const totalTarget = visits.reduce((s, v) => s + (v.target_amount || 0), 0);
+
+  const planCard = `
+    <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;border-radius:12px;padding:16px 18px;margin-bottom:16px">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;opacity:.8">AI Visit Plan for ${esc(p.exec||'')} · ${esc(p.unit||'')}</div>
+      <div style="font-size:18px;font-weight:700;margin:6px 0">${esc(p.date||'')}</div>
+      <div style="font-size:13px;opacity:.9;font-style:italic">"${esc(p.focus_message||'')}"</div>
+      <div style="display:flex;gap:20px;margin-top:12px">
+        <div><div style="font-size:10px;opacity:.7">PLANNED VISITS</div><div style="font-size:22px;font-weight:800">${visits.length}</div></div>
+        <div><div style="font-size:10px;opacity:.7">COLLECTION TARGET</div><div style="font-size:22px;font-weight:800">₹${totalTarget.toLocaleString('en-IN')}</div></div>
+      </div>
+    </div>`;
+
+  const visitCards = visits.map((v, i) => `
+    <div style="border:1px solid var(--brd2);border-left:4px solid ${prioColor(v.priority)};border-radius:8px;padding:12px 14px;margin-bottom:10px;background:var(--bg)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <div style="background:${prioColor(v.priority)};color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">${v.rank||i+1}</div>
+        <div style="flex:1">
+          <b style="font-size:13px">${esc(v.ag_name||'')}</b>
+          <span style="font-size:11px;color:var(--ink-2);margin-left:6px">${esc(v.ag_code||'')} · ${esc(v.city||'')}</span>
+        </div>
+        <span style="background:${prioColor(v.priority)}22;color:${prioColor(v.priority)};font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase">${v.priority||''}</span>
+        ${v.target_amount > 0 ? `<span style="background:#d1fae5;color:#065f46;font-size:11px;font-weight:700;padding:3px 10px;border-radius:10px">₹${v.target_amount.toLocaleString('en-IN')}</span>` : ''}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <div style="font-size:11px"><span style="color:var(--ink-2)">Action: </span>${esc(v.action||'')}</div>
+        <div style="font-size:11px"><span style="color:var(--ink-2)">Key Point: </span><b>${esc(v.key_point||'')}</b></div>
+      </div>
+    </div>`).join('');
+
+  const emailBtn = _dcrA.planEmpCode ? `
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--brd2)">
+      <button class="btn sm" onclick="epDrillExec('${esc(_dcrA.planEmpCode)}','');setTimeout(()=>epOpenEmailFromDetail(),500)">📧 Email Plan to Executive's Reporting Chain</button>
+    </div>` : '';
+
+  return controls + planCard + visitCards + emailBtn;
+}
 
 /* ---- Dashboard: Command Centre ---- */
 /* ── Command Centre helpers ─────────────────────────────── */
