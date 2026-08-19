@@ -2418,6 +2418,7 @@ function _supdExceptions(st) {
   const d = st.exceptions;
   if (!d) return _cmdSkel();
   if (d._err || d.no_data) return `<div class="card pad" style="color:var(--muted)">No exception data.</div>`;
+  if (d.detail) return `<div class="card pad" style="color:var(--red)">⚠️ Could not load exceptions: ${esc(String(d.detail).slice(0,120))} <button class="btn sm" style="margin-left:8px" onclick="_supdState().exceptions=null;render()">Retry</button></div>`;
   const sect = (title, color, rows, cols, mk) => `
     <div class="card pad" style="margin-bottom:12px">
       <div style="font-size:12px;font-weight:800;color:${color};margin-bottom:6px">${title} · ${rows.length}</div>

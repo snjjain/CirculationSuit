@@ -406,7 +406,8 @@ module.exports = function registerSupplyDash(ctx) {
                   SUM(s.sup_copy) total_copies, MAX(v.mark_attn_date) last_visit
            FROM supply_data s
            LEFT JOIN dcr_agency_visit v
-             ON v.visit_to_main_code = s.agcd AND v.unit_code = s.unit_code
+             ON v.visit_to_main_code COLLATE utf8mb4_unicode_ci = s.agcd
+             AND v.unit_code COLLATE utf8mb4_unicode_ci = s.unit_code
              AND v.mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
            WHERE s.supply_date >= DATE_SUB(?, INTERVAL 14 DAY)${S}
            GROUP BY s.agcd
