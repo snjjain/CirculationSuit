@@ -4375,7 +4375,7 @@ function colState() {
     filters: { from: prevMonthRange().from, to: prevMonthRange().to, state:'', branch:'', district:'', ag_code:'', payment_cat:'' },
     opts: { states:[], branches:[], districts:[], payment_cats:[], agencies:[] },
     kpis: null, trend: [], modes: [], agencies: [], appUsage: [],
-    bhDrillState: '', bhDrillUnit: '', bhState: null, bhUnit: null, bhAgency: null,
+    bhDrillState: null, bhDrillUnit: null, bhState: null, bhUnit: null, bhAgency: null,
   });
 }
 
@@ -4424,7 +4424,12 @@ window.colDrill = (region, unit, unitName, exec) => {
 
 async function colFetch() {
   const st = colState();
-  st.loading = true; st.error = null; render();
+  st.loading = true; st.error = null;
+  // Reset behaviour drill-down so new filters apply cleanly
+  st.bhState = null; st.bhUnit = null; st.bhAgency = null;
+  st.bhDrillState = null; st.bhDrillUnit = null;
+  ['_bh_l_State','_bh_l_Unit','_bh_l_Agency','_bh_err_State','_bh_err_Unit','_bh_err_Agency'].forEach(k => { st[k] = false; });
+  render();
   // Filter dropdown options are slow-changing and independent — load them WITHOUT blocking the
   // dashboard (they used to make the whole screen wait on a full-table scan).
   if (!st._filtersLoaded && !st._filtersLoading) {
@@ -4861,6 +4866,10 @@ function _colBhLoad(key, level, stateQ, branchQ) {
   const p = new URLSearchParams({ level });
   if (stateQ)  p.set('state',  stateQ);
   if (branchQ) p.set('branch', branchQ);
+  // Respect collection filter geo-scope when drill hasn't overridden it
+  const f = st.filters || {};
+  if (!stateQ  && f.state)  p.set('state',  f.state);
+  if (!branchQ && f.branch) p.set('branch', f.branch);
   fetch(colApi() + '/behavior-trend?' + p.toString(), { headers: api.h() })
     .then(r => r.json())
     .then(d => { st['bh' + key] = d; st['_bh_l_' + key] = false; if (S.screen === 'collections') render(); })
@@ -4868,7 +4877,9 @@ function _colBhLoad(key, level, stateQ, branchQ) {
 }
 window.colBhDrill = (state, branch) => {
   const st = colState();
-  st.bhDrillState = state || ''; st.bhDrillUnit = branch || '';
+  // '' = explicitly cleared by user (show state list); null = auto (use filter)
+  st.bhDrillState = state != null ? state : '';
+  st.bhDrillUnit  = branch != null ? branch : '';
   st.bhUnit = null; st.bhAgency = null;
   st['_bh_l_Unit'] = false; st['_bh_l_Agency'] = false;
   st['_bh_err_Unit'] = false; st['_bh_err_Agency'] = false;
@@ -4993,34 +5004,40 @@ function _colBhAgencyTable(ad, drillState, drillUnit) {
 
 function colBehaviorTab() {
   const st = colState();
-  // Always pre-load state level data
+  const fState  = (st.filters && st.filters.state)  || '';
+  const fBranch = (st.filters && st.filters.branch) || '';
+
+  // null = never drilled (auto-apply filter geo); '' = user explicitly cleared
+  // string = user drilled into that state/unit
+  const drillState = st.bhDrillState !== null ? st.bhDrillState : fState;
+  const drillUnit  = st.bhDrillUnit  !== null ? st.bhDrillUnit  : (st.bhDrillState === null ? fBranch : '');
+
+  // Pre-load whichever level we'll render
   _colBhLoad('State', 'state', '', '');
+  if (drillState && !drillUnit) _colBhLoad('Unit',   'unit',   drillState, '');
+  if (drillState &&  drillUnit) _colBhLoad('Agency', 'agency', drillState, drillUnit);
+
   const summary = _colBhSummary(st.bhState);
-
-  // Breadcrumb + back buttons
-  const backAll  = `<button class="btn sm" style="margin-bottom:10px" onclick="colBhDrill('','')">← All States</button>`;
-  const backState = `<button class="btn sm" style="margin-bottom:10px;margin-left:6px" onclick="colBhDrill('${esc(st.bhDrillState).replace(/'/g,"\\'")}','')">← ${esc(st.bhDrillState)}</button>`;
-
   const bhErr = msg => `<div class="card pad" style="color:var(--muted)">⚠️ ${msg} <button class="btn sm" style="margin-left:8px" onclick="colState()['_bh_err_State']=false;colState()['_bh_err_Unit']=false;colState()['_bh_err_Agency']=false;render()">Retry</button></div>`;
+  const backAll   = `<button class="btn sm" style="margin-bottom:10px" onclick="colBhDrill('','')">← All States</button>`;
+  const backState = `<button class="btn sm" style="margin-bottom:10px;margin-left:6px" onclick="colBhDrill('${esc(drillState).replace(/'/g,"\\'")}','')">← ${esc(drillState)}</button>`;
 
-  // Level 0 — State
-  if (!st.bhDrillState) {
+  // Level 0 — State list (filtered by collection state-filter if set)
+  if (!drillState) {
     if (st['_bh_err_State']) return summary + bhErr('Could not load behaviour data.');
     if (!st.bhState) return summary + _cmdSkel();
     return summary + _colBhStateTable(st.bhState);
   }
 
-  // Level 1 — Unit (state selected)
-  if (!st.bhDrillUnit) {
-    _colBhLoad('Unit', 'unit', st.bhDrillState, '');
+  // Level 1 — Unit list within drillState
+  if (!drillUnit) {
     if (st['_bh_err_Unit']) return summary + backAll + bhErr('Could not load unit data.');
-    return summary + backAll + (!st.bhUnit ? _cmdSkel() : _colBhUnitTable(st.bhUnit, st.bhDrillState));
+    return summary + backAll + (!st.bhUnit ? _cmdSkel() : _colBhUnitTable(st.bhUnit, drillState));
   }
 
-  // Level 2 — Agency (state + unit selected)
-  _colBhLoad('Agency', 'agency', st.bhDrillState, st.bhDrillUnit);
+  // Level 2 — Agency list within drillState + drillUnit
   if (st['_bh_err_Agency']) return summary + backAll + backState + bhErr('Could not load agency data.');
-  return summary + backAll + backState + (!st.bhAgency ? _cmdSkel() : _colBhAgencyTable(st.bhAgency, st.bhDrillState, st.bhDrillUnit));
+  return summary + backAll + backState + (!st.bhAgency ? _cmdSkel() : _colBhAgencyTable(st.bhAgency, drillState, drillUnit));
 }
 
 VIEWS.collections = () => {
