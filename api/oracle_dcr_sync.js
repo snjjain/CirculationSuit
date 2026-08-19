@@ -423,8 +423,11 @@ async function runSync(opts = {}) {
     if (opts.backfill) {
       const today = new Date();
       const toYM  = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
-      periods = monthRanges('2025-01', toYM).reverse(); // newest first
-      onLog(`[dcr-sync] Backfill: ${periods.length} months (newest first)`);
+      // 2 years back from current month
+      const twoYrsAgo = new Date(today.getFullYear() - 2, today.getMonth(), 1);
+      const fromYM = `${twoYrsAgo.getFullYear()}-${String(twoYrsAgo.getMonth() + 1).padStart(2, '0')}`;
+      periods = monthRanges(fromYM, toYM).reverse(); // newest first
+      onLog(`[dcr-sync] Backfill: ${periods.length} months (newest first) from ${fromYM}`);
     } else if (opts.from && opts.to) {
       // Chunk into monthly periods — avoids huge single Oracle queries that hang
       const fromYM = opts.from.slice(0, 7);
