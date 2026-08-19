@@ -847,6 +847,51 @@ module.exports = function registerSupplyDash(ctx) {
   });
 
   // ════ EXECUTIVE drill — one executive's agent supply by STATE, then by BRANCH ════
+  // ── Cash sale receipt timing: last creation_date per unit/center per day ──────
+  app.get('/api/supply-dash/cash/receipt-timing', async (req, res) => {
+    try {
+      const days = Math.min(Math.max(parseInt(req.query.days || '7', 10), 1), 31);
+      const { clause, params } = await scopeUnits(req);
+      const { rows } = await q(`
+        SELECT
+          loc_id                    AS unit_code,
+          MAX(COALESCE(unit_name, loc_id)) AS unit_name,
+          hwk_cent_code,
+          MAX(COALESCE(hawker_center, hwk_cent_code)) AS center_name,
+          DATE(supply_date)         AS supply_date,
+          MAX(creation_date)        AS last_entry,
+          COUNT(*)                  AS txn_count,
+          SUM(sup_copies)           AS total_copies
+        FROM hawker_supply
+        WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+          ${clause.replace('{col}', 'loc_id')}
+        GROUP BY loc_id, hwk_cent_code, DATE(supply_date)
+        ORDER BY loc_id, hwk_cent_code, supply_date DESC`,
+        [days, ...params]);
+
+      // Pivot rows into { unit+center → { date → { last_entry, txn_count, total_copies } } }
+      const byKey = {};
+      const dateSet = new Set();
+      for (const r of rows) {
+        const date = String(r.supply_date).slice(0, 10);
+        dateSet.add(date);
+        const key = `${r.unit_code}|${r.hwk_cent_code}`;
+        if (!byKey[key]) byKey[key] = {
+          unit_code: r.unit_code, unit_name: r.unit_name,
+          hwk_cent_code: r.hwk_cent_code, center_name: r.center_name, days: {},
+        };
+        byKey[key].days[date] = {
+          last_entry: r.last_entry ? String(r.last_entry).slice(0, 19) : null,
+          txn_count: Number(r.txn_count), total_copies: Number(r.total_copies),
+        };
+      }
+      const sortedDates = Array.from(dateSet).sort().reverse().slice(0, days);
+      const sortedRows = Object.values(byKey)
+        .sort((a, b) => (a.unit_name || '').localeCompare(b.unit_name || ''));
+      res.json({ dates: sortedDates, rows: sortedRows });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
   app.get('/api/supply-dash/executive/:name', async (req, res) => {
     try {
       const w = await saleWin(req);

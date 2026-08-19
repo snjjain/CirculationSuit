@@ -48,6 +48,14 @@ function _pad2(n) { return String(n).padStart(2, "0"); }
 function todayISO()      { const d = new Date(); return d.getFullYear() + "-" + _pad2(d.getMonth() + 1) + "-" + _pad2(d.getDate()); }
 function monthStartISO()  { const d = new Date(); return d.getFullYear() + "-" + _pad2(d.getMonth() + 1) + "-01"; }
 function defaultRange()  { return { from: monthStartISO(), to: todayISO() }; }
+function prevMonthRange() {
+  const n = new Date(), m = n.getMonth(); // 0=Jan
+  const year = m === 0 ? n.getFullYear() - 1 : n.getFullYear();
+  const mon  = m === 0 ? 12 : m; // 1-based prev month
+  const last = new Date(year, mon, 0).getDate();
+  const mm   = String(mon).padStart(2, '0'), ll = String(last).padStart(2, '0');
+  return { from: `${year}-${mm}-01`, to: `${year}-${mm}-${ll}` };
+}
 
 /* ---------- date-range filter (null = latest day) ---------- */
 function rangeQS(path) {
@@ -1835,19 +1843,19 @@ VIEWS.command = () => {
   /* ── Top KPI strip data ─────────────────────────────────── */
   const strip = [
     { val: sup && !sup._err && !sup.no_data ? (Number(sup.total.current) || 0).toLocaleString('en-IN') : (c._supLoading ? '…' : '—'),
-      lbl: 'Supply Today · Agent+Cash', icon: '📦', color: 'var(--blue)',
+      lbl: 'Supply Today · Agent+Cash', icon: '📦', color: 'var(--blue)', goto: "go('supply_dash')",
       sub: sup && !sup._err && !sup.no_data ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + ' · Cash ' + (Number(sup.cash.current) || 0).toLocaleString('en-IN') : '' },
     { val: ou && !ou._err ? _cmdFmtC(ou.total_outstanding)      : (c._ouLoading ? '…' : '—'),
-      lbl: 'Outstanding · As on Today', icon: '💰', color: 'var(--red)',
+      lbl: 'Outstanding · As on Today', icon: '💰', color: 'var(--red)', goto: "go('outstanding')",
       sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies' : '' },
     { val: co && !co._err ? _cmdFmtC(co.total_collection)        : (c._coLoading ? '…' : '—'),
-      lbl: 'YTD Collections',    icon: '₹',  color: 'var(--grn)',
+      lbl: 'YTD Collections',    icon: '₹',  color: 'var(--grn)', goto: "go('collections')",
       sub: co && !co._err ? _cmdFmtC(co.mtd_collection||0) + ' this month' : '' },
     { val: si && !si._err ? String((si.late?.length||0) + (si.app_not_running?.length||0)) : (c._siLoading ? '…' : '—'),
-      lbl: 'Taxi Alerts Today',  icon: '🚕', color: si && !si._err && (si.late?.length||0)+(si.app_not_running?.length||0)>0 ? 'var(--red)' : 'var(--grn)',
+      lbl: 'Taxi Alerts Today',  icon: '🚕', color: si && !si._err && (si.late?.length||0)+(si.app_not_running?.length||0)>0 ? 'var(--red)' : 'var(--grn)', goto: "go('transport')",
       sub: si && !si._err ? (si.late?.length||0)+' late · '+(si.app_not_running?.length||0)+' offline' : '' },
     { val: sv && !sv._err ? fmtN(sv.total||0)                   : (c._svLoading ? '…' : '—'),
-      lbl: 'Reader Surveys',     icon: '📋', color: 'var(--acc)',
+      lbl: 'Reader Surveys',     icon: '📋', color: 'var(--acc)', goto: "go('survey_dash')",
       sub: sv && !sv._err ? fmtN(sv.order_count||0) + ' orders booked' : '' },
   ];
 
@@ -1883,7 +1891,8 @@ VIEWS.command = () => {
     <!-- Top KPI summary strip -->
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px;margin-bottom:14px">
       ${strip.map(s => `
-        <div class="_cmd-strip-item" style="border-left:4px solid ${s.color}">
+        <div class="_cmd-strip-item" style="border-left:4px solid ${s.color}${s.goto ? ';cursor:pointer' : ''}"
+          ${s.goto ? `onclick="${s.goto}" role="button" tabindex="0" title="Open ${s.lbl}"` : ''}>
           <div style="display:flex;align-items:center;gap:6px">
             <span style="font-size:15px;line-height:1">${s.icon}</span>
             <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.lbl}</span>
@@ -2618,11 +2627,61 @@ function _supdCovid(st) {
     <div class="two">${_covidStateMini('Agent Sale by State', st.covidAgentStates)}${_covidStateMini('Cash Sale by State', st.covidCashStates)}</div>`;
 }
 
+function _supdReceipt(st) {
+  _supdFetch('receipt', '/api/supply-dash/cash/receipt-timing?days=7');
+  const d = st.receipt;
+  if (!d) return _cmdSkel();
+  if (d.detail || d._err) return `<div class="card pad" style="color:var(--muted)">Could not load receipt timing data.</div>`;
+  const { dates, rows } = d;
+  if (!rows || !rows.length) return `<div class="card pad" style="color:var(--muted)">No cash sale data found for the last 7 days.</div>`;
+
+  const fmtEntry = (entry) => {
+    if (!entry || !entry.last_entry) return `<span style="color:var(--muted)">—</span>`;
+    const t = String(entry.last_entry);
+    const m = t.match(/(\d{1,2}):(\d{2})/);
+    if (!m) return `<span style="color:var(--muted)">—</span>`;
+    const h = parseInt(m[1], 10);
+    const isLate = h >= 6;
+    const color = isLate ? 'var(--red)' : 'var(--grn)';
+    return `<span style="color:${color};font-weight:700;font-size:12px">${String(h).padStart(2,'0')}:${m[2]}</span>`;
+  };
+
+  const hdrCells = dates.map(date =>
+    `<th style="padding:5px 8px;font-size:11px;text-align:center;color:var(--muted);white-space:nowrap">${esc(date.slice(5))}</th>`
+  ).join('');
+
+  const bodyRows = rows.map(r => {
+    const cells = dates.map(date =>
+      `<td style="text-align:center;padding:4px 6px">${fmtEntry(r.days[date])}</td>`
+    ).join('');
+    return `<tr>
+      <td style="padding:4px 8px;white-space:nowrap"><b style="font-size:12px">${esc(r.unit_name || r.unit_code)}</b></td>
+      <td style="padding:4px 8px;white-space:nowrap;color:var(--muted);font-size:11px">${esc(r.center_name || r.hwk_cent_code || '—')}</td>
+      ${cells}
+    </tr>`;
+  }).join('');
+
+  return `<div style="overflow-x:auto">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">
+      Last entry time per cash sale center — <span style="color:var(--grn);font-weight:700">■ before 6 AM</span> on time &nbsp;·&nbsp;
+      <span style="color:var(--red);font-weight:700">■ 6 AM or later</span> late (action needed)
+    </div>
+    <table class="data-tbl" style="min-width:640px;width:100%">
+      <thead><tr>
+        <th style="padding:5px 8px;text-align:left">Unit</th>
+        <th style="padding:5px 8px;text-align:left">Hawker Center</th>
+        ${hdrCells}
+      </tr></thead>
+      <tbody>${bodyRows}</tbody>
+    </table>
+  </div>`;
+}
+
 VIEWS.supply_dash = () => {
   const st = _supdState();
   _supdFetch('filters', '/api/supply-dash/filters');
   const tabs = [['sale', '💰 Sale'], ['covid', '🦠 vs COVID'], ['overview', '📊 Overview'], ['branches', '🏢 Branches'], ['agents', '👤 Agents'],
-                ['execs', '👔 Executives'], ['trend', '📈 Trends'], ['exceptions', '⚠️ Exceptions']];
+                ['execs', '👔 Executives'], ['trend', '📈 Trends'], ['exceptions', '⚠️ Exceptions'], ['receipt', '⏰ Receipt Timing']];
   const allUnits  = (st.filters && st.filters.units)  || [];
   const states    = (st.filters && st.filters.states) || [];
   const dispUnits = st.state ? allUnits.filter(u => u.state_name === st.state) : allUnits;
@@ -2654,7 +2713,8 @@ VIEWS.supply_dash = () => {
   </div>`;
   const bodyMap = { sale: (s) => s.drillMode ? _supdSaleDrill(s) : _supdSale(s), covid: _supdCovid,
                     overview: _supdOverview, branches: _supdBranches, agents: _supdAgents,
-                    execs: _supdExecs, trend: _supdTrend, exceptions: _supdExceptions };
+                    execs: _supdExecs, trend: _supdTrend, exceptions: _supdExceptions,
+                    receipt: _supdReceipt };
   const dataNote = st.filters && st.filters.data_upto
     ? `<div style="font-size:11px;color:var(--muted);text-align:center;margin-top:8px">Agency/Credit sale data up to <b>${esc(String(st.filters.data_upto).slice(0, 10))}</b> · Hawker/Cash sale &amp; DCR visit data pending sync · 5-year history loading</div>`
     : '';
@@ -4311,7 +4371,7 @@ VIEWS.salesleads = () => {
 function colState() {
   return window._colState || (window._colState = {
     tab: 'overview', gran: 'monthly', agSearch: '', bSearch: '', loading: false, error: null,
-    filters: { from: monthStartISO(), to: todayISO(), state:'', branch:'', district:'', ag_code:'', payment_cat:'' },
+    filters: { from: prevMonthRange().from, to: prevMonthRange().to, state:'', branch:'', district:'', ag_code:'', payment_cat:'' },
     opts: { states:[], branches:[], districts:[], payment_cats:[], agencies:[] },
     kpis: null, trend: [], modes: [], agencies: [], behavior: [], appUsage: [],
   });
@@ -4499,7 +4559,7 @@ function colFilterPanel() {
     ${sel('state',    o.states||[],        '🗺 All States')}
     ${sel('branch',   o.branches||[],      '🏢 All Branches')}
     ${sel('payment_cat',o.payment_cats||[],'💳 All Modes')}
-    <button class="btn sm" onclick="Object.assign(colState().filters,{from:monthStartISO(),to:todayISO(),state:'',branch:'',district:'',ag_code:'',payment_cat:''});colFetch()">✕ Reset to this month</button>
+    <button class="btn sm" onclick="const p=prevMonthRange();Object.assign(colState().filters,{from:p.from,to:p.to,state:'',branch:'',district:'',ag_code:'',payment_cat:''});colFetch()">✕ Reset to last month</button>
   </div>`;
 }
 
@@ -6092,7 +6152,7 @@ VIEWS.outstanding = () => {
 
 // ── State ────────────────────────────────────────────────────────────────────
 const epState = () => S.live.ep || (S.live.ep = {
-  filters: { from: monthStartISO(), to: todayISO(), state: '', unit_code: '', metric: 'collection_pct', top_n: 10, period: 'month' },
+  filters: { from: prevMonthRange().from, to: prevMonthRange().to, state: '', unit_code: '', metric: 'collection_pct', top_n: 10, period: 'month' },
   filterOpts: null, kpis: null, ranking: null,
   list: null, listPage: 1, listSearch: '', listSort: 'collection_pct', listSortDir: 'desc', _listKey: '',
   drillExec: '', drillExecName: '', drillExecData: null,
@@ -6163,7 +6223,7 @@ function epPeriodWeek() {
   const mon = new Date(d); mon.setDate(d.getDate() - (dow - 1));
   return { from: mon.toISOString().slice(0, 10), to: todayISO(), period: 'week' };
 }
-function epPeriodMonth()  { return { from: monthStartISO(), to: todayISO(), period: 'month' }; }
+function epPeriodMonth()  { return { ...prevMonthRange(), period: 'month' }; }
 
 window.epSetPeriod = preset => {
   const st = epState();
