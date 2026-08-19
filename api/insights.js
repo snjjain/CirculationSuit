@@ -470,6 +470,144 @@ module.exports = function registerInsights(ctx) {
     }];
   }
 
+  // ── Supply pulse: latest day vs 7-day rolling average ──────────────────────
+  async function aSupplyPulse(sc) {
+    const dtR = await q(`SELECT MAX(supply_date) mx FROM supply_data WHERE 1=1${sc.clause}`, sc.params);
+    const asOf = dtR.rows[0] && dtR.rows[0].mx;
+    if (!asOf) return [];
+    const r = await q(`
+      SELECT
+        SUM(CASE WHEN supply_date=? THEN sup_copy ELSE 0 END) latest,
+        SUM(CASE WHEN supply_date<? AND supply_date>=DATE_SUB(?,INTERVAL 8 DAY) THEN sup_copy ELSE 0 END) prev_sum,
+        COUNT(DISTINCT CASE WHEN supply_date<? AND supply_date>=DATE_SUB(?,INTERVAL 8 DAY) THEN supply_date END) prev_days
+      FROM supply_data WHERE 1=1${sc.clause}`,
+      [asOf, asOf, asOf, asOf, asOf, ...sc.params]);
+    const d = r.rows[0] || {};
+    const latest = N(d.latest), prevDays = N(d.prev_days);
+    if (!prevDays) return [];
+    const avg7 = N(d.prev_sum) / prevDays;
+    if (!avg7) return [];
+    const dropPct = (latest - avg7) / avg7 * 100;
+    if (dropPct > -5) return [];  // not a significant drop
+
+    const unitR = await q(`
+      SELECT unit_code, MAX(unit_name) unit_name,
+             SUM(CASE WHEN supply_date=? THEN sup_copy ELSE 0 END) latest,
+             ROUND(SUM(CASE WHEN supply_date<? AND supply_date>=DATE_SUB(?,INTERVAL 8 DAY) THEN sup_copy ELSE 0 END)
+               / NULLIF(COUNT(DISTINCT CASE WHEN supply_date<? AND supply_date>=DATE_SUB(?,INTERVAL 8 DAY) THEN supply_date END),0), 0) avg7
+      FROM supply_data WHERE 1=1${sc.clause}
+      GROUP BY unit_code
+      HAVING avg7 > 100 AND latest < avg7 * 0.95
+      ORDER BY (avg7 - latest) DESC LIMIT 8`,
+      [asOf, asOf, asOf, asOf, asOf, ...sc.params]);
+
+    return [{
+      id: 'supply_drop', module: 'supply',
+      priority: dropPct < -10 ? 'P1' : 'P2', severity: dropPct < -10 ? 'high' : 'medium',
+      title: `Supply down ${fmtPct(dropPct)} vs 7-day average on ${asOf}`,
+      what: `Latest supply day (${asOf}): ${fmtNum(Math.round(latest))} copies vs ${fmtNum(Math.round(avg7))} 7-day daily average (${fmtPct(dropPct)}).`,
+      why: unitR.rows.length
+        ? `Biggest drops: ${unitR.rows.slice(0, 3).map(u => `${u.unit_name} ${fmtNum(N(u.latest))} vs avg ${fmtNum(N(u.avg7))}`).join(', ')}.`
+        : 'Drop is spread across all units.',
+      impact: `${fmtNum(Math.round(avg7 - latest))} fewer copies supplied — potential unsatisfied readers and returned-copy increase for the affected units.`,
+      next: `Check with printing/dispatch for production delays; verify sub-distributor completion for the top listed units.`,
+      metrics: { latest, avg7, drop_pct: dropPct, as_of: asOf },
+      top: unitR.rows.map(u => ({ label: u.unit_name, unit_code: u.unit_code, value: N(u.avg7) - N(u.latest),
+        text: `${u.unit_name}: ${fmtNum(N(u.latest))} copies vs avg ${fmtNum(N(u.avg7))} (${fmtPct((N(u.latest)-N(u.avg7))/N(u.avg7)*100)})` })),
+      targets: unitR.rows.map(u => ({ unit_code: u.unit_code, unit_name: u.unit_name })),
+      drill: 'supply',
+    }];
+  }
+
+  // ── DCR field-visit insights: inactive execs + unvisited agencies ───────────
+  async function aDcrInsights(sc) {
+    const out = [];
+    const dtR = await q(`SELECT MAX(visit_date) mx FROM dcr_agency_visit WHERE 1=1${sc.clause}`, sc.params);
+    const asOf = dtR.rows[0] && dtR.rows[0].mx;
+    if (!asOf) return out;
+
+    // 1. Executives active in last 30 days but zero visits in last 7 days
+    const execR = await q(`
+      SELECT emp_code, MAX(executive_name) exec_name, MAX(unit_code) unit_code, MAX(unit_name) unit_name,
+             SUM(visit_date >= DATE_SUB(?,INTERVAL 7 DAY)) last7,
+             SUM(visit_date >= DATE_SUB(?,INTERVAL 30 DAY)) last30
+      FROM dcr_agency_visit WHERE 1=1${sc.clause}
+      GROUP BY emp_code
+      HAVING last30 > 0 AND last7 = 0
+      ORDER BY last30 DESC LIMIT 30`,
+      [asOf, asOf, ...sc.params]);
+
+    if (execR.rows.length >= 2) {
+      const unitBreak = {};
+      execR.rows.forEach(r => { unitBreak[r.unit_code] = (unitBreak[r.unit_code] || 0) + 1; });
+      const topUnits = Object.entries(unitBreak).sort((a, b) => b[1] - a[1]).slice(0, 3);
+      out.push({
+        id: 'dcr_inactive_execs', module: 'field_visit',
+        priority: execR.rows.length >= 5 ? 'P2' : 'P3', severity: execR.rows.length >= 5 ? 'medium' : 'low',
+        title: `${execR.rows.length} executives had 0 field visits in last 7 days`,
+        what: `${execR.rows.length} executives who were active in the last 30 days recorded no DCR agency visit in the past 7 days.`,
+        why: `Most affected units: ${topUnits.map(([uc, n]) => `${uc} (${n} exec${n > 1 ? 's' : ''})`).join(', ')}.`,
+        impact: `Agent relationships go cold, payments and commitment follow-ups are missed for the agencies assigned to these executives.`,
+        next: `Unit heads to review field schedules; ensure daily DCR visit targets are assigned and tracked.`,
+        metrics: { count: execR.rows.length, as_of: asOf },
+        top: execR.rows.slice(0, 10).map(r => ({ label: r.exec_name, unit_code: r.unit_code, value: N(r.last30),
+          text: `${r.exec_name} (${r.unit_name}): 0 visits in 7 days, ${N(r.last30)} in last 30` })),
+        targets: [...new Map(execR.rows.map(r => [r.unit_code, { unit_code: r.unit_code, unit_name: r.unit_name }])).values()],
+        drill: 'field_visit',
+      });
+    }
+
+    // 2. Main agencies with active supply but no DCR visit in 30+ days
+    // Query dcr_agency_visit for last visit per (unit_code, agcd) — separate from agency_master to avoid collation JOIN
+    const visitR = await q(`
+      SELECT unit_code, visit_to_main_code agcd, MAX(visit_date) last_visit
+      FROM dcr_agency_visit WHERE 1=1${sc.clause}
+      GROUP BY unit_code, visit_to_main_code`, sc.params);
+    const visitMap = {};
+    visitR.rows.forEach(r => { visitMap[(r.unit_code || '') + '|' + r.agcd] = r.last_visit; });
+
+    // Active agencies: had supply in last 15 days (dpcd=1 for main agency, same as sub-agency rows in supply)
+    const today = new Date().toISOString().slice(0, 10);
+    const amClause = sc.clause.replace(/unit_code/g, 'unit');
+    const amR = await q(`
+      SELECT unit AS unit_code, MAX(unit_name) unit_name, agcd, MAX(ag_name) ag_name
+      FROM agency_master
+      WHERE CAST(dpcd AS UNSIGNED) = 1
+        AND (supply_stop_flag IS NULL OR supply_stop_flag != 'Y')
+        AND (suspend_date IS NULL OR suspend_date > CURDATE())
+        AND executive_name IS NOT NULL AND executive_name != ''${amClause}
+      GROUP BY unit, agcd LIMIT 3000`, sc.params);
+
+    const unvisited = [];
+    amR.rows.forEach(a => {
+      const key = (a.unit_code || '') + '|' + a.agcd;
+      const lv = visitMap[key];
+      const daysSince = lv ? Math.floor((new Date(today) - new Date(lv)) / 86400000) : 9999;
+      if (daysSince >= 30) unvisited.push({ ...a, last_visit: lv || null, days_since: daysSince });
+    });
+
+    if (unvisited.length >= 5) {
+      const neverVisited = unvisited.filter(a => !a.last_visit).length;
+      const sample = [...unvisited].sort((a, b) => b.days_since - a.days_since).slice(0, 10);
+      out.push({
+        id: 'dcr_unvisited_agencies', module: 'field_visit',
+        priority: unvisited.length >= 50 ? 'P2' : 'P3', severity: unvisited.length >= 50 ? 'medium' : 'low',
+        title: `${unvisited.length} active agencies not visited by executive in 30+ days`,
+        what: `${unvisited.length} main agencies with active supply have no DCR executive visit in 30+ days (${neverVisited} have never been visited in the system).`,
+        why: `Longest gaps: ${sample.slice(0, 3).map(a => `${a.ag_name} (${a.unit_name}, ${a.days_since >= 9000 ? 'never' : a.days_since + ' days'}`).join('); ')}).`,
+        impact: `Outstanding builds undetected; growth discussions and payment commitments are not happening at these agencies.`,
+        next: `Assign a visit schedule for these agencies in the next 7 days, prioritizing those with high outstanding or declining supply.`,
+        metrics: { count: unvisited.length, never_visited: neverVisited, as_of: today },
+        top: sample.map(a => ({ label: a.ag_name, unit_code: a.unit_code, value: a.days_since,
+          text: `${a.ag_name} (${a.unit_name}): last visited ${a.last_visit || 'never'} (${a.days_since >= 9000 ? 'never' : a.days_since + ' days ago'})` })),
+        targets: [...new Map(sample.map(a => [a.unit_code, { unit_code: a.unit_code, unit_name: a.unit_name }])).values()],
+        drill: 'field_visit',
+      });
+    }
+
+    return out;
+  }
+
   const PRIORITY_RANK = { P1: 0, P2: 1, P3: 2 };
 
   // ── GET /api/insights ───────────────────────────────────────────────────────
@@ -494,6 +632,8 @@ module.exports = function registerInsights(ctx) {
         aTaxi(unitCodes),
         aSurvey(scOu),
         aDigitalCollection(scCol),
+        aSupplyPulse(scOu),
+        aDcrInsights(scOu),
       ]);
       const insights = [];
       const errors = [];

@@ -808,7 +808,150 @@ module.exports = function registerAskAI(ctx) {
       }),
     },
 
-    // ── 15. Survey / orders ───────────────────────────────────────────────────
+    // ── 15. DCR visit summary — by executive, unit, or purpose ──────────────
+    {
+      match: /\b(dcr|field visit|agency visit|visit summary|kitne.*visit|visit.*kitne|executive.*visit|visit.*executive|visit.*report|visit.*performance)\b/i,
+      build: (question, scope) => {
+        const byUnit  = /unit|branch/i.test(question);
+        const byPurp  = /purpose/i.test(question);
+        const grp     = byPurp ? 'visit_purpose' : byUnit ? 'unit_code, MAX(unit_name) unit_name' : 'emp_code, MAX(executive_name) exec_name, MAX(unit_code) unit_code, MAX(unit_name) unit_name';
+        const lbl     = byPurp ? 'Purpose' : byUnit ? 'Branch' : 'Executive';
+        const nameCol = byPurp ? 'visit_purpose' : byUnit ? 'unit_name' : 'exec_name';
+        return {
+          understood: `DCR agency visit summary — ${lbl}-wise (last 30 days)`,
+          queries: [{ purpose: 'Visit count by ' + lbl.toLowerCase(), sql: `
+            SELECT ${grp},
+                   COUNT(*) visits,
+                   COUNT(DISTINCT visit_to_main_code) agencies,
+                   COUNT(DISTINCT visit_date) active_days
+            FROM dcr_agency_visit
+            WHERE visit_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)${sc(scope, 'unit_code')}
+            GROUP BY ${byPurp ? 'visit_purpose' : byUnit ? 'unit_code' : 'emp_code'}
+            ORDER BY visits DESC LIMIT 40` }],
+          analyse(results) {
+            const rows = results[0].rows;
+            if (!rows.length) return { answer: 'No DCR visit data found for the last 30 days.', summary: '', insights: [], recommendations: [], charts: [] };
+            const totV = rows.reduce((s, r) => s + N(r.visits), 0);
+            const totA = rows.reduce((s, r) => s + N(r.agencies), 0);
+            const top = rows[0];
+            return {
+              answer: `${fmtNum(totV)} DCR agency visits in last 30 days across ${fmtNum(totA)} unique agencies. Top ${lbl.toLowerCase()}: ${top[nameCol] || '—'} (${fmtNum(top.visits)} visits).`,
+              summary: `${lbl}-wise breakdown of DCR agency visits in the last 30 days.`,
+              insights: [
+                `Total: ${fmtNum(totV)} visits to ${fmtNum(totA)} agencies by ${rows.length} ${lbl.toLowerCase()}${byPurp ? '' : 's'}.`,
+                rows.length > 1 ? `Lowest: ${rows[rows.length - 1][nameCol] || '—'} (${fmtNum(rows[rows.length - 1].visits)} visits).` : null,
+              ].filter(Boolean),
+              recommendations: rows.some(r => N(r.visits) < 5) ? [`Some ${lbl.toLowerCase()}s have very low visit counts — check if targets are being met.`] : [],
+              charts: [{ type: 'bar', title: `DCR visits by ${lbl.toLowerCase()} (last 30 days)`, labels: rows.slice(0, 15).map(r => r[nameCol] || '?'), values: rows.slice(0, 15).map(r => N(r.visits)), value_label: 'visits' }],
+            };
+          },
+        };
+      },
+    },
+
+    // ── 16. Executives with no/low visits ────────────────────────────────────
+    {
+      match: /\b(no visit|zero visit|inactive exec|exec.*not visit|visit.*nahi|field.*absent|absent.*field)\b/i,
+      build: (question, scope) => ({
+        understood: 'Executives with 0 DCR agency visits in the last 7 days (but active in last 30)',
+        queries: [{ purpose: 'Inactive executives', sql: `
+          SELECT emp_code, MAX(executive_name) exec_name, MAX(unit_name) unit_name,
+                 SUM(visit_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)) last7,
+                 SUM(visit_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)) last30
+          FROM dcr_agency_visit WHERE 1=1${sc(scope, 'unit_code')}
+          GROUP BY emp_code
+          HAVING last30 > 0 AND last7 = 0
+          ORDER BY last30 DESC LIMIT 30` }],
+        analyse(results) {
+          const rows = results[0].rows;
+          if (!rows.length) return { answer: 'All active executives recorded field visits in the last 7 days.', summary: '', insights: [], recommendations: [], charts: [] };
+          return {
+            answer: `${rows.length} executives had 0 DCR agency visits in the last 7 days despite being active in the last 30 days.`,
+            summary: `Executives who were field-active in the last 30 days but went silent in the last 7 days.`,
+            insights: [rows.length > 5 ? `${rows.length} inactive executives is a concern — field coverage may have gaps.` : `${rows.length} executives temporarily inactive.`],
+            recommendations: ['Unit heads should review attendance and daily field schedules for listed executives.'],
+            charts: [],
+          };
+        },
+      }),
+    },
+
+    // ── 17. Agencies not visited in N days ───────────────────────────────────
+    {
+      match: /\b(agenc.*not visit|not visit.*agenc|unvisit|visit gap|visit baaki|coverage gap|agency coverage)\b/i,
+      build: (question, scope) => {
+        const days = (question.match(/(\d+)\s*day/) || [])[1] || '30';
+        return {
+          understood: `Agencies with no DCR executive visit in last ${days} days`,
+          queries: [{ purpose: 'Unvisited agencies per unit', sql: `
+            SELECT unit_code, MAX(unit_name) unit_name,
+                   COUNT(DISTINCT visit_to_main_code) agencies_visited,
+                   MIN(visit_date) earliest_visit
+            FROM dcr_agency_visit
+            WHERE visit_date >= DATE_SUB(CURDATE(), INTERVAL ${parseInt(days, 10)} DAY)${sc(scope, 'unit_code')}
+            GROUP BY unit_code ORDER BY agencies_visited ASC LIMIT 30` },
+          { purpose: 'Agencies not visited recently', sql: `
+            SELECT unit_code, visit_to_main_code agcd, MAX(executive_name) exec_name,
+                   MAX(visit_date) last_visit, DATEDIFF(CURDATE(), MAX(visit_date)) days_since
+            FROM dcr_agency_visit WHERE 1=1${sc(scope, 'unit_code')}
+            GROUP BY unit_code, visit_to_main_code
+            HAVING days_since >= ${parseInt(days, 10)}
+            ORDER BY days_since DESC LIMIT 30` }],
+          analyse(results) {
+            const byUnit = results[0].rows;
+            const stale  = results[1].rows;
+            if (!stale.length && !byUnit.length) return { answer: 'No DCR visit data found.', summary: '', insights: [], recommendations: [], charts: [] };
+            return {
+              answer: `${stale.length} agency-unit combinations have not been visited in ${days}+ days. Across units, the lowest field coverage is: ${byUnit.slice(0, 3).map(u => `${u.unit_name} (${u.agencies_visited} agencies visited)`).join(', ')}.`,
+              summary: `Agency visit gap analysis — agencies last visited more than ${days} days ago.`,
+              insights: [`Top stale: ${stale.slice(0, 3).map(r => `${r.agcd} in ${r.unit_code} (${r.days_since} days)`).join(', ')}.`],
+              recommendations: stale.length > 10 ? [`Assign a revisit schedule — agencies beyond ${days} days face payment and relationship risk.`] : [],
+              charts: byUnit.length ? [{ type: 'bar', title: `Agencies visited per unit (last ${days} days)`, labels: byUnit.slice(0, 12).map(r => r.unit_name), values: byUnit.slice(0, 12).map(r => N(r.agencies_visited)), value_label: 'agencies visited' }] : [],
+            };
+          },
+        };
+      },
+    },
+
+    // ── 18. Executive target achievement ──────────────────────────────────────
+    {
+      match: /\b(target|achievement|achieved|lakshy|lakhshy|best exec|worst exec|top exec|performer)\b/i,
+      guard: /exec|branch|unit|month/i,
+      build: (question, scope) => ({
+        understood: 'Executive target vs achievement — monthly (latest data)',
+        queries: [{ purpose: 'Target vs actual by executive', sql: `
+          SELECT t.emp_code, COALESCE(t.exec_name, t.emp_code) exec_name,
+                 t.unit_code, MAX(t.unit_name) unit_name,
+                 t.target_month,
+                 SUM(t.target_copies) target_copies,
+                 SUM(t.actual_copies) actual_copies,
+                 ROUND(SUM(t.actual_copies) / NULLIF(SUM(t.target_copies), 0) * 100, 1) ach_pct
+          FROM exec_targets t
+          WHERE t.target_month = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m')${sc(scope, 'unit_code')}
+          GROUP BY t.emp_code, t.unit_code, t.target_month
+          ORDER BY ach_pct DESC LIMIT 40` }],
+        analyse(results) {
+          const rows = results[0].rows;
+          if (!rows.length) return { answer: 'No executive target data found. (exec_targets table may not have data for last month.)', summary: '', insights: [], recommendations: [], charts: [] };
+          const avg = rows.reduce((s, r) => s + N(r.ach_pct), 0) / rows.length;
+          const above = rows.filter(r => N(r.ach_pct) >= 100).length;
+          const below60 = rows.filter(r => N(r.ach_pct) < 60).length;
+          return {
+            answer: `${rows.length} executives tracked. Average achievement: ${avg.toFixed(1)}%. ${above} met/exceeded target; ${below60} are below 60%.`,
+            summary: `Executive target vs actual achievement for the previous month.`,
+            insights: [
+              `Best: ${rows[0].exec_name} (${rows[0].unit_name}) — ${N(rows[0].ach_pct)}% of target.`,
+              rows.length > 1 ? `Lowest: ${rows[rows.length - 1].exec_name} (${rows[rows.length - 1].unit_name}) — ${N(rows[rows.length - 1].ach_pct)}%.` : null,
+              below60 > 0 ? `${below60} executive${below60 > 1 ? 's' : ''} below 60% — flag for review.` : null,
+            ].filter(Boolean),
+            recommendations: below60 > 0 ? [`Review copy targets for the ${below60} underperforming executives; check if targets are realistic vs supply capacity.`] : [],
+            charts: [{ type: 'bar', title: 'Target achievement % by executive', labels: rows.slice(0, 15).map(r => r.exec_name), values: rows.slice(0, 15).map(r => N(r.ach_pct)), value_label: '% achieved' }],
+          };
+        },
+      }),
+    },
+
+    // ── 19. Survey / orders ───────────────────────────────────────────────────
     {
       match: /survey|order/i,
       build: (question, scope) => ({
@@ -865,8 +1008,15 @@ TABLES (only these):
 5. survey_data — reader surveys. Cols: unit_code, unit_name, bookdate DATE, r_id, created_by,
    unprod_reason, order_id (non-empty=order), agcd, locality_code.
 6. units — unit_code, unit_name.
+7. dcr_agency_visit — field executive visits to agencies (synced from Oracle ERP). Cols: unit_code,
+   unit_name, emp_code, executive_name, visit_to_main_code (=agcd), visit_date DATE, visit_purpose,
+   visit_remarks (Hindi/English), latitude, longitude, followup_amount, mark_attn_date.
+   Use visit_date for filtering. GROUP BY emp_code for executive-wise, visit_to_main_code for agency-wise.
+8. exec_targets — monthly copy targets per executive. Cols: emp_code, exec_name, unit_code, unit_name,
+   target_month (YYYY-MM), target_copies INT, actual_copies INT.
 RULES: collection totals = -SUM(amount) with is_valid=1. Outstanding = period_label='CURRENT'.
-Pre-COVID baseline = supply_date='2020-03-18'. Growth% = (cur-prev)/prev*100.`;
+Pre-COVID baseline = supply_date='2020-03-18'. Growth% = (cur-prev)/prev*100.
+DCR visit data available from 2024-08 onward. agency_master.unit = unit_code (short code).`;
 
   function extractJson(text) {
     const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);

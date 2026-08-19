@@ -3120,9 +3120,11 @@ const _AI_PRI = { P1: ['var(--red)',  'P1 · Act Today'],
                   P3: ['var(--acc)',  'P3 · Monitor'] };
 const _AI_MOD = { outstanding: ['💰','Outstanding'], collection: ['₹','Collections'],
                   short_payment: ['⚠️','Short Payment'], taxi: ['🚕','Taxi'], app_usage: ['📵','App Usage'],
-                  survey: ['📋','Survey'], digital: ['💳','Digital'] };
+                  survey: ['📋','Survey'], digital: ['💳','Digital'],
+                  supply: ['📦','Supply'], field_visit: ['🏃','Field Visit'] };
 const _AI_DRILL = { outstanding:'outstanding', collection:'collections', short_payment:'outstanding',
-                    taxi:'transport', app_usage:'transport', survey:'survey_dash', digital:'collections' };
+                    taxi:'transport', app_usage:'transport', survey:'survey_dash', digital:'collections',
+                    supply:'supply_dash', field_visit:'dcr_analytics' };
 
 function _aiState() { return S.live.ins || (S.live.ins = { tab: 'insights' }); }
 
@@ -3172,14 +3174,20 @@ function _askState() {
 const _ASK_SUGGESTIONS = [
   "Today's total circulation",
   'Branch-wise circulation for today',
+  'DCR visit summary by executive this month',
   'Agencies with outstanding above ₹50,000',
-  'Top 20 agencies by copy supply',
+  'Executives with no field visits in last 7 days',
+  'Agency visit coverage gap — not visited in 30 days',
   'Monthly circulation trend for the last 12 months',
+  'Executive target achievement last month',
+  'Top 20 agencies by copy supply',
   'New agencies added this month',
   'Outstanding recovery status branch-wise',
+  'Agencies not visited in 30 days',
   'Compare supply with pre-COVID (18 March 2020)',
   'आज की कुल प्रसार संख्या',
   'शाखावार बकाया की स्थिति',
+  'पिछले 7 दिन में visit नहीं किया',
 ];
 
 window.askSuggest = i => {
