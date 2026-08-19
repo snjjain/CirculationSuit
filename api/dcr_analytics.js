@@ -971,12 +971,15 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const amP  = unitCodes === null ? [] : (unitCodes.length ? unitCodes : []);
       const osCl = unitCodes === null ? '' : (unitCodes.length ? ` AND unit_code IN (${unitCodes.map(()=>'?').join(',')})` : ' AND 1=0');
 
-      const [agR, visitR, osR] = await Promise.all([
-        q(`SELECT agcd, ag_name, unit_name, executive_name, executive_code, dist_name, city_name
+      const [agR, visitR, osR, supR] = await Promise.all([
+        // dp_code=1 → main agency only (dp_code>1 = sub-agency of same agcd)
+        q(`SELECT agcd, ag_name, unit_name, executive_name,
+                  COALESCE(city_name, dist_name) city_name
            FROM agency_master
-           WHERE executive_code IS NOT NULL AND executive_code != ''
+           WHERE CAST(dp_code AS UNSIGNED) = 1
+             AND executive_code IS NOT NULL AND executive_code != ''
              AND (supply_stop_flag IS NULL OR supply_stop_flag != 'Y')
-             AND suspend_date IS NULL${amCl} LIMIT 3000`, amP),
+             AND suspend_date IS NULL${amCl} LIMIT 5000`, amP),
 
         q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, COUNT(*) cnt
            FROM dcr_agency_visit
@@ -985,22 +988,32 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
         q(`SELECT ag_code, cl_amt FROM agency_outstanding
            WHERE period_label='CURRENT' AND cl_amt > 0${osCl}`, amP),
+
+        // Avg daily supply last 60 days (no unit filter — agcd is globally unique)
+        q(`SELECT agcd, ROUND(SUM(sup_copy)/GREATEST(COUNT(DISTINCT supply_date),1),0) avg_daily
+           FROM supply_data
+           WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+           GROUP BY agcd`, []),
       ]);
 
-      const visitMap = {}, osMap = {};
+      const visitMap = {}, osMap = {}, supMap = {};
       for (const r of visitR.rows) visitMap[r.ag_code] = { last: r.last_visit, cnt: +r.cnt };
       for (const r of osR.rows) osMap[r.ag_code] = +r.cl_amt;
+      for (const r of supR.rows) supMap[r.agcd] = +r.avg_daily;
 
       const fromD = new Date(from), toD = new Date(to);
       const rangeDays = Math.max(1, Math.round((toD - fromD) / 86400000));
-      const minCnt = Math.ceil(rangeDays / 14); // at least 2 per month
+      const minCnt = Math.ceil(rangeDays / 14);
 
       const notVisited = [], rarely = [], covered = [];
       for (const ag of agR.rows) {
         const v = visitMap[ag.agcd] || {};
         const cnt = v.cnt || 0;
         const os  = osMap[ag.agcd] || 0;
-        const rec = { agcd: ag.agcd, ag_name: ag.ag_name, unit_name: ag.unit_name, exec: ag.executive_name, city: ag.city_name || ag.dist_name, last_visit: v.last || null, visit_count: cnt, outstanding: os };
+        const rec = { agcd: ag.agcd, ag_name: ag.ag_name, unit_name: ag.unit_name,
+                      exec: ag.executive_name, city: ag.city_name || '',
+                      last_visit: v.last || null, visit_count: cnt,
+                      outstanding: os, avg_supply: supMap[ag.agcd] || 0 };
         if (!cnt) notVisited.push(rec);
         else if (cnt < minCnt) rarely.push(rec);
         else covered.push(rec);
@@ -1040,6 +1053,14 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
          ORDER BY mark_attn_date DESC, id DESC LIMIT 50`,
         [from, to, ...sp, ...ep]
       );
+      // Decode Oracle-stored HTML entities (e.g. &#2360; → स) so Hindi renders correctly
+      const dec = s => s ? s.replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d)) : s;
+      rows.forEach(r => {
+        r.visit_remarks   = dec(r.visit_remarks);
+        r.visit_purpose   = dec(r.visit_purpose);
+        r.ag_name         = dec(r.ag_name);
+        r.executive_name  = dec(r.executive_name);
+      });
       res.json({ from, to, visits: rows });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
@@ -1055,14 +1076,15 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
       const Anthropic = require('@anthropic-ai/sdk');
       const client = new Anthropic({ apiKey: API_KEY });
-      const batch = visits.slice(0, 25);
+      const dec = s => s ? s.replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d)) : s;
+      const batch = visits.slice(0, 20);
       const visitList = batch.map((v, i) =>
-        `[${i+1}] ${v.visit_date||''} | Exec: ${v.executive_name||'-'} | Agency: ${v.ag_name||v.ag_code||'-'} | Purpose: ${v.purpose||'-'}\nRemarks: ${v.remarks}`
+        `[${i+1}] ${v.visit_date||''} | Exec: ${dec(v.executive_name)||'-'} | Agency: ${dec(v.ag_name)||v.ag_code||'-'} | Purpose: ${dec(v.purpose)||'-'}\nRemarks: ${dec(v.remarks)||'(no remarks)'}`
       ).join('\n\n');
 
       const resp = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 2500,
+        max_tokens: 3500,
         messages: [{ role: 'user', content: `Analyze field visit notes from newspaper circulation executives. Remarks may be Hindi, English, or mixed language.\n\nFor each numbered visit, extract:\n- payment_received: cash received NOW during this visit (number, 0 if none)\n- commitment_amount: agent promised to pay (number, 0 if none)\n- commitment_date: promised payment date (YYYY-MM-DD or "soon" or null)\n- growth_commitment: newspaper copies increase committed (number, 0)\n- issue: main problem in 5-8 words in English (null if none)\n- status: exactly one of: "productive" | "partial" | "follow-up" | "no-response" | "info-only"\n\nReturn ONLY a valid JSON array, no prose:\n[{"idx":1,"payment_received":0,"commitment_amount":0,"commitment_date":null,"growth_commitment":0,"issue":null,"status":"info-only"},...]\n\nVisits:\n${visitList}` }]
       });
 
@@ -1084,19 +1106,34 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
       const tDate = isDate(plan_date) ? plan_date : new Date(Date.now() + 86400000).toISOString().slice(0,10);
 
-      const [execR, agR, visitR, osR] = await Promise.all([
-        q(`SELECT MAX(executive_name) exec_name, MAX(unit_name) unit_name FROM agency_master WHERE executive_code=? LIMIT 1`, [emp_code]),
-        q(`SELECT agcd, ag_name, city_name, dist_name FROM agency_master WHERE executive_code=? AND (supply_stop_flag IS NULL OR supply_stop_flag!='Y') AND suspend_date IS NULL LIMIT 150`, [emp_code]),
-        q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, COUNT(*) cnt, MAX(visit_remarks) last_remarks, MAX(followup_amount) fup_amt, MAX(followup_date) fup_date FROM dcr_agency_visit WHERE emp_code=? AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY) GROUP BY visit_to_main_code`, [emp_code]),
-        q(`SELECT ao.ag_code, ao.cl_amt FROM agency_outstanding ao JOIN agency_master am ON am.agcd=ao.ag_code AND am.unit=ao.unit_code WHERE am.executive_code=? AND ao.period_label='CURRENT' AND ao.cl_amt>0`, [emp_code]),
+      // Resolve exec_name from DCR (emp_code format differs from agency_master.executive_code)
+      const execInfoR = await q(
+        `SELECT MAX(executive_name) exec_name FROM dcr_agency_visit WHERE emp_code=? AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY) LIMIT 1`,
+        [emp_code]
+      );
+      const execName = execInfoR.rows[0]?.exec_name || emp_code;
+
+      const [agR, visitR, osR] = await Promise.all([
+        // Match by executive_name — dp_code=1 for main agencies only
+        q(`SELECT agcd, ag_name, COALESCE(city_name, dist_name) city_name, unit_name
+           FROM agency_master
+           WHERE executive_name=? AND CAST(dp_code AS UNSIGNED)=1
+             AND (supply_stop_flag IS NULL OR supply_stop_flag!='Y') AND suspend_date IS NULL
+           LIMIT 150`, [execName]),
+        q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, COUNT(*) cnt, MAX(visit_remarks) last_remarks, MAX(followup_amount) fup_amt, MAX(followup_date) fup_date
+           FROM dcr_agency_visit WHERE emp_code=? AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+           GROUP BY visit_to_main_code`, [emp_code]),
+        q(`SELECT ao.ag_code, ao.cl_amt FROM agency_outstanding ao
+           JOIN agency_master am ON am.agcd=ao.ag_code AND CAST(am.dp_code AS UNSIGNED)=1
+           WHERE am.executive_name=? AND ao.period_label='CURRENT' AND ao.cl_amt>0
+           GROUP BY ao.ag_code`, [execName]),
       ]);
 
       const vMap = {}, osMap = {};
       for (const r of visitR.rows) vMap[r.ag_code] = r;
       for (const r of osR.rows) osMap[r.ag_code] = +r.cl_amt;
 
-      const execName = execR.rows[0]?.exec_name || emp_code;
-      const unitName = execR.rows[0]?.unit_name || '';
+      const unitName = agR.rows[0]?.unit_name || '';
 
       const agList = agR.rows.map(ag => {
         const v = vMap[ag.agcd] || {};

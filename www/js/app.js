@@ -1888,23 +1888,26 @@ function _dcrACoverageTab() {
     <td style="font-size:11px">${esc(ag.exec||'—')}</td>
     <td style="color:var(--ink-2);font-size:11px">${ag.last_visit ? String(ag.last_visit).slice(0,10) : '<span style="color:var(--red);font-weight:700">Never</span>'}</td>
     <td class="r" style="font-size:11px">${ag.visit_count}</td>
+    <td class="r" style="font-size:11px;color:var(--blue)">${ag.avg_supply > 0 ? ag.avg_supply : '—'}</td>
     <td class="r" style="font-weight:700;color:${ag.outstanding > 0 ? 'var(--red)' : 'var(--ink)'}">₹${(ag.outstanding||0).toLocaleString('en-IN')}</td>
     <td>${badge}</td>
   </tr>`;
 
+  const tblHead = `<thead><tr><th style="text-align:left">Agency</th><th>Unit</th><th>Executive</th><th>Last Visit</th><th class="r">Visits</th><th class="r">Avg Supply</th><th class="r">Outstanding</th><th>Status</th></tr></thead>`;
+
   const nvTable = nv.length ? `
     <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--red);margin-bottom:8px">🔴 Not Visited in Period (${nv.length})</div>
     <div style="overflow-x:auto;margin-bottom:20px">
-    <table class="tbl" style="font-size:12px;min-width:600px">
-      <thead><tr><th style="text-align:left">Agency</th><th>Unit</th><th>Executive</th><th>Last Visit</th><th class="r">Cnt</th><th class="r">Outstanding</th><th>Status</th></tr></thead>
+    <table class="tbl" style="font-size:12px;min-width:680px">
+      ${tblHead}
       <tbody>${nv.slice(0,50).map(ag => agRow(ag, '<span style="background:#fee2e2;color:#991b1b;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:700">NO VISIT</span>')).join('')}</tbody>
     </table></div>` : '';
 
   const rvTable = rv.length ? `
     <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#f59e0b;margin-bottom:8px">🟡 Rarely Visited (${rv.length})</div>
     <div style="overflow-x:auto">
-    <table class="tbl" style="font-size:12px;min-width:600px">
-      <thead><tr><th style="text-align:left">Agency</th><th>Unit</th><th>Executive</th><th>Last Visit</th><th class="r">Cnt</th><th class="r">Outstanding</th><th>Status</th></tr></thead>
+    <table class="tbl" style="font-size:12px;min-width:680px">
+      ${tblHead}
       <tbody>${rv.slice(0,30).map(ag => agRow(ag, '<span style="background:#fef3c7;color:#92400e;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:700">RARE</span>')).join('')}</tbody>
     </table></div>` : '';
 
@@ -1935,7 +1938,7 @@ function _dcrARemarksTab() {
   if (!visits.length) return filterBar + `<div style="color:var(--ink-2);padding:20px 0">No visits with remarks found for this filter.</div>`;
 
   const aiMap = {};
-  if (_dcrA.aiResults) _dcrA.aiResults.forEach((r, i) => { aiMap[i + 1] = r; });
+  if (_dcrA.aiResults) _dcrA.aiResults.forEach((r, i) => { if (r) aiMap[r.idx != null ? +r.idx : i + 1] = r; });
 
   const statusBadge = s => {
     const colors = { productive: ['#d1fae5','#065f46'], partial: ['#dbeafe','#1e40af'], 'follow-up': ['#fef3c7','#92400e'], 'no-response': ['#fee2e2','#991b1b'], 'info-only': ['#f3f4f6','#374151'] };
