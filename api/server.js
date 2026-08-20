@@ -4309,6 +4309,9 @@ require('./dcr_app')({ app, q, getScopeUnitCodes });
 // ── DCR Analytics — manager/admin field visit intelligence & agency GPS map ──
 require('./dcr_analytics')({ app, q, getScopeUnitCodes });
 
+// ── Telegram bot — link executives by mobile, send visit plans/alerts ─────────
+require('./telegram')({ app, q });
+
 // ── Executive Performance Dashboard ───────────────────────────────────────────
 require('./exec_performance')({ app, q, getScopeUnitCodes });
 

@@ -2331,12 +2331,76 @@ function _dcrANextPlanTab() {
     </div>`).join('');
 
   const emailBtn = _dcrA.planEmpCode ? `
-    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--brd2)">
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--brd2);display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn sm" onclick="epDrillExec('${esc(_dcrA.planEmpCode)}','');setTimeout(()=>epOpenEmailFromDetail(),500)">📧 Email Plan to Executive's Reporting Chain</button>
+      <button class="btn sm" style="background:#229ED9;color:#fff;border:none" onclick="dcrAPlanTelegram()">✈️ Send Plan on Telegram</button>
     </div>` : '';
 
   return controls + planCard + visitCards + emailBtn;
 }
+
+/* ── Send AI plan to the executive on Telegram ── */
+function _dcrAPlanText() {
+  const p = _dcrA.plan?.plan || {};
+  const visits = p.visits || [];
+  const pri = s => s === 'high' ? '🔴' : s === 'medium' ? '🟡' : '⚪';
+  const total = visits.reduce((s, v) => s + (v.target_amount || 0), 0);
+  const L = [];
+  L.push(`🗞 <b>Patrika Vitran — Visit Plan</b>`);
+  L.push(`📅 ${p.date || ''} · 👤 ${p.exec || ''} (${p.unit || ''})`);
+  if (p.focus_message) L.push(`\n🎯 ${p.focus_message}`);
+  if (total > 0) L.push(`💰 Total target: ₹${total.toLocaleString('en-IN')}`);
+  L.push('');
+  visits.forEach((v, i) => {
+    L.push(`${v.rank || i + 1}. ${pri(v.priority)} <b>${v.ag_name || ''}</b>${v.city ? ' (' + v.city + ')' : ''}`);
+    if (v.action) L.push(`   ${v.action}${v.target_amount > 0 ? ' · Target ₹' + v.target_amount.toLocaleString('en-IN') : ''}`);
+    if (v.key_point) L.push(`   ⚠ ${v.key_point}`);
+  });
+  return L.join('\n');
+}
+
+window.dcrAPlanTelegram = async () => {
+  const p = _dcrA.plan?.plan || {};
+  const execName = _dcrA.plan?.exec_name || p.exec || '';
+  let pre = { mobile: '', linked: false, enabled: true, bot_username: null };
+  try {
+    const r = await fetch(`${location.origin.replace(':8123',':8001')}/api/telegram/resolve?emp_code=${encodeURIComponent(_dcrA.planEmpCode || '')}&name=${encodeURIComponent(execName)}`, { headers: api.h() });
+    pre = await r.json();
+  } catch (_) {}
+  if (!pre.enabled) { toast('⚠ Telegram bot not configured — set TELEGRAM_BOT_TOKEN in server .env'); return; }
+  const text = _dcrAPlanText();
+  modal(`<h3>✈️ Send Plan on Telegram</h3>
+    <p style="font-size:12px;color:var(--ink-2)">To <b>${esc(execName)}</b>. ${pre.linked ? '<span style="color:var(--grn)">✓ Telegram linked</span>' : pre.mobile ? '<span style="color:#d97706">Number found — link status will be checked on send</span>' : 'Enter the executive\\'s mobile number.'}</p>
+    <input id="tgMob" type="tel" maxlength="10" value="${esc(pre.mobile || '')}" placeholder="10-digit mobile" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;margin-bottom:8px;background:var(--bg);color:var(--ink)">
+    <textarea id="tgText" rows="10" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;font-size:12px;background:var(--bg);color:var(--ink)">${esc(text.replace(/<\/?b>/g, ''))}</textarea>
+    <div id="tgErr" style="color:var(--red);font-size:12px;margin-top:6px"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn pri block" onclick="_dcrATgSend()">Send</button>
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+};
+
+window._dcrATgSend = async () => {
+  const mob = document.getElementById('tgMob')?.value?.replace(/\D/g, '').slice(-10);
+  const text = document.getElementById('tgText')?.value || '';
+  const errEl = document.getElementById('tgErr');
+  if (!mob || mob.length !== 10) { errEl.textContent = 'Enter a valid 10-digit mobile'; return; }
+  errEl.textContent = 'Sending…';
+  try {
+    const r = await fetch(`${location.origin.replace(':8123',':8001')}/api/telegram/send`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mobile: mob, text, emp_code: _dcrA.planEmpCode || '' }),
+    });
+    const d = await r.json();
+    if (r.status === 404 && d.detail === 'not_linked') {
+      errEl.innerHTML = `This number is not linked yet.<br><b>Ask the executive to:</b> open Telegram → search <b>@${esc(d.bot_username || 'the bot')}</b> → press <b>Start</b> → tap <b>📱 Share my number</b>. Then send again.`;
+      return;
+    }
+    if (!r.ok) { errEl.textContent = d.detail || 'Send failed'; return; }
+    closeModals();
+    toast('✈️ Plan sent on Telegram ✓');
+  } catch (e) { errEl.textContent = 'Send failed: ' + e.message; }
+};
 
 /* ---- Dashboard: Command Centre ---- */
 /* ── Command Centre helpers ─────────────────────────────── */
