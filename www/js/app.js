@@ -2343,7 +2343,8 @@ function _dcrANextPlanTab() {
 function _dcrAPlanText() {
   const p = _dcrA.plan?.plan || {};
   const visits = p.visits || [];
-  const pri = s => s === 'high' ? '🔴' : s === 'medium' ? '🟡' : '⚪';
+  // Text-style symbols (not emoji) — render small in Telegram: ● high ◑ medium ○ low
+  const pri = s => s === 'high' ? '●︎' : s === 'medium' ? '◑︎' : '○︎';
   const total = visits.reduce((s, v) => s + (v.target_amount || 0), 0);
   const dt = p.date ? p.date.split('-').reverse().join('/') : '';
   const L = [];
