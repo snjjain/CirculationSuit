@@ -954,6 +954,7 @@ let _dcrA = { tab: 'summary', summary: null, monthly: null, execs: null, mapData
                planEmpCode: '', planDate: '', plan: null, _loadingPlan: false };
 let _dcrMap = null;     // Leaflet map — agency map tab
 let _dcrTourMap = null; // Leaflet map — tour route tab
+let _dcrTeamMap = null; // Leaflet map — team live tab
 
 /* ── Data loaders ── */
 function _dcrAUrl(path) {
@@ -1001,6 +1002,112 @@ function _dcrALoadUnits() {
     .catch(()=>{ _dcrA.units=[]; _dcrA._loadUnits=false; });
 }
 
+/* ── Team Live loaders ── */
+function _dcrALoadTeam(force) {
+  if (_dcrA._loadTeam || (_dcrA.teamData && !force)) return;
+  _dcrA._loadTeam = true; _dcrA.teamData = null;
+  if (_dcrTeamMap) { _dcrTeamMap.remove(); _dcrTeamMap = null; }
+  const qs = `date=${_dcrA.teamDate||new Date().toISOString().slice(0,10)}${_dcrA.unit_code?'&unit_code='+encodeURIComponent(_dcrA.unit_code):''}${_dcrA.state?'&state='+encodeURIComponent(_dcrA.state):''}`;
+  fetch(`${location.origin}/api/dcr-analytics/team-live?${qs}`, { headers: api.h() })
+    .then(r=>r.json()).then(d=>{ _dcrA.teamData=d; _dcrA._loadTeam=false; if(S.screen==='dcr_analytics'&&_dcrA.tab==='team') { render(); setTimeout(_initTeamMap, 80); } })
+    .catch(()=>{ _dcrA.teamData={_err:true}; _dcrA._loadTeam=false; if(S.screen==='dcr_analytics') render(); });
+}
+
+function _initTeamMap() {
+  if (!window.L) return;
+  const d = _dcrA.teamData;
+  if (!d || d._err) return;
+  if (_dcrTeamMap) { _dcrTeamMap.remove(); _dcrTeamMap = null; }
+  const el = document.getElementById('dcrTeamMapEl');
+  if (!el) return;
+  const execs = d.execs_with_gps || [];
+  if (!execs.length) { el.innerHTML = '<div style="padding:20px;color:var(--ink-2);font-size:13px;text-align:center">No GPS-tagged visits for this date</div>'; return; }
+  const allPts = execs.map(e => [e.lat, e.lng]);
+  const ctr = allPts.reduce((a,p)=>[a[0]+p[0]/allPts.length,a[1]+p[1]/allPts.length],[0,0]);
+  _dcrTeamMap = L.map(el, { zoomControl: true }).setView(ctr, 11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(_dcrTeamMap);
+  _dcrTeamMap.fitBounds(L.latLngBounds(allPts).pad(0.15));
+  // Color palette for executives
+  const palette = ['#2563eb','#16a34a','#dc2626','#d97706','#7c3aed','#0891b2','#db2777','#65a30d','#ea580c','#0284c7'];
+  execs.forEach((e, i) => {
+    const col = palette[i % palette.length];
+    const initials = (e.exec_name||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
+    const popup = `<b style="color:${col}">${esc(e.exec_name||e.emp_code)}</b><br>
+      <span style="font-size:11px;color:#6b7280">${esc(e.unit_name||e.unit_code)}</span><br>
+      <span style="font-size:11px">Last visit: <b>${esc(e.last_ag_name||e.last_agcd||'—')}</b></span><br>
+      <span style="font-size:11px;color:#6b7280">${e.last_time||''} · ${esc(e.last_city||'')} · ${e.visit_count} visits</span><br>
+      ${e.last_purpose?`<span style="font-size:11px;color:#2563eb">${esc(e.last_purpose)}</span><br>`:''}
+      <button onclick="dcrASetTab('tour');_dcrA.tourEmpCode='${esc(e.emp_code)}';_dcrA.tourDate='${esc(d.date)}';_dcrA.tourData=null;_dcrA._loadTour=false;_dcrALoadTour();render();" style="font-size:11px;margin-top:4px;padding:2px 8px;border:1px solid #2563eb;border-radius:4px;color:#2563eb;background:none;cursor:pointer">View Tour Route →</button>`;
+    L.marker([e.lat, e.lng], { icon: L.divIcon({ className: '', html: `<div style="background:${col};color:#fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.4);border:2px solid #fff">${initials}</div>`, iconAnchor:[15,15] }) })
+      .addTo(_dcrTeamMap).bindPopup(popup);
+  });
+}
+
+function _dcrATeamTab() {
+  if (!_dcrA.teamDate) _dcrA.teamDate = new Date().toISOString().slice(0, 10);
+  _dcrALoadTeam();
+  const d = _dcrA.teamData;
+
+  const filterRow = `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+    <label style="font-size:12px;color:var(--ink-2)">Date:</label>
+    <input type="date" id="teamDateIn" value="${_dcrA.teamDate}" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
+    <button class="btn sm pri" onclick="window._dcrATeamLoad()">Refresh</button>
+    ${_dcrA._loadTeam ? '<span style="font-size:12px;color:var(--ink-2)">Loading…</span>' : ''}
+    <span style="font-size:12px;color:var(--ink-2);margin-left:auto">📡 Last GPS punch per executive · Click marker for details</span>
+  </div>`;
+
+  if (!d && !_dcrA._loadTeam) return filterRow + '<div style="color:var(--ink-2);font-size:13px;padding:20px 0;text-align:center">Select date and click Refresh</div>';
+  if (_dcrA._loadTeam) return filterRow + '<div style="color:var(--ink-2);font-size:13px;padding:20px 0;text-align:center">⏳ Loading team locations…</div>';
+  if (d?._err) return filterRow + '<div style="color:var(--red);font-size:13px">Failed to load team data</div>';
+
+  const withGps = d.execs_with_gps || [];
+  const noGps   = d.execs_no_gps || [];
+  const totalExecs = withGps.length + noGps.length;
+
+  const summaryRow = `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+    ${_dcrKpi(withGps.length, 'GPS Located', 'var(--grn)')}
+    ${_dcrKpi(noGps.length, 'No GPS', 'var(--red)')}
+    ${_dcrKpi(totalExecs, 'Total Active', 'var(--ink)')}
+    ${_dcrKpi(withGps.reduce((s,e)=>s+e.visit_count,0), 'Total Visits', 'var(--blue)')}
+  </div>`;
+
+  const mapDiv = `<div id="dcrTeamMapEl" style="height:350px;border-radius:10px;overflow:hidden;background:var(--surface-2);margin-bottom:14px"></div>`;
+
+  // Executive list
+  const execList = withGps.length ? `
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--grn);margin-bottom:6px">📍 ${withGps.length} Executives Located</div>
+    <div style="overflow-x:auto"><table class="tbl" style="font-size:12px;min-width:480px">
+      <thead><tr><th style="text-align:left">Executive</th><th style="text-align:left">Unit</th><th>Last Visit</th><th>Time</th><th class="r">Visits</th><th onclick="event.stopPropagation()" style="cursor:pointer">Route</th></tr></thead>
+      <tbody>${withGps.map(e=>`<tr>
+        <td><b style="color:var(--primary)">${esc(e.exec_name||e.emp_code)}</b></td>
+        <td style="color:var(--ink-2);font-size:11px">${esc(e.unit_name||e.unit_code)}</td>
+        <td><span style="font-size:11px">${esc(e.last_ag_name||e.last_agcd||'—')}</span>${e.last_city?`<span style="font-size:10px;color:var(--ink-2)"> ${esc(e.last_city)}</span>`:''}</td>
+        <td style="color:var(--ink-2)">${e.last_time||'—'}</td>
+        <td class="r">${e.visit_count}</td>
+        <td><button class="btn sm" onclick="dcrASetTab('tour');_dcrA.tourEmpCode='${esc(e.emp_code)}';_dcrA.tourDate='${esc(d.date)}';_dcrA.tourData=null;_dcrA._loadTour=false;_dcrALoadTour();render();" style="font-size:10px;padding:2px 8px">Route →</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : '';
+
+  const noGpsList = noGps.length ? `
+    <div style="margin-top:12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--red);margin-bottom:6px">No GPS — ${noGps.length} Executives (visits punched without location)</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      ${noGps.map(e=>`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11.5px">
+        <b>${esc(e.exec_name||e.emp_code)}</b> <span style="color:var(--ink-2)">${e.visit_count}v</span>
+      </div>`).join('')}
+    </div>` : '';
+
+  return filterRow + summaryRow + mapDiv + execList + noGpsList;
+}
+
+window._dcrATeamLoad = () => {
+  const dt = document.getElementById('teamDateIn')?.value;
+  if (dt) _dcrA.teamDate = dt;
+  _dcrA.teamData = null; _dcrA._loadTeam = false;
+  if (_dcrTeamMap) { _dcrTeamMap.remove(); _dcrTeamMap = null; }
+  _dcrALoadTeam();
+  render();
+};
+
 /* ── Tour Route loaders ── */
 function _dcrALoadTourExecs(force) {
   if (_dcrA._loadTE || (_dcrA.tourExecs && !force)) return;
@@ -1030,33 +1137,45 @@ function _initTourMap() {
   if (!el) return;
 
   const gpsVisits = (d.visits || []).filter(v => v.lat && v.lng);
-  const center = d.center;
+  const office = d.office;   // unit office — primary start point
+  const center = d.center;   // center check-in GPS (fallback / secondary info)
   const missed  = d.missed_agencies || [];
 
-  if (!gpsVisits.length && !center) { el.innerHTML = '<div style="padding:20px;color:var(--ink-2);font-size:13px;text-align:center">No GPS data for this date</div>'; return; }
+  const startPt = office || center; // prefer office
+  if (!gpsVisits.length && !startPt) { el.innerHTML = '<div style="padding:20px;color:var(--ink-2);font-size:13px;text-align:center">No GPS data for this date</div>'; return; }
 
   const allPts = [];
-  if (center?.lat) allPts.push([center.lat, center.lng]);
+  if (startPt?.lat) allPts.push([startPt.lat, startPt.lng]);
   gpsVisits.forEach(v => allPts.push([v.lat, v.lng]));
 
   const ctr = allPts.length ? allPts.reduce((a,p)=>[a[0]+p[0]/allPts.length,a[1]+p[1]/allPts.length],[0,0]) : [23, 80];
   _dcrTourMap = L.map(el, { zoomControl: true }).setView(ctr, 12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(_dcrTourMap);
 
-  // Draw route polyline
+  // Draw route polyline: start → visit1 → visit2 → ... → visitN (solid line)
   if (allPts.length >= 2) {
-    L.polyline(allPts, { color: '#2563eb', weight: 3, opacity: 0.75, dashArray: '6 3' }).addTo(_dcrTourMap);
+    L.polyline(allPts, { color: '#2563eb', weight: 3, opacity: 0.8 }).addTo(_dcrTourMap);
+    // Return-to-office dashed line
+    if (startPt && gpsVisits.length) {
+      const last = gpsVisits[gpsVisits.length - 1];
+      L.polyline([[last.lat, last.lng], [startPt.lat, startPt.lng]], { color: '#2563eb', weight: 2, opacity: 0.5, dashArray: '6 4' }).addTo(_dcrTourMap);
+    }
     _dcrTourMap.fitBounds(L.latLngBounds(allPts).pad(0.15));
   }
 
-  // Center marker
-  if (center?.lat) {
-    L.marker([center.lat, center.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#ef4444;color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 2px 6px rgba(0,0,0,.4)">🏢</div>', iconAnchor:[14,14] }) })
+  // Office / start-point marker (red house icon)
+  if (office?.lat) {
+    const officePopup = `<b style="color:#ef4444">🏢 ${esc(office.name||'Office')}</b><br><span style="font-size:11px;color:#666">Unit Start Point</span>${office.address?`<br><span style="font-size:11px;color:#666">${esc(office.address)}</span>`:''}`;
+    L.marker([office.lat, office.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#ef4444;color:#fff;border-radius:6px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 6px rgba(0,0,0,.45)">🏢</div>', iconAnchor:[15,15] }) })
+      .addTo(_dcrTourMap).bindPopup(officePopup);
+  } else if (center?.lat) {
+    // Fallback: show center check-in as start
+    L.marker([center.lat, center.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#6366f1;color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 2px 6px rgba(0,0,0,.4)">📍</div>', iconAnchor:[14,14] }) })
       .addTo(_dcrTourMap)
-      .bindPopup(`<b>${esc(center.name||'Center')}</b><br><span style="font-size:11px;color:#666">Start / End Point</span>`);
+      .bindPopup(`<b>${esc(center.name||'Center Check-in')}</b><br><span style="font-size:11px;color:#666">Center check-in GPS</span>`);
   }
 
-  // Visit markers (numbered)
+  // Visit markers (numbered, blue)
   gpsVisits.forEach((v, i) => {
     const num = v.seq || (i+1);
     const durMin = (()=>{const s=v.from_time?parseInt(v.from_time)*60+parseInt((v.from_time||'').split(':')[1]||0):null; const e=v.till_time?parseInt(v.till_time)*60+parseInt((v.till_time||'').split(':')[1]||0):null; return (s&&e&&e>s)?(e-s):null;})();
@@ -1064,7 +1183,7 @@ function _initTourMap() {
       <br><span style="font-size:11px">${v.from_time||''}${v.till_time?' – '+v.till_time:''} ${durMin?'('+durMin+'m)':''}</span>
       ${fmtPurpose(v.purpose)?`<br><span style="font-size:11px;color:#2563eb">${esc(fmtPurpose(v.purpose))}</span>`:''}
       ${v.remarks?`<br><span style="font-size:11px;color:#374151;font-style:italic">"${remHtml((v.remarks||'').slice(0,120))}"</span>`:''}
-      ${v.distance_from_prev!=null?`<br><span style="font-size:11px;color:#6b7280">📏 ${v.distance_from_prev} km from prev</span>`:''}`;
+      ${v.distance_from_prev!=null?`<br><span style="font-size:11px;color:#6b7280">📏 ${v.distance_from_prev} km from prev stop</span>`:''}`;
     L.marker([v.lat, v.lng], { icon: L.divIcon({ className: '', html: `<div style="background:#2563eb;color:#fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.4)">${num}</div>`, iconAnchor:[13,13] }) })
       .addTo(_dcrTourMap).bindPopup(popup);
   });
@@ -1112,6 +1231,22 @@ function _dcrATourTab() {
     </div>
     ${stats.first_visit_time?`<div style="font-size:11px;color:var(--ink-2);margin-bottom:10px">⏰ ${stats.first_visit_time} → ${stats.last_visit_time||'?'}&nbsp;&nbsp;·&nbsp;&nbsp;📏 Total route: ${stats.total_distance_km} km&nbsp;&nbsp;·&nbsp;&nbsp;⏱ In meetings: ${stats.total_time_in_meetings_min||0} min</div>`:''}`;
 
+  // Office location banner / missing warning
+  const isAdmin = S.user?.hierarchyLevel === 1;
+  let officeBanner = '';
+  if (d.office) {
+    officeBanner = `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--grn-l);border-radius:8px;font-size:12px;margin-bottom:10px;border:1px solid var(--grn)">
+      <span style="font-size:16px">🏢</span>
+      <span><b>Start point:</b> ${esc(d.office.name)} ${d.office.address?'— '+esc(d.office.address.slice(0,60)):''}</span>
+    </div>`;
+  } else if (d.office_missing) {
+    officeBanner = `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;font-size:12px;margin-bottom:10px">
+      <b>⚠ Office location not set for unit ${esc(d.executive?.unit_code||'')}</b> — km calculation starts from first GPS visit.
+      ${isAdmin ? `&nbsp;<a href="${location.origin.replace(':8123',':8001')}/api/admin/unit-locations/export" style="color:#d97706;font-weight:700" onclick="event.preventDefault();_dcrULDownload()">Download Units Excel</a>
+      &nbsp;·&nbsp;<button class="btn sm" onclick="_dcrULUploadModal()" style="font-size:11px;padding:3px 10px">Upload Filled Excel</button>` : ''}
+    </div>`;
+  }
+
   // Map
   const mapDiv = `<div id="dcrTourMapEl" style="height:360px;border-radius:10px;overflow:hidden;background:var(--surface-2);margin-bottom:14px"></div>`;
 
@@ -1157,7 +1292,7 @@ function _dcrATourTab() {
       </div>
     </div>` : '';
 
-  return filterRow + statsStrip + mapDiv + visitTable + missedSection;
+  return filterRow + officeBanner + statsStrip + mapDiv + visitTable + missedSection;
 }
 
 window._dcrATourLoad = () => {
@@ -1172,6 +1307,46 @@ window._dcrATourLoad = () => {
   if (_dcrTourMap) { _dcrTourMap.remove(); _dcrTourMap = null; }
   _dcrALoadTour();
   render();
+};
+
+// Unit location Excel download
+window._dcrULDownload = () => {
+  const a = document.createElement('a');
+  a.href = `${location.origin.replace(':8123',':8001')}/api/admin/unit-locations/export`;
+  a.setAttribute('Authorization', api.h().Authorization);
+  fetch(a.href, { headers: api.h() })
+    .then(r => r.blob())
+    .then(blob => { a.href = URL.createObjectURL(blob); a.download = 'unit_locations.xlsx'; a.click(); })
+    .catch(() => toast('Download failed'));
+};
+
+// Upload modal for filled Excel
+window._dcrULUploadModal = () => {
+  modal(`<h3>Upload Unit Locations Excel</h3>
+    <p style="font-size:12px;color:var(--ink-2)">Fill in the Excel downloaded above with latitude &amp; longitude for each unit, then upload here.</p>
+    <input type="file" id="ulFile" accept=".xlsx,.xls" style="margin:10px 0;display:block">
+    <div id="ulErr" style="color:var(--red);font-size:12px"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn pri block" onclick="_dcrULDoUpload()">Upload &amp; Save</button>
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+};
+
+window._dcrULDoUpload = async () => {
+  const file = document.getElementById('ulFile')?.files?.[0];
+  const errEl = document.getElementById('ulErr');
+  if (!file) { errEl.textContent = 'Please select a file'; return; }
+  const buf = await file.arrayBuffer();
+  try {
+    const r = await fetch(`${location.origin.replace(':8123',':8001')}/api/admin/unit-locations/import`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/octet-stream' }, body: buf,
+    });
+    const d = await r.json();
+    if (!r.ok) { errEl.textContent = d.detail || 'Upload failed'; return; }
+    closeModals();
+    toast(`✅ Updated ${d.updated} unit locations (${d.skipped} skipped)`);
+    _dcrA.tourData = null; _dcrALoadTour(); // refresh current tour data
+  } catch (e) { errEl.textContent = 'Upload error: ' + e.message; }
 };
 
 /* ── KPI cell helper ── */
@@ -1727,6 +1902,7 @@ VIEWS.dcr_analytics = () => {
     <button class="${tab==='summary'?'on':''}"  onclick="dcrASetTab('summary')">📊 Summary</button>
     <button class="${tab==='map'?'on':''}"      onclick="dcrASetTab('map')">📍 Agency Map</button>
     <button class="${tab==='execs'?'on':''}"    onclick="dcrASetTab('execs')">👤 Executives</button>
+    <button class="${tab==='team'?'on':''}"     onclick="dcrASetTab('team')">📡 Team Live</button>
     <button class="${tab==='tour'?'on':''}"     onclick="dcrASetTab('tour')">🗺 Tour Route</button>
     <button class="${tab==='analysis'?'on':''}" onclick="dcrASetTab('analysis')">📈 Visit Analysis</button>
     <button class="${tab==='coverage'?'on':''}" onclick="dcrASetTab('coverage')">⚠️ Agency Coverage</button>
@@ -1738,6 +1914,7 @@ VIEWS.dcr_analytics = () => {
   if (tab === 'summary')  body = _dcrASummaryTab();
   else if (tab === 'map') body = _dcrAMapTab();
   else if (tab === 'execs') body = _dcrAExecsTab();
+  else if (tab === 'team') body = _dcrATeamTab();
   else if (tab === 'tour') body = _dcrATourTab();
   else if (tab === 'analysis') body = _dcrAAnalysisTab();
   else if (tab === 'coverage') body = _dcrACoverageTab();

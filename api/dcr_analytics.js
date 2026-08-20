@@ -35,6 +35,19 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
   // This means the first API request finds the cache ready instead of waiting 60s.
   setTimeout(() => getActiveAgcds().catch(() => {}), 500);
 
+  // Ensure unit_locations table exists (stores lat/lng for each unit's office/start-point)
+  q(`CREATE TABLE IF NOT EXISTS unit_locations (
+      unit_code  VARCHAR(8) PRIMARY KEY,
+      unit_name  VARCHAR(200),
+      lat        DECIMAL(10,6),
+      lng        DECIMAL(10,6),
+      address    VARCHAR(500),
+      updated_by VARCHAR(100),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`).catch(e => console.error('[dcr] unit_locations init:', e.message));
+
+  const XLSX = require('xlsx');
+
   // Separate query to get unit_code → unit_name (avoids cross-table collation JOIN issues)
   async function getUnitNameMap() {
     const { rows } = await q('SELECT unit_code, unit_name FROM pub_unit_master');
@@ -581,6 +594,23 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
         appVisits = avRows;
       }
 
+      // 5a. Resolve unit code + office start-point from unit_locations table
+      const unitCode = oracleVisits[0]?.unit_code || hm.unit_code || appVisits[0]?.unit_code || '';
+      let officeGps = null, officeMissing = false;
+      if (unitCode) {
+        const { rows: ulRows } = await q(
+          `SELECT lat, lng, unit_name, address FROM unit_locations WHERE unit_code = ? AND lat IS NOT NULL`, [unitCode]
+        );
+        if (ulRows.length) {
+          officeGps = {
+            lat: Number(ulRows[0].lat), lng: Number(ulRows[0].lng),
+            name: ulRows[0].unit_name || unitCode, address: ulRows[0].address || '',
+          };
+        } else {
+          officeMissing = true; // unit known but no coordinates set yet
+        }
+      }
+
       // 5. Agency names for all visit agcds (oracle + app) — single param-based lookup, safe
       const agcds = [...new Set([
         ...oracleVisits.map(r => r.agcd),
@@ -641,8 +671,11 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
         ? { lat: Number(centerRaw.lat), lng: Number(centerRaw.lng), name: centerRaw.center_name }
         : null;
 
-      const chain = []; // GPS-tagged points in order
-      if (centerGps) chain.push({ lat: centerGps.lat, lng: centerGps.lng, type: 'center' });
+      // Office is the canonical start point; fall back to center check-in GPS if office not set
+      const startGps = officeGps || centerGps;
+
+      const chain = []; // GPS-tagged points in order (start → visits)
+      if (startGps) chain.push({ lat: startGps.lat, lng: startGps.lng, type: officeGps ? 'office' : 'center' });
 
       let totalDist = 0;
       visits.forEach(v => {
@@ -655,10 +688,10 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
           v.distance_from_prev = null;
         }
       });
-      // Return to center
-      if (centerGps && chain.length > 1) {
+      // Return to start (office/center)
+      if (startGps && chain.length > 1) {
         const last = chain[chain.length - 1];
-        totalDist += hav(last.lat, last.lng, centerGps.lat, centerGps.lng);
+        totalDist += hav(last.lat, last.lng, startGps.lat, startGps.lng);
       }
 
       // 8. Time stats
@@ -685,7 +718,6 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
       // 9. Missed nearby agencies (within 5 km, not visited today, GPS known from prior visits)
       const visitedSet = new Set(visits.map(v => v.agcd).filter(Boolean));
-      const unitCode   = oracleVisits[0]?.unit_code || appVisits[0]?.unit_code || hm.unit_code || '';
       let missedAgencies = [];
       if (chain.length && unitCode) {
         // Two separate queries to avoid cross-table collation issues
@@ -734,6 +766,8 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       res.json({
         executive: { emp_code, name: oracleVisits[0]?.executive_name || hm.person_name || emp_code, unit_code: unitCode },
         date,
+        office: officeGps,                    // unit office — canonical start point
+        office_missing: officeMissing,         // true if unit has no office coordinates stored
         center: centerGps ? { name: centerRaw?.center_name || 'Center', lat: centerGps.lat, lng: centerGps.lng } : null,
         visits,
         stats: {
@@ -1172,5 +1206,204 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       res.json({ plan, exec_name: execName, unit_name: unitName });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
+
+  // ── GET /api/dcr-analytics/team-live ────────────────────────────────────────
+  // Last known GPS punch for every executive in the unit — "where is my team today"
+  // Query params: date YYYY-MM-DD (default today), unit_code / state (scope)
+  app.get('/api/dcr-analytics/team-live', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const today = new Date().toISOString().slice(0, 10);
+      const date  = req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : today;
+      const { clause: sc, params: sp } = await resolveScope(req);
+
+      // Last GPS-tagged visit per executive for the chosen date
+      // Also check yesterday (visit_date or mark_attn_date) so we catch late-punched records
+      const { rows: visitRows } = await q(
+        `SELECT emp_code, MAX(executive_name) exec_name, MAX(unit_code) unit_code, MAX(unit_name) unit_name,
+                MAX(visit_date) last_date,
+                SUBSTRING_INDEX(GROUP_CONCAT(from_time ORDER BY visit_date DESC, from_time DESC), ',', 1) last_time,
+                SUBSTRING_INDEX(GROUP_CONCAT(visit_to_main_code ORDER BY visit_date DESC, from_time DESC), ',', 1) last_agcd,
+                SUBSTRING_INDEX(GROUP_CONCAT(visit_purpose ORDER BY visit_date DESC, from_time DESC), ',', 1) last_purpose,
+                SUBSTRING_INDEX(GROUP_CONCAT(CAST(latitude AS CHAR) ORDER BY visit_date DESC, from_time DESC), ',', 1) last_lat,
+                SUBSTRING_INDEX(GROUP_CONCAT(CAST(longitude AS CHAR) ORDER BY visit_date DESC, from_time DESC), ',', 1) last_lng,
+                COUNT(*) visit_count
+         FROM dcr_agency_visit
+         WHERE visit_date = ?${sc}
+           AND latitude IS NOT NULL AND latitude <> ''
+           AND CAST(latitude AS DECIMAL(10,6)) BETWEEN 8 AND 38
+           AND CAST(longitude AS DECIMAL(10,6)) BETWEEN 68 AND 98
+         GROUP BY emp_code`,
+        [date, ...sp]
+      );
+
+      // Also get execs with visits but no GPS today (still useful for count)
+      const { rows: allExecRows } = await q(
+        `SELECT emp_code, MAX(executive_name) exec_name, MAX(unit_code) unit_code, MAX(unit_name) unit_name,
+                COUNT(*) visit_count
+         FROM dcr_agency_visit WHERE visit_date = ?${sc} GROUP BY emp_code`,
+        [date, ...sp]
+      );
+
+      // Agency names for last-visited agcds
+      const agcds = [...new Set(visitRows.map(r => r.last_agcd).filter(Boolean))];
+      const agMap = {};
+      if (agcds.length) {
+        const ph = agcds.map(() => '?').join(',');
+        const { rows: agRows } = await q(`SELECT agcd, ag_name, city_name AS city FROM agency_master WHERE agcd IN (${ph})`, agcds);
+        agRows.forEach(r => { agMap[r.agcd] = r; });
+      }
+
+      const withGps  = new Set(visitRows.map(r => r.emp_code));
+      const noGps    = allExecRows.filter(r => !withGps.has(r.emp_code));
+
+      const execsWithLocation = visitRows.map(r => ({
+        emp_code:    r.emp_code,
+        exec_name:   r.exec_name,
+        unit_code:   r.unit_code,
+        unit_name:   r.unit_name || '',
+        last_date:   r.last_date,
+        last_time:   r.last_time || null,
+        last_agcd:   r.last_agcd,
+        last_ag_name: agMap[r.last_agcd]?.ag_name || r.last_agcd || '',
+        last_city:   agMap[r.last_agcd]?.city || '',
+        last_purpose: r.last_purpose || '',
+        lat: Number(r.last_lat),
+        lng: Number(r.last_lng),
+        visit_count: r.visit_count,
+      }));
+
+      const execsNoGps = noGps.map(r => ({
+        emp_code: r.emp_code, exec_name: r.exec_name, unit_code: r.unit_code, unit_name: r.unit_name,
+        visit_count: r.visit_count, lat: null, lng: null,
+      }));
+
+      res.json({ date, execs_with_gps: execsWithLocation, execs_no_gps: execsNoGps });
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
+  // ── UNIT LOCATIONS — admin CRUD + Excel import/export ───────────────────────
+  // Stores office lat/lng per unit — used as tour-route start/end point.
+
+  // GET /api/admin/unit-locations  — list all units with current coordinates
+  app.get('/api/admin/unit-locations', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      // Get all distinct units from hierarchy_master
+      const { rows: allUnits } = await q(
+        `SELECT DISTINCT unit_code, MAX(unit_name) unit_name
+         FROM hierarchy_master WHERE unit_code IS NOT NULL AND unit_code != ''
+         GROUP BY unit_code ORDER BY unit_name`
+      );
+      // Get existing coordinates
+      const { rows: existing } = await q(`SELECT unit_code, unit_name, lat, lng, address, updated_by, updated_at FROM unit_locations`);
+      const locMap = {};
+      existing.forEach(r => { locMap[r.unit_code] = r; });
+
+      const units = allUnits.map(u => {
+        const loc = locMap[u.unit_code] || {};
+        return {
+          unit_code: u.unit_code,
+          unit_name: u.unit_name || loc.unit_name || '',
+          lat: loc.lat ? Number(loc.lat) : null,
+          lng: loc.lng ? Number(loc.lng) : null,
+          address: loc.address || '',
+          updated_by: loc.updated_by || '',
+          updated_at: loc.updated_at || null,
+          has_location: !!(loc.lat && loc.lng),
+        };
+      });
+      res.json({ units, missing: units.filter(u => !u.has_location).length });
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
+  // GET /api/admin/unit-locations/export  — Excel download
+  app.get('/api/admin/unit-locations/export', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const { rows: allUnits } = await q(
+        `SELECT DISTINCT unit_code, MAX(unit_name) unit_name FROM hierarchy_master
+         WHERE unit_code IS NOT NULL AND unit_code != '' GROUP BY unit_code ORDER BY unit_name`
+      );
+      const { rows: existing } = await q(`SELECT unit_code, lat, lng, address FROM unit_locations`);
+      const locMap = {};
+      existing.forEach(r => { locMap[r.unit_code] = r; });
+
+      const rows = allUnits.map(u => {
+        const loc = locMap[u.unit_code] || {};
+        return {
+          'unit_code':  u.unit_code,
+          'unit_name':  u.unit_name || '',
+          'latitude':   loc.lat ? Number(loc.lat) : '',
+          'longitude':  loc.lng ? Number(loc.lng) : '',
+          'address':    loc.address || '',
+          // instruction column
+          'instructions': 'Fill latitude & longitude. Save file, then upload via the app.'
+        };
+      });
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 40 }, { wch: 55 }];
+      XLSX.utils.book_append_sheet(wb, ws, 'Unit Locations');
+      const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      res.set({
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': 'attachment; filename="unit_locations.xlsx"',
+      });
+      res.send(buf);
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
+  // POST /api/admin/unit-locations/upsert  — update a single unit (JSON body)
+  app.post('/api/admin/unit-locations/upsert', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const { unit_code, unit_name, lat, lng, address } = req.body || {};
+      if (!unit_code) return res.status(400).json({ detail: 'unit_code required' });
+      const la = parseFloat(lat), lo = parseFloat(lng);
+      if (isNaN(la) || isNaN(lo) || la < 8 || la > 38 || lo < 68 || lo > 98)
+        return res.status(400).json({ detail: 'Valid India lat (8–38) and lng (68–98) required' });
+      await q(
+        `INSERT INTO unit_locations (unit_code, unit_name, lat, lng, address, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE unit_name=VALUES(unit_name), lat=VALUES(lat), lng=VALUES(lng),
+           address=VALUES(address), updated_by=VALUES(updated_by)`,
+        [unit_code, unit_name || unit_code, la, lo, address || '', req.auth?.name || 'admin']
+      );
+      res.json({ ok: true, unit_code, lat: la, lng: lo });
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
+  // POST /api/admin/unit-locations/import  — upload filled Excel (binary body)
+  app.post('/api/admin/unit-locations/import',
+    require('express').raw({ type: ['application/octet-stream',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel', '*/*'], limit: '10mb' }),
+    async (req, res) => {
+      try {
+        if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+        const wb = XLSX.read(req.body, { type: 'buffer' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        let updated = 0, skipped = 0;
+        for (const row of data) {
+          const uc = String(row.unit_code || row['unit_code'] || '').trim();
+          const la = parseFloat(row.latitude  || row.lat || '');
+          const lo = parseFloat(row.longitude || row.lng || '');
+          if (!uc || isNaN(la) || isNaN(lo) || la < 8 || la > 38 || lo < 68 || lo > 98) { skipped++; continue; }
+          await q(
+            `INSERT INTO unit_locations (unit_code, unit_name, lat, lng, address, updated_by)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE unit_name=VALUES(unit_name), lat=VALUES(lat), lng=VALUES(lng),
+               address=VALUES(address), updated_by=VALUES(updated_by)`,
+            [uc, String(row.unit_name || uc), la, lo, String(row.address || ''), req.auth?.name || 'import']
+          );
+          updated++;
+        }
+        res.json({ ok: true, updated, skipped });
+      } catch (e) { res.status(500).json({ detail: e.message }); }
+    }
+  );
 
 };

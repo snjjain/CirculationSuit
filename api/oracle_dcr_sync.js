@@ -35,6 +35,8 @@ const MYSQL_CFG = {
   password: process.env.MYSQL_PASSWORD || '',
   charset:  'utf8mb4',
   multipleStatements: true,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -415,45 +417,47 @@ function monthRanges(fromYM, toYM) {
 
 async function runSync(opts = {}) {
   const onLog = opts.onLog || (s => console.log(s));
-  const conn  = await mysql.createConnection(MYSQL_CFG);
-  try {
-    await ensureTables(conn);
 
-    let periods;
-    if (opts.backfill) {
-      const today = new Date();
-      const toYM  = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
-      // 2 years back from current month
-      const twoYrsAgo = new Date(today.getFullYear() - 2, today.getMonth(), 1);
-      const fromYM = `${twoYrsAgo.getFullYear()}-${String(twoYrsAgo.getMonth() + 1).padStart(2, '0')}`;
-      periods = monthRanges(fromYM, toYM).reverse(); // newest first
-      onLog(`[dcr-sync] Backfill: ${periods.length} months (newest first) from ${fromYM}`);
-    } else if (opts.from && opts.to) {
-      // Chunk into monthly periods — avoids huge single Oracle queries that hang
-      const fromYM = opts.from.slice(0, 7);
-      const toYM   = opts.to.slice(0, 7);
-      periods = monthRanges(fromYM, toYM);
-      onLog(`[dcr-sync] Range ${opts.from}→${opts.to}: ${periods.length} month(s)`);
-    } else {
-      // Daily: yesterday + today to catch late Oracle commits
-      const fmt = d => d.toISOString().slice(0, 10);
-      const today = new Date();
-      const yest  = new Date(today); yest.setDate(today.getDate() - 1);
-      periods = [{ from: fmt(yest), to: fmt(today) }];
-    }
+  // Ensure tables exist once; use an isolated connection so DDL doesn't taint sync connections
+  const setupConn = await mysql.createConnection(MYSQL_CFG);
+  try { await ensureTables(setupConn); } finally { await setupConn.end(); }
 
-    let totalAttn = 0, totalVisit = 0;
-    for (const { from, to } of periods) {
-      onLog(`[dcr-sync] Period ${from} → ${to}`);
+  let periods;
+  if (opts.backfill) {
+    const today = new Date();
+    const toYM  = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+    const twoYrsAgo = new Date(today.getFullYear() - 2, today.getMonth(), 1);
+    const fromYM = `${twoYrsAgo.getFullYear()}-${String(twoYrsAgo.getMonth() + 1).padStart(2, '0')}`;
+    periods = monthRanges(fromYM, toYM).reverse(); // newest first
+    onLog(`[dcr-sync] Backfill: ${periods.length} months (newest first) from ${fromYM}`);
+  } else if (opts.from && opts.to) {
+    const fromYM = opts.from.slice(0, 7);
+    const toYM   = opts.to.slice(0, 7);
+    periods = monthRanges(fromYM, toYM);
+    onLog(`[dcr-sync] Range ${opts.from}→${opts.to}: ${periods.length} month(s)`);
+  } else {
+    const fmt = d => d.toISOString().slice(0, 10);
+    const today = new Date();
+    const yest  = new Date(today); yest.setDate(today.getDate() - 1);
+    periods = [{ from: fmt(yest), to: fmt(today) }];
+  }
+
+  let totalAttn = 0, totalVisit = 0;
+  for (const { from, to } of periods) {
+    onLog(`[dcr-sync] Period ${from} → ${to}`);
+    // Fresh connection per period: Oracle sqlplus fetch can take 1-2 min, leaving MySQL idle;
+    // a per-period connection avoids wait_timeout drops poisoning the entire backfill run.
+    const conn = await mysql.createConnection(MYSQL_CFG);
+    try {
       totalAttn  += await syncAttendance(conn, from, to, onLog);
       totalVisit += await syncVisit(conn, from, to, onLog);
+    } finally {
+      await conn.end();
     }
-
-    onLog(`[dcr-sync] Complete — attendance: ${totalAttn}, agency-visits: ${totalVisit}`);
-    return { totalAttn, totalVisit, periods: periods.length };
-  } finally {
-    await conn.end();
   }
+
+  onLog(`[dcr-sync] Complete — attendance: ${totalAttn}, agency-visits: ${totalVisit}`);
+  return { totalAttn, totalVisit, periods: periods.length };
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
