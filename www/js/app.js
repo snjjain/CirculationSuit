@@ -221,7 +221,7 @@ function restoreSession() {
   const token = sessionStorage.getItem("patrika_token");
   const prof  = sessionStorage.getItem("patrika_profile");
   if (token && prof) {
-    try { S.user = JSON.parse(prof); AUTH_TOKEN = token; }
+    try { S.user = JSON.parse(prof); AUTH_TOKEN = token; S.screen = defaultScreen(S.user); }
     catch { S.user = null; AUTH_TOKEN = null; }
   }
 }
@@ -249,8 +249,11 @@ function go(screen) {
   S.screen = screen; S.sideOpen = false; render();
   const m = $(".main"); if (m) m.scrollTop = 0;
 }
+/* Dashboard users land straight on Command Centre; field-app users on the launcher */
+function defaultScreen(u) { return u && u.dashboard ? "command" : "home"; }
+
 function setLoggedIn(profile, token) {
-  S = { user: profile, screen: "home", openGroups: {}, sideOpen: false, live: {}, range: null };
+  S = { user: profile, screen: defaultScreen(profile), openGroups: {}, sideOpen: false, live: {}, range: null };
   AUTH_TOKEN = token;
   saveSession(profile, token);
   render();
@@ -3112,14 +3115,9 @@ VIEWS.command = () => {
       })}
     </div>
 
-    ${_cmdAnalyticsSection(c)}
-
-    <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase;margin:18px 0 10px;padding-left:2px">
-      Pending Oracle Sync — will be connected progressively
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">
-      ${pending.map(m => _cmdModuleCard({ icon: m.icon, title: m.title, period: m.desc })).join('')}
-    </div>`;
+    ${_cmdAnalyticsSection(c)}`;
+    /* Pending Oracle Sync cards (Hawker Operations, Vehicle Tracking) hidden
+       until those syncs go live — restore by re-adding the pending.map block */
 };
 
 /* ═══════════ VZ — data-viz component library ═══════════
