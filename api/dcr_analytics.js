@@ -1367,17 +1367,38 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
       const unitName = agR.rows[0]?.unit_name || '';
 
-      const agList = agR.rows.map(ag => {
+      // agency_master can hold multiple rows per agcd (editions) — dedup or the
+      // same agency appears twice in the plan
+      const seenAg = new Set();
+      const agRowsUniq = agR.rows.filter(r => !seenAg.has(r.agcd) && seenAg.add(r.agcd));
+
+      const agList = agRowsUniq.map(ag => {
         const v = vMap[ag.agcd] || {};
         const os = osMap[ag.agcd] || 0;
         const days = v.last_visit ? Math.floor((Date.now() - new Date(v.last_visit)) / 86400000) : 999;
         return { code: ag.agcd, name: ag.ag_name, city: ag.city_name || ag.dist_name, os, days, cnt60: +(v.cnt||0), last_rmk: (v.last_remarks||'').slice(0,80), fup_amt: +(v.fup_amt||0), fup_date: v.fup_date||'' };
       }).sort((a,b) => b.os - a.os || b.days - a.days).slice(0, 40);
 
+      // Per-agency avg supply (last 7 days) → data-driven copy-growth ask
+      // (~5% of current copies, rounded to 5, min 5, max 50)
+      const supMap = {};
+      if (agList.length) {
+        const ph = agList.map(() => '?').join(',');
+        const { rows: supRows } = await q(
+          `SELECT agcd, AVG(sup_copy) avg_sup FROM supply_data
+           WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) AND agcd IN (${ph})
+           GROUP BY agcd`, agList.map(a => a.code));
+        supRows.forEach(r => { supMap[r.agcd] = Math.round(+r.avg_sup || 0); });
+      }
+      agList.forEach(a => {
+        a.avg_sup = supMap[a.code] || 0;
+        a.growth_ask = a.avg_sup ? Math.min(50, Math.max(5, Math.round(a.avg_sup * 0.05 / 5) * 5)) : 0;
+      });
+
       const agText = agList.map((a,i) =>
-        `${i+1}. ${a.name} (${a.city||'-'}) | OS:Rs${a.os.toLocaleString('en-IN')} | Last visit:${a.days>=999?'Never':a.days+'d ago'} | 60d visits:${a.cnt60} | Followup:Rs${a.fup_amt} by ${a.fup_date||'?'} | Note:"${a.last_rmk}"`
+        `${i+1}. ${a.name} (${a.city||'-'}) | OS:Rs${a.os.toLocaleString('en-IN')} | Last visit:${a.days>=999?'Never':a.days+'d ago'} | 60d visits:${a.cnt60} | Followup:Rs${a.fup_amt} by ${a.fup_date||'?'} | Avg supply:${a.avg_sup||'?'} copies/day | Suggested growth ask:+${a.growth_ask||'?'} copies | Note:"${a.last_rmk}"`
       ).join('\n');
-      const planPrompt = `You are a circulation manager at Rajasthan Patrika newspaper. Create a smart next-day field visit plan for executive ${execName} working in ${unitName} for the date ${tDate}.\n\nPrioritization logic:\n1. High outstanding balance (OS) = highest priority = needs recovery\n2. Pending followup commitment (fup_amt > 0) = visit to collect what was promised\n3. Not visited in 30+ days = coverage gap\n4. Never visited = must cover\n\nMOST IMPORTANT: Growth (increasing newspaper copies) is our MAIN GOAL. In EVERY visit's key_point, include asking the agent for a growth commitment (copy बढ़ाने का commitment).\n\nLimit to top 8 agencies. Write brief, actionable instructions.\nWrite focus_message, action and key_point in simple HINDI (Devanagari script). Keep agency names, amounts and dates as-is.\n\nAgencies available:\n${agText}\n\nReturn ONLY valid JSON (no prose before or after):\n{"exec":"${execName}","unit":"${unitName}","date":"${tDate}","focus_message":"...1 line motivational message in Hindi ending with growth reminder...","total_target":0,"visits":[{"rank":1,"ag_code":"...","ag_name":"...","city":"...","priority":"high|medium|low","action":"...Hindi instruction: वसूली/विज़िट/followup...","target_amount":0,"key_point":"...Hindi: one critical point + growth commitment ask..."}]}`;
+      const planPrompt = `You are a circulation manager at Rajasthan Patrika newspaper. Create a smart next-day field visit plan for executive ${execName} working in ${unitName} for the date ${tDate}.\n\nPrioritization logic:\n1. High outstanding balance (OS) = highest priority = needs recovery\n2. Pending followup commitment (fup_amt > 0) = visit to collect what was promised\n3. Not visited in 30+ days = coverage gap\n4. Never visited = must cover\n\nMOST IMPORTANT: Copy Growth is our MAIN GOAL. In EVERY visit's key_point, ask for a specific copy-growth commitment using that agency's "Suggested growth ask" number (e.g. "कम से कम 10 Copies की Growth का Commitment ज़रूर लें").\n\nLimit to top 8 agencies. NEVER repeat the same agency twice. Write brief, actionable instructions.\nLanguage: Hinglish — simple Hindi (Devanagari) mixed with common English business words (Visit, Recovery, Outstanding, Payment, Confirmed Date, Commitment, Copy Growth), the way Indian office teams talk. Keep agency names, amounts and dates as-is.\n\nAgencies available:\n${agText}\n\nReturn ONLY valid JSON (no prose before or after):\n{"exec":"${execName}","unit":"${unitName}","date":"${tDate}","focus_message":"...1 line motivational message in Hindi ending with growth reminder...","total_target":0,"visits":[{"rank":1,"ag_code":"...","ag_name":"...","city":"...","priority":"high|medium|low","action":"...Hindi instruction: वसूली/विज़िट/followup...","target_amount":0,"key_point":"...Hindi: one critical point + growth commitment ask..."}]}`;
 
       // Tier 1: Claude (if key configured)
       if (API_KEY) {
@@ -1410,24 +1431,31 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       }
 
       // Tier 3: FREE rule engine — deterministic prioritization, always available.
-      // Hindi output + growth-commitment ask on EVERY visit (growth is the main goal).
+      // Hinglish output (office style) + data-driven copy-growth ask on EVERY visit.
       const pick = agList.slice(0, 8).map((a, i) => {
         const priority = (a.os > 50000 || a.fup_amt > 0) ? 'high' : (a.os > 10000 || a.days >= 30) ? 'medium' : 'low';
+        const gAsk = a.growth_ask > 0
+          ? `कम से कम ${a.growth_ask} Copies की Growth का Commitment ज़रूर लें।`
+          : `Copy Growth का Commitment ज़रूर लें।`;
         let action, key_point;
         if (a.fup_amt > 0) {
-          action = `वादा की गई राशि ₹${a.fup_amt.toLocaleString('en-IN')} वसूल करें${a.fup_date ? ' (due: ' + String(a.fup_date).slice(0,10) + ')' : ''}`;
-          key_point = 'एजेंट ने यह राशि देने का वादा किया था — याद दिलाकर वसूली करें, साथ में copy बढ़ाने का commitment लें';
+          action = `वादा की गई Payment ₹${a.fup_amt.toLocaleString('en-IN')} वसूल करें${a.fup_date ? ' (due: ' + String(a.fup_date).slice(0,10) + ')' : ''}`;
+          key_point = `Agent ने यह राशि देने का वादा किया था — Recovery करें। ${gAsk}`;
+        } else if (a.os > 0 && a.days >= 999) {
+          action = `Outstanding: ₹${a.os.toLocaleString('en-IN')}`;
+          key_point = `अब तक कोई Visit नहीं हुई है। पहले Agency से proper contact establish करें, उसके बाद Recovery और Copy Growth पर discussion करें।`;
+        } else if (a.os > 0 && a.days >= 30) {
+          action = `Outstanding: ₹${a.os.toLocaleString('en-IN')}`;
+          key_point = `पिछले ${a.days} दिनों से Visit नहीं हुई है। Recovery के साथ ${gAsk}`;
         } else if (a.os > 0) {
-          action = `बकाया ₹${a.os.toLocaleString('en-IN')} की वसूली करें`;
-          key_point = a.days >= 30
-            ? `${a.days >= 999 ? 'कभी विज़िट नहीं हुई' : a.days + ' दिनों से विज़िट नहीं हुई'} — पहले संपर्क बनाएँ, फिर वसूली और growth की बात करें`
-            : 'नक़द लें या पक्की तारीख़ का वादा लें — और copy बढ़ाने का commitment ज़रूर लें';
+          action = `Outstanding: ₹${a.os.toLocaleString('en-IN')}`;
+          key_point = `Cash Recovery करें या Payment की Confirmed Date लें। Recovery के साथ ${gAsk}`;
         } else if (a.days >= 999) {
-          action = 'पहली विज़िट — परिचय करें, एजेंसी की स्थिति देखें';
-          key_point = 'नई एजेंसी — growth की संभावना जांचें और copy बढ़ाने की बात करें';
+          action = `पहली Visit — परिचय करें और Agency की स्थिति देखें`;
+          key_point = `Contact establish करें और Copy Growth की संभावना पर discussion करें।`;
         } else {
-          action = `संपर्क विज़िट — आख़िरी मुलाक़ात ${a.days} दिन पहले`;
-          key_point = 'सप्लाई संतुष्टि पूछें और copy बढ़ाने का commitment लें';
+          action = `Contact Visit — आख़िरी Visit ${a.days} दिन पहले`;
+          key_point = `Supply satisfaction पूछें। ${gAsk}`;
         }
         const target_amount = a.fup_amt > 0 ? a.fup_amt : (a.os > 0 ? Math.round(a.os * 0.25) : 0);
         return { rank: i + 1, ag_code: a.code, ag_name: a.name, city: a.city || '', priority, action, target_amount, key_point };
@@ -1436,8 +1464,8 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const plan = {
         exec: execName, unit: unitName, date: tDate,
         focus_message: totalTarget > 0
-          ? `लक्ष्य: ${pick.filter(v => v.target_amount > 0).length} एजेंसियों से ₹${totalTarget.toLocaleString('en-IN')} की वसूली — नक़द लें या पक्की तारीख़ का वादा। हर विज़िट पर growth (copy बढ़ाने) का commitment ज़रूर लें — यही हमारा मुख्य लक्ष्य है!`
-          : 'लक्ष्य: हर एजेंसी पर संपर्क मज़बूत करें और copy बढ़ाने (growth) का commitment लें — यही हमारा मुख्य लक्ष्य है!',
+          ? `Target: ${pick.filter(v => v.target_amount > 0).length} Agencies से ₹${totalTarget.toLocaleString('en-IN')} की Recovery करनी है। हर Visit पर Cash Recovery लेने की कोशिश करें या Payment की Confirmed Date ज़रूर लें। साथ ही, हर Agency से Copy Growth का Commitment लेना अनिवार्य है — यही हमारा मुख्य लक्ष्य है!`
+          : `हर Agency पर contact मज़बूत करें और Copy Growth का Commitment लें — यही हमारा मुख्य लक्ष्य है!`,
         total_target: totalTarget, visits: pick,
       };
       res.json({ plan, exec_name: execName, unit_name: unitName, model: 'Rule Engine (free)' });

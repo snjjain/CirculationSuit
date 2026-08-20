@@ -2347,18 +2347,19 @@ function _dcrAPlanText() {
   const total = visits.reduce((s, v) => s + (v.target_amount || 0), 0);
   const dt = p.date ? p.date.split('-').reverse().join('/') : '';
   const L = [];
-  L.push(`🗞 राजस्थान पत्रिका — कल का विज़िट प्लान`);
+  L.push(`🗞 राजस्थान पत्रिका — कल का Visit Plan`);
   L.push(`📅 ${dt} · 👤 ${p.exec || ''} (${p.unit || ''})`);
   if (p.focus_message) L.push(`\n🎯 ${p.focus_message}`);
-  if (total > 0) L.push(`💰 कुल वसूली लक्ष्य: ₹${total.toLocaleString('en-IN')}`);
+  if (total > 0) L.push(`\n💰 Total Recovery Target: ₹${total.toLocaleString('en-IN')}`);
   L.push('');
   visits.forEach((v, i) => {
     L.push(`${v.rank || i + 1}. ${pri(v.priority)} ${v.ag_name || ''}${v.city ? ' (' + v.city + ')' : ''}`);
-    if (v.action) L.push(`   ${v.action}${v.target_amount > 0 ? ' · लक्ष्य ₹' + v.target_amount.toLocaleString('en-IN') : ''}`);
-    if (v.key_point) L.push(`   ⚠ ${v.key_point}`);
+    if (v.action) L.push(`${v.action}${v.target_amount > 0 ? ' · Recovery Target: ₹' + v.target_amount.toLocaleString('en-IN') : ''}`);
+    if (v.key_point) L.push(`⚠️ ${v.key_point}`);
+    L.push('');
   });
-  L.push('');
-  L.push(`📈 हर विज़िट पर copy बढ़ाने (growth) का commitment ज़रूर लें — यही हमारा मुख्य लक्ष्य है! 💪`);
+  L.push(`📈 Special Focus:`);
+  L.push(`हर Visit में सिर्फ Recovery ही नहीं, बल्कि Copy Growth का clear Commitment लेना भी ज़रूरी है। 💪`);
   return L.join('\n');
 }
 
