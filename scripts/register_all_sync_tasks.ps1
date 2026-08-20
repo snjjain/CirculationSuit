@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
   Master script — registers ALL Patrika data sync tasks in Windows Task Scheduler.
@@ -79,7 +79,7 @@ Write-Host ""
 Write-Host "Summary:" -ForegroundColor Cyan
 Get-ScheduledTask | Where-Object { $_.TaskName -like 'Patrika*' } | Sort-Object TaskName | ForEach-Object {
     $info = Get-ScheduledTaskInfo -TaskName $_.TaskName -ErrorAction SilentlyContinue
-    $next = if ($info -and $info.NextRunTime.Year -gt 2000) { $info.NextRunTime.ToString("ddd yyyy-MM-dd HH:mm") } else { "—" }
+    $next = if ($info -and $info.NextRunTime.Year -gt 2000) { $info.NextRunTime.ToString("ddd yyyy-MM-dd HH:mm") } else { "-" }
     $last = if ($info -and $info.LastRunTime.Year -gt 2000) { $info.LastRunTime.ToString("MM-dd HH:mm") } else { "never" }
     "  {0,-32} Next={1}  Last={2}" -f $_.TaskName, $next, $last
 }
