@@ -2533,7 +2533,7 @@ window.dcrAPlanTelegram = async () => {
   if (!pre.enabled) { toast('⚠ Telegram bot not configured — set TELEGRAM_BOT_TOKEN in server .env'); return; }
   const text = _dcrAPlanText();
   modal(`<h3>✈️ Send Plan on Telegram</h3>
-    <p style="font-size:12px;color:var(--ink-2)">To <b>${esc(execName)}</b>. ${pre.linked ? '<span style="color:var(--grn)">✓ Telegram linked</span>' : pre.mobile ? '<span style="color:#d97706">Number found — link status will be checked on send</span>' : 'Enter the executive\\'s mobile number.'}</p>
+    <p style="font-size:12px;color:var(--ink-2)">To <b>${esc(execName)}</b>. ${pre.linked ? '<span style="color:var(--grn)">✓ Telegram linked</span>' : pre.mobile ? '<span style="color:#d97706">Number found — link status will be checked on send</span>' : 'Enter executive mobile number.'}</p>
     <input id="tgMob" type="tel" maxlength="10" value="${esc(pre.mobile || '')}" placeholder="10-digit mobile" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;margin-bottom:8px;background:var(--bg);color:var(--ink)">
     <textarea id="tgText" rows="10" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;font-size:12px;background:var(--bg);color:var(--ink)">${esc(text.replace(/<\/?b>/g, ''))}</textarea>
     <div id="tgErr" style="color:var(--red);font-size:12px;margin-top:6px"></div>
