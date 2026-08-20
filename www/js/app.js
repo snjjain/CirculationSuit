@@ -1310,14 +1310,20 @@ window._dcrATourLoad = () => {
 };
 
 // Unit location Excel download
-window._dcrULDownload = () => {
-  const a = document.createElement('a');
-  a.href = `${location.origin.replace(':8123',':8001')}/api/admin/unit-locations/export`;
-  a.setAttribute('Authorization', api.h().Authorization);
-  fetch(a.href, { headers: api.h() })
-    .then(r => r.blob())
-    .then(blob => { a.href = URL.createObjectURL(blob); a.download = 'unit_locations.xlsx'; a.click(); })
-    .catch(() => toast('Download failed'));
+window._dcrULDownload = async () => {
+  try {
+    const r = await fetch(`${location.origin.replace(':8123',':8001')}/api/admin/unit-locations/export`, { headers: api.h() });
+    if (!r.ok || !(r.headers.get('content-type') || '').includes('spreadsheetml')) {
+      let msg = 'Download failed (' + r.status + ')';
+      try { msg = (await r.json()).detail || msg; } catch (_) {}
+      toast('⚠ ' + msg);
+      return;
+    }
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'unit_locations.xlsx'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) { toast('⚠ Download failed: ' + e.message); }
 };
 
 // Upload modal for filled Excel
@@ -1818,8 +1824,19 @@ window.dcrAAnalyzeRemarks = async () => {
       body: JSON.stringify({ visits }),
     });
     const d = await r.json();
-    _dcrA.aiResults = d.results || [];
-  } catch (_) { _dcrA.aiResults = []; }
+    if (!r.ok) {
+      _dcrA.aiResults = null;
+      toast(r.status === 503
+        ? '⚠ AI not configured — set ANTHROPIC_API_KEY in the server .env'
+        : '⚠ AI analysis failed: ' + (d.detail || r.status));
+    } else if (!(d.results || []).length) {
+      _dcrA.aiResults = null;
+      toast('⚠ AI returned no results — try again');
+    } else {
+      _dcrA.aiResults = d.results;
+      _dcrA.aiModel   = d.model || 'Claude';
+    }
+  } catch (e) { _dcrA.aiResults = null; toast('⚠ AI analysis failed: ' + e.message); }
   _dcrA._analyzing = false;
   if (S.screen === 'dcr_analytics') render();
 };
@@ -2166,10 +2183,10 @@ function _dcrARemarksTab() {
     const hasAi = Object.keys(ai).length > 0;
     return `<tr style="vertical-align:top">
       <td style="white-space:nowrap;font-size:11px;color:var(--ink-2)">${String(v.visit_date||'').slice(0,10)}</td>
-      <td style="font-size:11px"><b>${esc(v.executive_name||v.emp_code||'')}</b><br><span style="color:var(--ink-2)">${esc(v.unit_code||'')}</span></td>
-      <td style="font-size:11px"><b>${esc(v.ag_name||v.ag_code||'')}</b></td>
+      <td style="font-size:11px"><b>${esc(v.executive_name||v.emp_code||'')}</b><br><span style="color:var(--ink-2)">${esc(v.unit_name||v.unit_code||'')}</span></td>
+      <td style="font-size:11px;white-space:normal"><b>${esc(v.ag_name||v.ag_code||'')}</b></td>
       <td style="font-size:10px;color:var(--ink-2)">${esc((v.visit_purpose||'').slice(0,25))}</td>
-      <td style="font-size:11px;max-width:220px;word-break:break-word;color:var(--ink)">${esc((v.visit_remarks||'').slice(0,160))}${(v.visit_remarks||'').length > 160 ? '…' : ''}</td>
+      <td style="font-size:11px;min-width:200px;max-width:260px;white-space:normal;word-break:break-word;color:var(--ink)">${esc((v.visit_remarks||'').slice(0,160))}${(v.visit_remarks||'').length > 160 ? '…' : ''}</td>
       ${hasAi ? `
         <td class="r" style="font-size:12px;font-weight:700;color:${ai.payment_received>0?'var(--grn)':'var(--ink-2)'}">₹${(ai.payment_received||0).toLocaleString('en-IN')}</td>
         <td style="font-size:11px;color:var(--chart-1)">${ai.commitment_amount ? `₹${ai.commitment_amount.toLocaleString('en-IN')} ${ai.commitment_date ? '('+ai.commitment_date+')' : ''}` : '—'}</td>
@@ -2190,7 +2207,7 @@ function _dcrARemarksTab() {
       </tr></thead>
       <tbody>${rows.join('')}</tbody>
     </table></div>
-    ${_dcrA.aiResults ? `<div style="margin-top:12px;padding:10px 14px;background:var(--surface-2);border-radius:8px;font-size:11px;color:var(--ink-2)">🤖 Analyzed by Claude Haiku · ${visits.length} visits · Hindi/English remarks parsed</div>` : ''}`;
+    ${_dcrA.aiResults ? `<div style="margin-top:12px;padding:10px 14px;background:var(--surface-2);border-radius:8px;font-size:11px;color:var(--ink-2)">🤖 Analyzed by ${esc(_dcrA.aiModel || 'Claude')} · ${visits.length} visits · Hindi/English remarks parsed</div>` : ''}`;
 }
 
 /* ── Next Day Plan tab ── */

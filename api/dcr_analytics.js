@@ -1087,7 +1087,7 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const ep  = req.query.emp_code ? [String(req.query.emp_code)] : [];
 
       const { rows } = await q(
-        `SELECT id, DATE(mark_attn_date) visit_date, emp_code, executive_name, unit_code,
+        `SELECT id, DATE(mark_attn_date) visit_date, emp_code, executive_name, unit_code, unit_name,
                 visit_to_main_code ag_code, center_name ag_name,
                 visit_purpose, visit_remarks, from_time, till_time,
                 followup_amount, followup_date
@@ -1321,13 +1321,22 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
   app.get('/api/admin/unit-locations/export', async (req, res) => {
     try {
       if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      // hierarchy_master has no unit_name column — resolve names from dcr_agency_visit
       const { rows: allUnits } = await q(
-        `SELECT DISTINCT unit_code, MAX(unit_name) unit_name FROM hierarchy_master
-         WHERE unit_code IS NOT NULL AND unit_code != '' GROUP BY unit_code ORDER BY unit_name`
+        `SELECT DISTINCT unit_code FROM hierarchy_master
+         WHERE unit_code IS NOT NULL AND unit_code != '' ORDER BY unit_code`
       );
-      const { rows: existing } = await q(`SELECT unit_code, lat, lng, address FROM unit_locations`);
+      const { rows: nameRows } = await q(
+        `SELECT unit_code, MAX(unit_name) unit_name FROM dcr_agency_visit
+         WHERE unit_code IS NOT NULL AND unit_code != '' GROUP BY unit_code`
+      );
+      const nameMap = {};
+      nameRows.forEach(r => { nameMap[r.unit_code] = r.unit_name; });
+      const { rows: existing } = await q(`SELECT unit_code, unit_name, lat, lng, address FROM unit_locations`);
       const locMap = {};
-      existing.forEach(r => { locMap[r.unit_code] = r; });
+      existing.forEach(r => { locMap[r.unit_code] = r; if (!nameMap[r.unit_code] && r.unit_name) nameMap[r.unit_code] = r.unit_name; });
+      allUnits.forEach(u => { u.unit_name = nameMap[u.unit_code] || ''; });
+      allUnits.sort((a, b) => (a.unit_name || 'zzz').localeCompare(b.unit_name || 'zzz'));
 
       const rows = allUnits.map(u => {
         const loc = locMap[u.unit_code] || {};
