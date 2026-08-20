@@ -2305,6 +2305,22 @@ function _cmdLoad() {
       .then(d => { c.sup = d; c._supLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._supLoading = false; c.sup = { _err: true }; if (S.screen === 'command') render(); });
   }
+  if (!c.fa && !c._faLoading) {
+    c._faLoading = true;
+    const _fqs = 'from=' + monthStartISO() + '&to=' + todayISO();
+    fetch(_cmdBase() + '/api/exec-perf/alerts?' + _fqs, { headers: api.h() })
+      .then(r => r.json())
+      .then(d => { c.fa = d; c._faLoading = false; if (S.screen === 'command') render(); })
+      .catch(() => { c._faLoading = false; c.fa = { _err: true }; if (S.screen === 'command') render(); });
+  }
+  if (!c.dcr && !c._dcrLoading) {
+    c._dcrLoading = true;
+    const _dqs = 'from=' + monthStartISO() + '&to=' + todayISO();
+    fetch(_cmdBase() + '/api/exec-perf/dcr?' + _dqs, { headers: api.h() })
+      .then(r => r.json())
+      .then(d => { c.dcr = d; c._dcrLoading = false; if (S.screen === 'command') render(); })
+      .catch(() => { c._dcrLoading = false; c.dcr = { _err: true }; if (S.screen === 'command') render(); });
+  }
 }
 
 function _cmdSkel() {
@@ -2368,7 +2384,7 @@ function _cmdModuleCard({ icon, title, period, onClick, kpis, footer, error, loa
 VIEWS.command = () => {
   _cmdLoad();
   const c = S.live.cmd || {};
-  const ou = c.ou, co = c.co, si = c.si, sv = c.sv, sup = c.sup;
+  const ou = c.ou, co = c.co, si = c.si, sv = c.sv, sup = c.sup, fa = c.fa, dcr = c.dcr;
 
   /* ── Agency Outstanding — point-in-time balance, never a period sum ── */
   let ouKpis, ouFooter;
@@ -2442,6 +2458,38 @@ VIEWS.command = () => {
     ];
     svFooter = `Conversion: <b style="color:var(--grn)">${convPct}%</b> &nbsp;·&nbsp; Surveyors: <b>${sv.surveyors||0}</b> &nbsp;·&nbsp; Areas covered: <b>${sv.areas||0}</b>
       ${_cmdBar(parseFloat(convPct), 'var(--grn)')}`;
+  }
+
+  /* ── Field Intelligence (DCR Activity) ─────────────────── */
+  let faKpis, faFooter, faBadge, faBadgeColor;
+  if (fa && !fa._err) {
+    const dcrData    = dcr && !dcr._err ? dcr : null;
+    const activeToday = fa.active_today  || 0;
+    const totalExecs  = fa.total_execs   || 0;
+    const activePct   = totalExecs > 0 ? Math.round(activeToday / totalExecs * 100) : 0;
+    const totalVisits = dcrData?.total_visits  || 0;
+    const execsActive = dcrData?.execs_active  || 0;
+    const pctColor    = activePct >= 80 ? 'var(--grn)' : activePct >= 50 ? 'var(--gold)' : 'var(--red)';
+    const noVisit     = (fa.alerts || []).find(a => a.key === 'no_visit_today');
+    const neverVis    = (fa.alerts || []).find(a => a.key === 'never_visited');
+    const declining   = (fa.alerts || []).find(a => a.key === 'supply_declining');
+    const osAlert     = (fa.alerts || []).find(a => a.key === 'os_outstanding');
+    faKpis = [
+      [activeToday + ' / ' + totalExecs,                                       'Active in Field (Prev Day)',   pctColor],
+      [activePct + '%',                                                          'Team Coverage',               pctColor],
+      [(totalVisits||0).toLocaleString('en-IN'),                                 'Agency Visits This Month',    'var(--ink)'],
+      [(execsActive||0).toLocaleString('en-IN'),                                 'Execs with Visits',           'var(--acc)'],
+      [noVisit  ? String(noVisit.count)  : '0',  'Not in Field Prev Day',        noVisit?.count  > 0 ? 'var(--red)'  : 'var(--grn)'],
+      [neverVis ? String(neverVis.count) : '0',  'Agencies Never Visited',       neverVis?.count > 0 ? 'var(--red)'  : 'var(--grn)'],
+    ];
+    const parts = [];
+    if (declining) parts.push(`<b style="color:var(--red)">${declining.count} execs</b> with supply decline`);
+    if (osAlert  ) parts.push(`<b style="color:var(--gold)">${osAlert.count} agencies</b> with outstanding`);
+    faFooter = parts.length
+      ? parts.join(' &nbsp;·&nbsp; ')
+      : `<span style="color:var(--grn)">✓ No critical field activity alerts</span>`;
+    faBadge      = activeToday + ' / ' + totalExecs + ' active';
+    faBadgeColor = pctColor;
   }
 
   /* ── Top KPI strip data ─────────────────────────────────── */
@@ -2546,6 +2594,13 @@ VIEWS.command = () => {
         loading: !sv && !c._svError, error: sv?._err,
         badge: sv && !sv._err ? fmtN(sv.total||0) + ' surveyed' : null,
         badgeColor: 'var(--acc)',
+      })}
+      ${_cmdModuleCard({
+        icon:'📍', title:'Field Intelligence', period:'DCR activity · current month',
+        onClick:"go('dcr_analytics')", accent: faBadgeColor || 'var(--acc)',
+        kpis: faKpis, footer: faFooter,
+        loading: !fa, error: fa?._err,
+        badge: faBadge, badgeColor: faBadgeColor,
       })}
     </div>
 
