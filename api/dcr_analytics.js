@@ -1016,11 +1016,11 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const osCl = unitCodes === null ? '' : (unitCodes.length ? ` AND unit_code IN (${unitCodes.map(()=>'?').join(',')})` : ' AND 1=0');
 
       const [agR, visitR, osR, supR] = await Promise.all([
-        // dp_code=1 → main agency only (dp_code>1 = sub-agency of same agcd)
+        // dpcd=1 → main agency only (dpcd>1 = sub-agency of same agcd)
         q(`SELECT agcd, ag_name, unit_name, executive_name,
                   COALESCE(city_name, dist_name) city_name
            FROM agency_master
-           WHERE CAST(dp_code AS UNSIGNED) = 1
+           WHERE CAST(dpcd AS UNSIGNED) = 1
              AND executive_code IS NOT NULL AND executive_code != ''
              AND (supply_stop_flag IS NULL OR supply_stop_flag != 'Y')
              AND suspend_date IS NULL${amCl} LIMIT 5000`, amP),
@@ -1110,33 +1110,172 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
+  // ── FREE Hinglish remark analyzer (no API key needed) ─────────────────────
+  // Extracts payment/commitment/growth/issue/status from Hindi-English-Hinglish
+  // field notes with keyword + amount pattern rules. Zero cost, instant, offline.
+  function analyzeRemarkFree(remarkRaw, visitDate) {
+    const raw = String(remarkRaw || '');
+    const t = ' ' + raw.toLowerCase().replace(/[.,;:!()\-]/g, ' ').replace(/\s+/g, ' ') + ' ';
+    const has = (...words) => words.some(w => t.includes(' ' + w) || t.includes(w + ' ') || t.includes(w));
+
+    // ── amounts with positions: "5000", "rs 5000", "₹5,000", "5 hazar", "2k", "1 lakh" ──
+    const low = raw.toLowerCase();
+    const amounts = [];   // { n, pos }
+    const reAmt = /(?:rs\.?\s*|₹\s*)?(\d[\d,]*(?:\.\d+)?)\s*(hazaa?r|hajar|lakh|lac|k\b)?/gi;
+    let m;
+    while ((m = reAmt.exec(low)) !== null) {
+      let n = parseFloat(m[1].replace(/,/g, ''));
+      const unit = (m[2] || '').toLowerCase();
+      if (unit.startsWith('haza') || unit.startsWith('haja') || unit === 'k') n *= 1000;
+      else if (unit === 'lakh' || unit === 'lac') n *= 100000;
+      if (!isNaN(n) && n >= 50 && n <= 10000000) amounts.push({ n: Math.round(n), pos: m.index });
+    }
+    const maxAmt = amounts.length ? Math.max(...amounts.map(a => a.n)) : 0;
+
+    // ── signals ──
+    const gotPayment = has('mil gay', 'mile', ' mila', ' mili', 'de diya', 'de diye', 'diya h', 'diye h',
+      'received', 'recieved', 'jama karva', 'jama kiya', 'jama ki ', 'cash liya', 'le liya', 'collect kiya',
+      'collect ki ', 'vasuli hui', 'vasuli ki', 'vasool', 'payment aaya', 'payment mila', 'prapt', 'deposit kiya', 'neft aaya', 'upi aaya', 'cheque mila', 'check mila');
+    const willPay = has('dega', 'degi', 'denge', 'de dega', 'de denge', 'bhejega', 'bhej dega', 'kar dega',
+      'karega', 'karegi', 'karenge', 'jama karega', 'jama kar dega', 'promise', 'commitment', 'commit',
+      'tak de', 'tak kar', 'btayege', 'batayege', 'bta dega', 'bata dega', 'pay karega', 'payment karega', 'payment kre', 'kal tak', 'parso tak', 'jaldi de');
+    const growthTalk = has('growth', 'gorwth', 'grwth', 'badha', 'badhay', 'badhane', 'badh jaye', 'increase',
+      'copy badh', 'copies badh', 'prati badh', 'new copy', 'nayi copy', 'scheme', 'circulation badh');
+    let growthNum = 0;
+    const gm = raw.match(/(\d{1,4})\s*(?:copy|copies|prati|paper|pepar)/i);
+    if (growthTalk && gm) growthNum = +gm[1];
+
+    // ── commitment date ──
+    let cDate = null;
+    const d = visitDate ? new Date(visitDate) : new Date();
+    const iso = dt => dt.toISOString().slice(0, 10);
+    const dm = raw.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
+    if (has(' kal ', 'kal tak', 'kla tak', 'kl tak')) cDate = iso(new Date(+d + 86400000));
+    else if (has('parso', 'parson')) cDate = iso(new Date(+d + 2 * 86400000));
+    else if (has('next week', 'agle hafte', 'agle week', 'hafte me')) cDate = 'soon';
+    else if (dm && +dm[1] >= 1 && +dm[1] <= 31 && +dm[2] >= 1 && +dm[2] <= 12) {
+      const yr = dm[3] ? (+dm[3] < 100 ? 2000 + +dm[3] : +dm[3]) : d.getFullYear();
+      cDate = `${yr}-${String(+dm[2]).padStart(2, '0')}-${String(+dm[1]).padStart(2, '0')}`;
+    } else if (willPay) cDate = 'soon';
+
+    // ── issues (most specific first) ──
+    let issue = null;
+    if      (has('death', ' deth ', 'mrityu', 'swargvas', 'dehant'))                    issue = 'Death in agent family / agent expired';
+    else if (has('band ho', 'band kar', 'close ho', 'band krna', 'bnd ho'))             issue = 'Agency closing / wants to stop';
+    else if (has('bimar', 'bimaar', 'hospital', 'admit', 'tabiyat'))                    issue = 'Agent unwell / hospitalised';
+    else if (has('naraz', 'naraaz', 'complaint', 'shikayat', 'dispute', 'jhagda'))      issue = 'Agent upset / complaint pending';
+    else if (has('ghar nahi', 'nahi mile', 'nahi mila', 'nhi mile', 'nhi mila', 'band mila', 'bahar gaye', 'bahar he', 'bahar hai', 'out of station', 'shop band')) issue = 'Agent not available at visit';
+    else if (has('paisa nahi', 'paise nahi', 'payment problem', 'market kharab', 'mandi', 'udhari'))  issue = 'Payment difficulty / market slow';
+    else if (has('bill', 'billing') && has('galat', 'problem', 'issue', 'thik nahi'))   issue = 'Billing issue reported';
+    else if (has('supply', 'paper', 'pepar') && has('late', 'der se', 'problem', 'nahi aa')) issue = 'Supply / delivery problem';
+
+    // ── amounts → buckets by proximity to their signal keywords ──
+    const RECV_WORDS = ['mil gay', 'mile', 'mila', 'mili', 'de diya', 'de diye', 'diya', 'diye', 'received',
+      'jama karva', 'jama kiya', 'cash liya', 'le liya', 'collect', 'vasuli hui', 'vasool', 'prapt', 'aaya'];
+    const PAY_WORDS = ['dega', 'degi', 'denge', 'bhejega', 'karega', 'karenge', 'jama karega', 'promise',
+      'commitment', 'tak de', 'btayege', 'batayege', 'kal tak', 'kla tak', 'parso tak', 'baki', 'baaki'];
+    const allPos = words => { const ps = []; for (const w of words) { let i = -1; while ((i = low.indexOf(w, i + 1)) >= 0) ps.push(i); } return ps; };
+    const recvPos = gotPayment ? allPos(RECV_WORDS) : [];
+    const payPos  = willPay    ? allPos(PAY_WORDS)  : [];
+    let paymentReceived = 0, commitAmt = 0;
+    for (const a of amounts) {
+      const dR = recvPos.length ? Math.min(...recvPos.map(p => Math.abs(p - a.pos))) : Infinity;
+      const dP = payPos.length  ? Math.min(...payPos.map(p => Math.abs(p - a.pos)))  : Infinity;
+      if (dR === Infinity && dP === Infinity) continue;
+      if (dR <= dP) paymentReceived = Math.max(paymentReceived, a.n);
+      else          commitAmt       = Math.max(commitAmt, a.n);
+    }
+    if (gotPayment && !paymentReceived && !willPay) paymentReceived = maxAmt;
+    if (willPay && !commitAmt && !gotPayment)       commitAmt = maxAmt;
+
+    // ── status ──
+    let status;
+    if (paymentReceived > 0)                       status = 'productive';
+    else if (gotPayment)                           status = 'productive';
+    else if (issue === 'Agent not available at visit') status = 'no-response';
+    else if (willPay || (growthTalk && growthNum)) status = 'follow-up';
+    else if (growthTalk || has('bat hui', 'bat ki', 'baat hui', 'baat ki', 'discuss', 'samjhaya', 'mila ', 'mile ')) status = 'partial';
+    else                                           status = 'info-only';
+
+    return {
+      payment_received: paymentReceived,
+      commitment_amount: commitAmt,
+      commitment_date: commitAmt > 0 || willPay ? cDate : null,
+      growth_commitment: growthNum,
+      issue, status,
+    };
+  }
+
+  // ── Ollama helper (free local LLM on LAN; OLLAMA_URL + OLLAMA_MODEL in .env) ──
+  async function ollamaChat(prompt, timeoutMs = 60000) {
+    const url = (process.env.OLLAMA_URL || '').replace(/\/$/, '');
+    if (!url) return null;
+    const model = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(url + '/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+        body: JSON.stringify({ model, stream: false, options: { temperature: 0 },
+          messages: [{ role: 'user', content: prompt }] }),
+      });
+      if (!r.ok) return null;
+      const d = await r.json();
+      return { text: d.message?.content || '', model: 'Ollama ' + model };
+    } catch (_) { return null; }
+    finally { clearTimeout(timer); }
+  }
+
   // ── POST /api/dcr-analytics/analyze-remarks ───────────────────────────────
+  // Engine order: Claude (if ANTHROPIC_API_KEY) → Ollama (if OLLAMA_URL) → free
+  // built-in pattern engine. NEVER fails for lack of a paid key.
   app.post('/api/dcr-analytics/analyze-remarks', async (req, res) => {
     try {
       if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
       const { visits } = req.body || {};
       if (!Array.isArray(visits) || !visits.length) return res.status(400).json({ detail: 'visits[] required' });
-      const API_KEY = process.env.ANTHROPIC_API_KEY;
-      if (!API_KEY) return res.status(503).json({ detail: 'ANTHROPIC_API_KEY not configured' });
-
-      const Anthropic = require('@anthropic-ai/sdk');
-      const client = new Anthropic({ apiKey: API_KEY });
       const dec = s => s ? s.replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d)) : s;
-      const batch = visits.slice(0, 20);
-      const visitList = batch.map((v, i) =>
-        `[${i+1}] ${v.visit_date||''} | Exec: ${dec(v.executive_name)||'-'} | Agency: ${dec(v.ag_name)||v.ag_code||'-'} | Purpose: ${dec(v.purpose)||'-'}\nRemarks: ${dec(v.remarks)||'(no remarks)'}`
-      ).join('\n\n');
+      const batch = visits.slice(0, 50);
 
-      const resp = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 3500,
-        messages: [{ role: 'user', content: `Analyze field visit notes from newspaper circulation executives. Remarks may be Hindi, English, or mixed language.\n\nFor each numbered visit, extract:\n- payment_received: cash received NOW during this visit (number, 0 if none)\n- commitment_amount: agent promised to pay (number, 0 if none)\n- commitment_date: promised payment date (YYYY-MM-DD or "soon" or null)\n- growth_commitment: newspaper copies increase committed (number, 0)\n- issue: main problem in 5-8 words in English (null if none)\n- status: exactly one of: "productive" | "partial" | "follow-up" | "no-response" | "info-only"\n\nReturn ONLY a valid JSON array, no prose:\n[{"idx":1,"payment_received":0,"commitment_amount":0,"commitment_date":null,"growth_commitment":0,"issue":null,"status":"info-only"},...]\n\nVisits:\n${visitList}` }]
-      });
+      const API_KEY = process.env.ANTHROPIC_API_KEY;
+      if (API_KEY) {
+        try {
+          const Anthropic = require('@anthropic-ai/sdk');
+          const client = new Anthropic({ apiKey: API_KEY });
+          const visitList = batch.slice(0, 20).map((v, i) =>
+            `[${i+1}] ${v.visit_date||''} | Exec: ${dec(v.executive_name)||'-'} | Agency: ${dec(v.ag_name)||v.ag_code||'-'} | Purpose: ${dec(v.purpose)||'-'}\nRemarks: ${dec(v.remarks)||'(no remarks)'}`
+          ).join('\n\n');
+          const resp = await client.messages.create({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 3500,
+            messages: [{ role: 'user', content: `Analyze field visit notes from newspaper circulation executives. Remarks may be Hindi, English, or mixed language.\n\nFor each numbered visit, extract:\n- payment_received: cash received NOW during this visit (number, 0 if none)\n- commitment_amount: agent promised to pay (number, 0 if none)\n- commitment_date: promised payment date (YYYY-MM-DD or "soon" or null)\n- growth_commitment: newspaper copies increase committed (number, 0)\n- issue: main problem in 5-8 words in English (null if none)\n- status: exactly one of: "productive" | "partial" | "follow-up" | "no-response" | "info-only"\n\nReturn ONLY a valid JSON array, no prose:\n[{"idx":1,"payment_received":0,"commitment_amount":0,"commitment_date":null,"growth_commitment":0,"issue":null,"status":"info-only"},...]\n\nVisits:\n${visitList}` }]
+          });
+          const text = resp.content[0]?.text || '[]';
+          const jm = text.match(/\[[\s\S]*\]/);
+          const results = jm ? JSON.parse(jm[0]) : [];
+          if (results.length) return res.json({ results, model: 'Claude Haiku' });
+        } catch (_) { /* fall through to free engine */ }
+      }
 
-      const text = resp.content[0]?.text || '[]';
-      const jm = text.match(/\[[\s\S]*\]/);
-      const results = jm ? JSON.parse(jm[0]) : [];
-      res.json({ results, model: 'claude-haiku-4-5-20251001' });
+      // Tier 2: Ollama on LAN (free local LLM)
+      if (process.env.OLLAMA_URL) {
+        const visitList = batch.slice(0, 20).map((v, i) =>
+          `[${i+1}] ${v.visit_date||''} | Agency: ${dec(v.ag_name)||v.ag_code||'-'}\nRemarks: ${dec(v.remarks)||'(no remarks)'}`
+        ).join('\n\n');
+        const o = await ollamaChat(
+          `Analyze field visit notes from newspaper circulation executives. Remarks are Hindi/English/Hinglish mixed.\n\nFor each numbered visit extract:\n- payment_received: cash received NOW (number, 0 if none)\n- commitment_amount: promised payment (number, 0 if none)\n- commitment_date: "YYYY-MM-DD" or "soon" or null\n- growth_commitment: copies increase promised (number, 0)\n- issue: main problem, max 8 English words (null if none)\n- status: one of "productive"|"partial"|"follow-up"|"no-response"|"info-only"\n\nReturn ONLY a JSON array, no other text:\n[{"idx":1,"payment_received":0,"commitment_amount":0,"commitment_date":null,"growth_commitment":0,"issue":null,"status":"info-only"}]\n\nVisits:\n${visitList}`);
+        if (o) {
+          try {
+            const jm = o.text.match(/\[[\s\S]*\]/);
+            const results = jm ? JSON.parse(jm[0]) : [];
+            if (results.length) return res.json({ results, model: o.model });
+          } catch (_) { /* fall through */ }
+        }
+      }
+
+      // FREE engine — always available
+      const results = batch.map((v, i) => ({ idx: i + 1, ...analyzeRemarkFree(dec(v.remarks), v.visit_date) }));
+      res.json({ results, model: 'Built-in Pattern Engine (free)' });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
@@ -1147,7 +1286,6 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const { emp_code, plan_date } = req.body || {};
       if (!emp_code) return res.status(400).json({ detail: 'emp_code required' });
       const API_KEY = process.env.ANTHROPIC_API_KEY;
-      if (!API_KEY) return res.status(503).json({ detail: 'ANTHROPIC_API_KEY not configured' });
 
       const tDate = isDate(plan_date) ? plan_date : new Date(Date.now() + 86400000).toISOString().slice(0,10);
 
@@ -1159,17 +1297,17 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const execName = execInfoR.rows[0]?.exec_name || emp_code;
 
       const [agR, visitR, osR] = await Promise.all([
-        // Match by executive_name — dp_code=1 for main agencies only
+        // Match by executive_name — dpcd=1 for main agencies only
         q(`SELECT agcd, ag_name, COALESCE(city_name, dist_name) city_name, unit_name
            FROM agency_master
-           WHERE executive_name=? AND CAST(dp_code AS UNSIGNED)=1
+           WHERE executive_name=? AND CAST(dpcd AS UNSIGNED)=1
              AND (supply_stop_flag IS NULL OR supply_stop_flag!='Y') AND suspend_date IS NULL
            LIMIT 150`, [execName]),
         q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, COUNT(*) cnt, MAX(visit_remarks) last_remarks, MAX(followup_amount) fup_amt, MAX(followup_date) fup_date
            FROM dcr_agency_visit WHERE emp_code=? AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
            GROUP BY visit_to_main_code`, [emp_code]),
         q(`SELECT ao.ag_code, ao.cl_amt FROM agency_outstanding ao
-           JOIN agency_master am ON am.agcd=ao.ag_code AND CAST(am.dp_code AS UNSIGNED)=1
+           JOIN agency_master am ON am.agcd=ao.ag_code AND CAST(am.dpcd AS UNSIGNED)=1
            WHERE am.executive_name=? AND ao.period_label='CURRENT' AND ao.cl_amt>0
            GROUP BY ao.ag_code`, [execName]),
       ]);
@@ -1187,23 +1325,70 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
         return { code: ag.agcd, name: ag.ag_name, city: ag.city_name || ag.dist_name, os, days, cnt60: +(v.cnt||0), last_rmk: (v.last_remarks||'').slice(0,80), fup_amt: +(v.fup_amt||0), fup_date: v.fup_date||'' };
       }).sort((a,b) => b.os - a.os || b.days - a.days).slice(0, 40);
 
-      const Anthropic = require('@anthropic-ai/sdk');
-      const client = new Anthropic({ apiKey: API_KEY });
-
       const agText = agList.map((a,i) =>
         `${i+1}. ${a.name} (${a.city||'-'}) | OS:Rs${a.os.toLocaleString('en-IN')} | Last visit:${a.days>=999?'Never':a.days+'d ago'} | 60d visits:${a.cnt60} | Followup:Rs${a.fup_amt} by ${a.fup_date||'?'} | Note:"${a.last_rmk}"`
       ).join('\n');
+      const planPrompt = `You are a circulation manager at Rajasthan Patrika newspaper. Create a smart next-day field visit plan for executive ${execName} working in ${unitName} for the date ${tDate}.\n\nPrioritization logic:\n1. High outstanding balance (OS) = highest priority = needs recovery\n2. Pending followup commitment (fup_amt > 0) = visit to collect what was promised\n3. Not visited in 30+ days = coverage gap\n4. Never visited = must cover\n\nLimit to top 8 agencies. Write brief, actionable instructions.\n\nAgencies available:\n${agText}\n\nReturn ONLY valid JSON (no prose before or after):\n{"exec":"${execName}","unit":"${unitName}","date":"${tDate}","focus_message":"...motivational message in 1 line...","total_target":0,"visits":[{"rank":1,"ag_code":"...","ag_name":"...","city":"...","priority":"high|medium|low","action":"...collect/survey/followup instruction...","target_amount":0,"key_point":"...one critical thing to address..."}]}`;
 
-      const resp = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1800,
-        messages: [{ role: 'user', content: `You are a circulation manager at Rajasthan Patrika newspaper. Create a smart next-day field visit plan for executive ${execName} working in ${unitName} for the date ${tDate}.\n\nPrioritization logic:\n1. High outstanding balance (OS) = highest priority = needs recovery\n2. Pending followup commitment (fup_amt > 0) = visit to collect what was promised\n3. Not visited in 30+ days = coverage gap\n4. Never visited = must cover\n\nLimit to top 8 agencies. Write brief, actionable instructions.\n\nAgencies available:\n${agText}\n\nReturn ONLY valid JSON (no prose before or after):\n{"exec":"${execName}","unit":"${unitName}","date":"${tDate}","focus_message":"...motivational message in 1 line...","total_target":0,"visits":[{"rank":1,"ag_code":"...","ag_name":"...","city":"...","priority":"high|medium|low","action":"...collect/survey/followup instruction...","target_amount":0,"key_point":"...one critical thing to address..."}]}` }]
+      // Tier 1: Claude (if key configured)
+      if (API_KEY) {
+        try {
+          const Anthropic = require('@anthropic-ai/sdk');
+          const client = new Anthropic({ apiKey: API_KEY });
+          const resp = await client.messages.create({
+            model: 'claude-haiku-4-5-20251001', max_tokens: 1800,
+            messages: [{ role: 'user', content: planPrompt }]
+          });
+          const text = resp.content[0]?.text || '{}';
+          const jm = text.match(/\{[\s\S]*\}/);
+          const plan = jm ? JSON.parse(jm[0]) : null;
+          if (plan && (plan.visits || []).length)
+            return res.json({ plan, exec_name: execName, unit_name: unitName, model: 'Claude Haiku' });
+        } catch (_) { /* fall through */ }
+      }
+
+      // Tier 2: Ollama on LAN (free local LLM)
+      if (process.env.OLLAMA_URL) {
+        const o = await ollamaChat(planPrompt, 90000);
+        if (o) {
+          try {
+            const jm = o.text.match(/\{[\s\S]*\}/);
+            const plan = jm ? JSON.parse(jm[0]) : null;
+            if (plan && (plan.visits || []).length)
+              return res.json({ plan, exec_name: execName, unit_name: unitName, model: o.model });
+          } catch (_) { /* fall through */ }
+        }
+      }
+
+      // Tier 3: FREE rule engine — deterministic prioritization, always available
+      const pick = agList.slice(0, 8).map((a, i) => {
+        const priority = (a.os > 50000 || a.fup_amt > 0) ? 'high' : (a.os > 10000 || a.days >= 30) ? 'medium' : 'low';
+        let action, key_point;
+        if (a.fup_amt > 0) {
+          action = `Collect promised ₹${a.fup_amt.toLocaleString('en-IN')}${a.fup_date ? ' (was due ' + String(a.fup_date).slice(0,10) + ')' : ''}`;
+          key_point = 'Agent already committed this amount — remind and collect';
+        } else if (a.os > 0) {
+          action = `Recovery visit — outstanding ₹${a.os.toLocaleString('en-IN')}`;
+          key_point = a.days >= 30 ? `Not visited in ${a.days >= 999 ? 'ever' : a.days + ' days'} — rebuild contact first` : 'Get payment or a dated commitment';
+        } else if (a.days >= 999) {
+          action = 'First visit — introduce, verify agency status, survey area';
+          key_point = 'Never visited — must cover';
+        } else {
+          action = `Coverage visit — last seen ${a.days} days ago`;
+          key_point = 'Check supply satisfaction, discuss copy growth';
+        }
+        const target_amount = a.fup_amt > 0 ? a.fup_amt : (a.os > 0 ? Math.round(a.os * 0.25) : 0);
+        return { rank: i + 1, ag_code: a.code, ag_name: a.name, city: a.city || '', priority, action, target_amount, key_point };
       });
-
-      const text = resp.content[0]?.text || '{}';
-      const jm = text.match(/\{[\s\S]*\}/);
-      const plan = jm ? JSON.parse(jm[0]) : { error: 'Plan generation failed' };
-      res.json({ plan, exec_name: execName, unit_name: unitName });
+      const totalTarget = pick.reduce((s, v) => s + v.target_amount, 0);
+      const plan = {
+        exec: execName, unit: unitName, date: tDate,
+        focus_message: totalTarget > 0
+          ? `Focus: recover ₹${totalTarget.toLocaleString('en-IN')} across ${pick.filter(v => v.target_amount > 0).length} agencies — collect or get dated commitments.`
+          : 'Focus: coverage and growth conversations — every visit should end with a copy-growth ask.',
+        total_target: totalTarget, visits: pick,
+      };
+      res.json({ plan, exec_name: execName, unit_name: unitName, model: 'Rule Engine (free)' });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
