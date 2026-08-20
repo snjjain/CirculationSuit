@@ -332,7 +332,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const execCode     = String(req.params.exec_code);
       const { from, to } = parseDates(req.query);
 
-      const [execInfo, supR, colR, ouR, agencies, hierR] = await Promise.all([
+      const [execInfo, supR, colR, ouR, agencies, hierR, dcrVisitsR, dcrSummR] = await Promise.all([
         q(`SELECT executive_code, MAX(executive_name) exec_name, MAX(unit_state_nm) state_name,
                   GROUP_CONCAT(DISTINCT unit_name ORDER BY unit_name SEPARATOR ' / ') units,
                   COUNT(DISTINCT agcd) agency_count
@@ -398,6 +398,19 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
                   zonal_head,    zonal_head_name,
                   vp_circulation, vp_circulation_name
            FROM exec_hierarchy_mapping WHERE exec_code = ? LIMIT 1`, [execCode]),
+
+        // Field visits per agency — separate query avoids cross-collation JOIN with agency_master
+        q(`SELECT unit_code, visit_to_main_code agcd,
+                  COUNT(*) visit_count, MAX(mark_attn_date) last_visit
+           FROM dcr_agency_visit
+           WHERE emp_code = ? AND mark_attn_date BETWEEN ? AND ?
+             AND visit_to_main_code IS NOT NULL AND visit_to_main_code != ''
+           GROUP BY unit_code, visit_to_main_code`, [execCode, from, to]),
+
+        // Active days + total visits summary for the period
+        q(`SELECT COUNT(DISTINCT mark_attn_date) active_days, COUNT(*) total_visits
+           FROM dcr_agency_visit
+           WHERE emp_code = ? AND mark_attn_date BETWEEN ? AND ?`, [execCode, from, to]),
       ]);
 
       const ei         = execInfo.rows[0] || {};
@@ -405,6 +418,13 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const totalOu    = N(ouR.rows[0]?.total);
       const collPct    = (totalColl + totalOu) > 0 ? R1(totalColl / (totalColl + totalOu) * 100) : 0;
       const hier       = hierR.rows[0] || {};
+
+      // Build per-agency visit map from DCR data
+      const visitMap = new Map();
+      for (const r of dcrVisitsR.rows) {
+        visitMap.set(`${r.unit_code}|${r.agcd}`, { visit_count: N(r.visit_count), last_visit: r.last_visit });
+      }
+      const dcrSumm = dcrSummR.rows[0] || {};
 
       res.json({
         from, to,
@@ -419,6 +439,9 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
           total_collection:     totalColl,
           total_outstanding:    totalOu,
           collection_pct:       collPct,
+          total_visits:         N(dcrSumm.total_visits),
+          active_days:          N(dcrSumm.active_days),
+          agencies_visited:     dcrVisitsR.rows.length,
           edtn_incharge:        hier.edtn_incharge        || null,
           edtn_incharge_name:   hier.edtn_incharge_name   || null,
           circ_incharge:        hier.circ_incharge        || null,
@@ -445,6 +468,8 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
           total_collection:  N(r.total_collection),
           total_outstanding: N(r.total_outstanding),
           collection_pct:    R1(r.collection_pct),
+          visit_count:      (visitMap.get(`${r.unit_code}|${r.ag_code}`) || {}).visit_count || 0,
+          last_visit:       (visitMap.get(`${r.unit_code}|${r.ag_code}`) || {}).last_visit  || null,
           status: r.suspend_date ? 'Suspended' : (r.supply_stop_flag === 'Y' ? 'Stopped' : 'Active'),
         })),
       });

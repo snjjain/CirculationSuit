@@ -7524,6 +7524,110 @@ function epEmailModal() {
   </div>`;
 }
 
+// ── Growth Direction — per-executive signal ────────────────────────────────────
+// Returns { label, color, bg, icon, flags } based on supply trend + collection % + field presence
+function epGrowthDir(execCode, collPct) {
+  const st    = epState();
+  const gExec = (st.growth?.by_exec || []).find(r => r.executive_code === execCode);
+  const dExec = (st.dcr?.by_exec    || []).find(r => r.emp_code       === execCode);
+
+  let score = 0;
+  const flags = [];
+
+  // Supply growth signal
+  if (gExec != null) {
+    const pct = gExec.pct ?? 0;
+    if      (pct >  5) score += 2;
+    else if (pct >  0) score += 1;
+    else if (pct < -5) { score -= 2; flags.push('supply ↓' + Math.abs(Math.round(pct)) + '%'); }
+    else if (pct <  0) { score -= 1; flags.push('supply ↘'); }
+  }
+
+  // Collection % signal
+  const cp = Number(collPct || 0);
+  if      (cp >= 85) score += 2;
+  else if (cp >= 65) score += 1;
+  else if (cp <  40) { score -= 2; flags.push('coll ' + cp.toFixed(0) + '%'); }
+  else if (cp <  65) { score -= 1; flags.push('coll ' + cp.toFixed(0) + '%'); }
+
+  // Field presence (prev day)
+  if      ( dExec?.active_today) score += 1;
+  else if (dExec && !dExec.active_today) { score -= 1; flags.push('absent prev day'); }
+
+  if (score >= 3)  return { label: 'On Track',  color: '#15803d', bg: '#dcfce7', icon: '↑' };
+  if (score >= 1)  return { label: 'Good',       color: '#1d4ed8', bg: '#dbeafe', icon: '→' };
+  if (score === 0) return { label: 'Watch',      color: '#92400e', bg: '#fef3c7', icon: '→', flags };
+  if (score >= -2) return { label: 'Review',     color: '#b91c1c', bg: '#fee2e2', icon: '↓', flags };
+                   return { label: 'Critical',   color: '#7f1d1d', bg: '#fecaca', icon: '↓↓', flags };
+}
+
+// ── Growth Intelligence Panel ──────────────────────────────────────────────────
+function epGrowthIntelPanel() {
+  const st = epState();
+  if (!st.list || !st.growth || !st.dcr) return '';
+
+  const rows = st.list?.rows || [];
+  if (!rows.length) return '';
+
+  let onTrack = 0, watch = 0, review = 0;
+  for (const r of rows) {
+    const d = epGrowthDir(r.executive_code, r.collection_pct);
+    if (d.label === 'On Track' || d.label === 'Good') onTrack++;
+    else if (d.label === 'Watch') watch++;
+    else review++;
+  }
+  const total      = rows.length;
+  const pctGood    = total > 0 ? Math.round(onTrack / total * 100) : 0;
+  const barColor   = pctGood >= 70 ? '#15803d' : pctGood >= 50 ? '#d97706' : '#dc2626';
+  const borderColor= pctGood >= 70 ? '#15803d' : pctGood >= 50 ? '#d97706' : '#dc2626';
+
+  const allAlerts = st.alerts?.alerts || [];
+  const noVisit   = allAlerts.find(a => a.key === 'no_visit_today');
+  const declining = allAlerts.find(a => a.key === 'supply_declining');
+  const neverVis  = allAlerts.find(a => a.key === 'never_visited');
+  const osAlert   = allAlerts.find(a => a.key === 'os_outstanding');
+
+  const insights = [];
+  if (noVisit  ) insights.push({ icon: '❌', text: `${noVisit.count} executives absent from field prev day`,         color: 'var(--red)' });
+  if (declining) insights.push({ icon: '📉', text: `${declining.count} executives with declining supply`,             color: '#92400e'    });
+  if (neverVis ) insights.push({ icon: '🚫', text: `${neverVis.count} agencies never visited`,                       color: 'var(--red)' });
+  if (osAlert  ) insights.push({ icon: '💰', text: `${osAlert.count} agencies carrying outstanding balance`,         color: '#92400e'    });
+
+  return `<div class="card" style="padding:14px 16px;margin-bottom:12px;border-left:4px solid ${borderColor}">
+    <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">
+      Growth Direction Intelligence · ${total} Executives
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center">
+      <div style="display:flex;gap:16px">
+        <div style="text-align:center">
+          <div style="font-size:24px;font-weight:800;color:#15803d;line-height:1">${onTrack}</div>
+          <div style="font-size:9.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-top:2px">On Track</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:24px;font-weight:800;color:#d97706;line-height:1">${watch}</div>
+          <div style="font-size:9.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-top:2px">Watch</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:24px;font-weight:800;color:#dc2626;line-height:1">${review}</div>
+          <div style="font-size:9.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-top:2px">Review</div>
+        </div>
+      </div>
+      <div style="flex:1;min-width:140px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+          <div style="flex:1;height:7px;background:var(--brd2);border-radius:4px;overflow:hidden">
+            <div style="height:100%;width:${pctGood}%;background:${barColor};border-radius:4px"></div>
+          </div>
+          <span style="font-size:12px;font-weight:800;color:${barColor}">${pctGood}%</span>
+        </div>
+        <div style="font-size:10.5px;color:var(--muted)">team on growth track</div>
+      </div>
+      ${insights.length ? `<div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:2px">
+        ${insights.slice(0,3).map(ins => `<div style="font-size:11.5px;color:${ins.color}">${ins.icon} ${esc(ins.text)}</div>`).join('')}
+      </div>` : `<div style="font-size:11.5px;color:#15803d">✅ No critical growth gaps for this view</div>`}
+    </div>
+  </div>`;
+}
+
 // ── Full executive table ───────────────────────────────────────────────────────
 function epExecTable() {
   const st  = epState();
@@ -7562,7 +7666,7 @@ function epExecTable() {
        </div>`
     : `<div style="font-size:11px;color:var(--muted);margin:8px 16px">${total} executives</div>`;
 
-  // Build DCR lookup for "Active Today" column
+  // Build DCR lookup and growth direction for each executive
   const dcrByExec = {};
   (st.dcr?.by_exec || []).forEach(r => { dcrByExec[r.emp_code] = r; });
   const hasDcr = !!st.dcr;
@@ -7571,7 +7675,7 @@ function epExecTable() {
     <div style="padding:12px 16px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <div>
         <div style="font-weight:700;font-size:13px">Executive Scorecard</div>
-        <div style="font-size:10.5px;color:var(--muted)">Click a row → executive detail with agencies</div>
+        <div style="font-size:10.5px;color:var(--muted)">Direction = supply trend + collection % + field presence · Click row for detail</div>
       </div>
       <div style="flex:1;min-width:180px">
         <input class="inp" placeholder="Search executive or unit…" value="${esc(st.listSearch || '')}"
@@ -7583,12 +7687,13 @@ function epExecTable() {
         <thead>
           <tr>
             <th style="width:28px">#</th>
+            <th style="white-space:nowrap">Direction</th>
             ${th('exec_name',      'Executive',   false)}
             <th>Unit</th>
-            <th style="text-align:center;white-space:nowrap">Today</th>
+            <th style="text-align:center;white-space:nowrap">Yesterday</th>
+            <th class="r" style="white-space:nowrap">Visits</th>
             ${th('agencies',       'Agencies',    true)}
             ${th('supply',         'Supply',      true)}
-            ${th('collection',     'Collection',  true)}
             ${th('collection_pct', 'Coll %',      true)}
             ${th('outstanding',    'Outstanding', true)}
           </tr>
@@ -7596,26 +7701,40 @@ function epExecTable() {
         <tbody>
           ${rows.map((r, i) => {
             const dcrRow = dcrByExec[r.executive_code];
+            const dir    = epGrowthDir(r.executive_code, r.collection_pct);
+            const dirChip = `<td style="white-space:nowrap">
+              <div title="${dir.flags?.join(' · ') || dir.label}"
+                   style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:10px;font-size:10.5px;font-weight:700;background:${dir.bg};color:${dir.color}">
+                ${dir.icon} ${esc(dir.label)}
+              </div>
+            </td>`;
             const todayCell = !hasDcr ? '<td style="text-align:center;color:var(--muted)">—</td>'
               : dcrRow?.active_today
                 ? '<td style="text-align:center;font-size:15px" title="Active prev day">✅</td>'
                 : '<td style="text-align:center;font-size:15px" title="No activity prev day">❌</td>';
+            const visitsCell = !hasDcr || !dcrRow
+              ? '<td class="r" style="color:var(--muted)">—</td>'
+              : `<td class="r" style="font-weight:600;color:${dcrRow.visits>0?'var(--chart-1)':'var(--red)'}">
+                  ${dcrRow.visits}
+                  ${dcrRow.agencies_visited ? `<div style="font-size:9.5px;color:var(--muted);font-weight:400">${dcrRow.agencies_visited} ag.</div>` : ''}
+                </td>`;
             return `<tr class="rowbtn" onclick="epDrillExec('${esc(r.executive_code)}','${esc(r.exec_name || '')}')" style="${i % 2 ? 'background:var(--surface-2)' : ''}">
               <td style="color:var(--muted);font-size:11px">${r.rank || i + 1}</td>
+              ${dirChip}
               <td>
                 <div style="font-weight:600;font-size:13px">${esc(r.exec_name || '—')}</div>
                 <div style="font-size:10.5px;color:var(--muted)">${esc(r.state_name || '')}${r.executive_code ? ' · ' + esc(r.executive_code) : ''}</div>
               </td>
               <td style="font-size:12px;color:var(--muted)">${esc(r.main_unit_name || r.units || '—')}</td>
               ${todayCell}
+              ${visitsCell}
               <td class="r">${epFmtN(r.agency_count)}</td>
               <td class="r" style="font-weight:600">${epFmtN(r.total_supply)}</td>
-              <td class="r" style="color:var(--grn);font-weight:600">${epFmtC(r.total_collection)}</td>
               <td class="r" style="color:${epPctColor(r.collection_pct)};font-weight:700">${epPct(r.collection_pct)}</td>
               <td class="r" style="color:var(--red);font-weight:600">${epFmtC(r.total_outstanding)}</td>
             </tr>`;
           }).join('')}
-          ${!rows.length ? `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--muted)">No executives found for this period / filter</td></tr>` : ''}
+          ${!rows.length ? `<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--muted)">No executives found for this period / filter</td></tr>` : ''}
         </tbody>
       </table>
     </div>
@@ -7625,8 +7744,8 @@ function epExecTable() {
 
 // ── Main (list) view ──────────────────────────────────────────────────────────
 function epMainView() {
-  return pagehead('Executive Performance', 'Daily team view — field activity · supply · collection · outstanding · click any row to drill down') +
-    epFilterPanel() + epTodayPulse() + epKpiGrid() + epExecTable() +
+  return pagehead('Executive Performance', 'Real picture of what the team is doing — direction toward growth · click any row to drill down') +
+    epFilterPanel() + epTodayPulse() + epKpiGrid() + epGrowthIntelPanel() + epExecTable() +
     epAlertsSection() + epLastVisitSection() + epEmailModal();
 }
 
@@ -7686,17 +7805,56 @@ function epExecDetailView() {
     </div>
   </div>`;
 
-  const kpis = `<div class="vz-kgrid" style="margin-bottom:16px">
+  // Field activity data — prefer fresh detail endpoint data, fallback to preloaded DCR state
+  const totalVisits     = exec.total_visits     ?? dcrExec?.visits            ?? 0;
+  const activeDays      = exec.active_days      ?? dcrExec?.active_days       ?? 0;
+  const agenciesVisited = exec.agencies_visited ?? dcrExec?.agencies_visited  ?? 0;
+  const agencyCovPct    = exec.agency_count > 0 ? Math.round(agenciesVisited / exec.agency_count * 100) : 0;
+  const covColor        = agencyCovPct >= 80 ? 'var(--grn)' : agencyCovPct >= 50 ? '#d97706' : 'var(--red)';
+
+  const kpis = `<div class="vz-kgrid" style="margin-bottom:12px">
     ${vzKpi({ icon: '🏢', label: 'Agencies',        value: epFmtN(exec.agency_count),       status: 'info', sub: esc(exec.units || '') })}
     ${vzKpi({ icon: '📦', label: 'Supply (Period)', value: epFmtN(exec.total_supply),        status: 'info', sub: `${esc(data.from)} – ${esc(data.to)}` })}
     ${vzKpi({ icon: '₹',  label: 'Collection',      value: epFmtC(exec.total_collection),    status: 'good', sub: 'Period total' })}
     ${vzKpi({ icon: '⚠',  label: 'Outstanding',     value: epFmtC(exec.total_outstanding),   status: pct >= 80 ? 'good' : pct >= 50 ? 'warn' : 'bad', sub: `${epPct(pct)} recovery rate` })}
   </div>`;
 
+  // Field Activity Intelligence card
+  const notVisited = agencies.filter(a => !a.visit_count && a.status === 'Active');
+  const fieldCard = `<div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Field Activity — ${esc(data.from)} to ${esc(data.to)}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-bottom:10px">
+      <div style="text-align:center"><div style="font-size:22px;font-weight:800;color:var(--chart-1)">${totalVisits}</div><div style="font-size:9.5px;color:var(--muted);font-weight:700;text-transform:uppercase">Total Visits</div></div>
+      <div style="text-align:center"><div style="font-size:22px;font-weight:800;color:var(--chart-1)">${activeDays}</div><div style="font-size:9.5px;color:var(--muted);font-weight:700;text-transform:uppercase">Active Days</div></div>
+      <div style="flex:1;min-width:160px">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+          <span style="font-size:11px;color:var(--muted)">Agency Coverage</span>
+          <span style="font-size:12px;font-weight:800;color:${covColor}">${agenciesVisited}/${exec.agency_count} (${agencyCovPct}%)</span>
+        </div>
+        <div style="height:7px;background:var(--brd2);border-radius:4px;overflow:hidden">
+          <div style="height:100%;width:${agencyCovPct}%;background:${covColor};border-radius:4px"></div>
+        </div>
+        ${notVisited.length > 0
+          ? `<div style="font-size:10.5px;color:var(--red);margin-top:4px">⚠ ${notVisited.length} active agencies not visited this period</div>`
+          : agenciesVisited > 0 ? `<div style="font-size:10.5px;color:var(--grn);margin-top:4px">✅ All active agencies covered</div>` : ''}
+      </div>
+    </div>
+    ${notVisited.length > 0 ? `<div style="border-top:1px solid var(--brd2);padding-top:8px;margin-top:4px">
+      <div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px">Not Visited This Period (${notVisited.length})</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px">
+        ${notVisited.slice(0,12).map(a => `<span onclick="epDrillAgency('${esc(a.unit_code)}','${esc(a.ag_code)}','${esc(a.ag_name||'')}')"
+          style="cursor:pointer;padding:2px 8px;border-radius:10px;background:#fee2e2;color:#b91c1c;font-size:10.5px;font-weight:600">
+          ${esc(a.ag_name || a.ag_code)}${a.total_outstanding > 0 ? ' 💰' : ''}
+        </span>`).join('')}
+        ${notVisited.length > 12 ? `<span style="font-size:10.5px;color:var(--muted)">+${notVisited.length-12} more</span>` : ''}
+      </div>
+    </div>` : ''}
+  </div>`;
+
   const agTable = `<div class="card" style="overflow:hidden">
     <div style="padding:12px 16px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;gap:8px">
       <div style="font-weight:700;font-size:13px">Agencies (${agencies.length})</div>
-      <div style="font-size:10.5px;color:var(--muted)">Click a row for agency detail</div>
+      <div style="font-size:10.5px;color:var(--muted)">Visits = field visits in selected period · Click row for agency detail</div>
     </div>
     <div style="overflow-x:auto">
       <table>
@@ -7704,30 +7862,36 @@ function epExecDetailView() {
           <tr>
             <th style="width:32px">#</th>
             <th>Agency</th>
-            <th>Type</th>
             <th>City</th>
+            <th class="r" style="white-space:nowrap">Visits</th>
+            <th class="r" style="white-space:nowrap">Last Visit</th>
             <th class="r">Supply</th>
-            <th class="r">Collection</th>
             <th class="r">Coll %</th>
             <th class="r">Outstanding</th>
             <th>Status</th>
           </tr>
         </thead>
         <tbody>
-          ${agencies.map((a, i) => `<tr class="rowbtn" onclick="epDrillAgency('${esc(a.unit_code)}','${esc(a.ag_code)}','${esc(a.ag_name || '')}')" style="${i % 2 ? 'background:var(--surface-2)' : ''}">
-            <td style="color:var(--muted);font-size:11px">${i + 1}</td>
-            <td>
-              <div style="font-weight:600;font-size:12.5px">${esc(a.ag_name || '—')}</div>
-              <div style="font-size:10.5px;color:var(--muted)">${esc(a.unit_name || '')} · ${esc(a.ag_code)}</div>
-            </td>
-            <td style="font-size:11.5px;color:var(--muted)">${esc(a.ag_type_name || '—')}</td>
-            <td style="font-size:11.5px;color:var(--muted)">${esc(a.city_name || '—')}</td>
-            <td class="r" style="font-weight:600">${epFmtN(a.total_supply)}</td>
-            <td class="r" style="color:var(--grn);font-weight:600">${epFmtC(a.total_collection)}</td>
-            <td class="r" style="color:${epPctColor(a.collection_pct)};font-weight:700">${epPct(a.collection_pct)}</td>
-            <td class="r" style="color:var(--red);font-weight:600">${epFmtC(a.total_outstanding)}</td>
-            <td><span class="chip ${a.status === 'Active' ? 'good' : a.status === 'Suspended' ? 'crit' : 'warn'}" style="font-size:9.5px">${esc(a.status)}</span></td>
-          </tr>`).join('')}
+          ${agencies.map((a, i) => {
+            const visitColor = a.visit_count > 0 ? 'var(--chart-1)' : a.status === 'Active' ? 'var(--red)' : 'var(--muted)';
+            const lastVisitText = a.last_visit
+              ? esc(a.last_visit)
+              : a.status === 'Active' ? '<span style="color:var(--red);font-weight:700">Never</span>' : '—';
+            return `<tr class="rowbtn" onclick="epDrillAgency('${esc(a.unit_code)}','${esc(a.ag_code)}','${esc(a.ag_name || '')}')" style="${i % 2 ? 'background:var(--surface-2)' : ''}">
+              <td style="color:var(--muted);font-size:11px">${i + 1}</td>
+              <td>
+                <div style="font-weight:600;font-size:12.5px">${esc(a.ag_name || '—')}</div>
+                <div style="font-size:10.5px;color:var(--muted)">${esc(a.ag_type_name || '')} · ${esc(a.ag_code)}</div>
+              </td>
+              <td style="font-size:11.5px;color:var(--muted)">${esc(a.city_name || '—')}</td>
+              <td class="r" style="font-weight:700;color:${visitColor}">${a.visit_count || (a.status === 'Active' ? '0' : '—')}</td>
+              <td class="r" style="font-size:11px">${lastVisitText}</td>
+              <td class="r" style="font-weight:600">${epFmtN(a.total_supply)}</td>
+              <td class="r" style="color:${epPctColor(a.collection_pct)};font-weight:700">${epPct(a.collection_pct)}</td>
+              <td class="r" style="color:var(--red);font-weight:600">${epFmtC(a.total_outstanding)}</td>
+              <td><span class="chip ${a.status === 'Active' ? 'good' : a.status === 'Suspended' ? 'crit' : 'warn'}" style="font-size:9.5px">${esc(a.status)}</span></td>
+            </tr>`;
+          }).join('')}
           ${!agencies.length ? `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--muted)">No agencies found</td></tr>` : ''}
         </tbody>
       </table>
@@ -7736,7 +7900,7 @@ function epExecDetailView() {
 
   return pagehead('Executive Performance', '') +
     `<button class="btn sm" onclick="epBack()" style="margin-bottom:10px">← Back</button>` +
-    bc + execInfoCard + kpis + agTable + epEmailModal();
+    bc + execInfoCard + kpis + fieldCard + agTable + epEmailModal();
 }
 
 // ── Agency detail view ────────────────────────────────────────────────────────
