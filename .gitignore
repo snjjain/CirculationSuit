@@ -8,3 +8,7 @@ Input Reports/
 
 # stray logs outside logs/
 *.log
+
+# runtime process output (server restarts)
+*.err
+*.out
