@@ -354,6 +354,77 @@ module.exports = function registerSupplyDash(ctx) {
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
+  // ════ Day Compare — Command Centre analytics (cur vs baseline day) ════
+  // mode: prev (previous supply day) | d7 | d30 | covid (18-Mar-2020 pre-lockdown baseline)
+  app.get('/api/supply-dash/day-compare', async (req, res) => {
+    try {
+      const d = await refDates(req);
+      if (!d) return res.json({ no_data: true });
+      const sc2 = await scopeUnits(req);
+      const S = on(sc2, 'unit_code');
+      const mode = String(req.query.mode || 'prev');
+
+      // Baseline must be a data-complete day: partially-synced days (a few stray rows)
+      // produce absurd +4000% comparisons, so skip days below 30% of current-day volume.
+      const { rows: ctR } = await q(`SELECT SUM(sup_copy) t FROM supply_data WHERE supply_date = ?`, [d.cur]);
+      const curTotal = N(ctR[0]?.t);
+      async function solidDay(cond, p) {
+        const { rows } = await q(
+          `SELECT supply_date dt, SUM(sup_copy) t FROM supply_data
+           WHERE ${cond} GROUP BY supply_date ORDER BY supply_date DESC LIMIT 10`, p);
+        const hit = rows.find(r => N(r.t) >= curTotal * 0.3) || rows[0];
+        return hit ? new Date(hit.dt).toISOString().slice(0, 10) : null;
+      }
+      let baseDate;
+      if (mode === 'covid')     baseDate = await solidDay(`supply_date <= '2020-03-18'`, []);
+      else if (mode === 'd7')   baseDate = await solidDay('supply_date <= DATE_SUB(?, INTERVAL 7 DAY)', [d.cur]);
+      else if (mode === 'd30')  baseDate = await solidDay('supply_date <= DATE_SUB(?, INTERVAL 30 DAY)', [d.cur]);
+      else                      baseDate = await solidDay('supply_date < ?', [d.cur]);
+      if (!baseDate || baseDate === d.cur) return res.json({ no_data: true, cur_date: d.cur, mode });
+
+      const group = req.query.group === 'unit' ? 'unit' : 'state';
+      const inner = group === 'unit'
+        ? `SELECT unit_code gkey, MAX(unit_name) glabel, agcd,
+                  SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) cur,
+                  SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) prv
+             FROM supply_data WHERE supply_date IN (?, ?)${S}
+             GROUP BY unit_code, agcd`
+        : `SELECT COALESCE(NULLIF(state_name,''),'OTHER') gkey,
+                  COALESCE(NULLIF(state_name,''),'OTHER') glabel, agcd,
+                  SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) cur,
+                  SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) prv
+             FROM supply_data WHERE supply_date IN (?, ?)${S}
+             GROUP BY gkey, agcd`;
+      const { rows } = await q(
+        `SELECT gkey, MAX(glabel) glabel,
+                SUM(cur) cur, SUM(prv) prv,
+                SUM(cur > prv AND prv > 0)  inc_agents,
+                SUM(cur < prv AND cur > 0)  dec_agents,
+                SUM(cur = prv AND cur > 0)  same_agents,
+                SUM(prv > 0 AND cur = 0)    closed_agents,
+                SUM(prv = 0 AND cur > 0)    new_agents,
+                SUM(CASE WHEN cur > prv AND prv > 0 THEN cur - prv ELSE 0 END) inc_copies,
+                SUM(CASE WHEN cur < prv AND cur > 0 THEN prv - cur ELSE 0 END) dec_copies,
+                SUM(CASE WHEN cur = 0 THEN prv ELSE 0 END) closed_copies,
+                SUM(CASE WHEN prv = 0 THEN cur ELSE 0 END) new_copies
+         FROM (${inner}) x GROUP BY gkey ORDER BY cur DESC`,
+        [d.cur, baseDate, d.cur, baseDate, ...sc2.params]);
+
+      res.json({
+        cur_date: d.cur, base_date: baseDate, mode, group,
+        rows: rows.map(r => ({
+          key: r.gkey, label: r.glabel,
+          cur: N(r.cur), prev: N(r.prv), diff: N(r.cur) - N(r.prv),
+          pct: r1(pct(N(r.cur), N(r.prv))),
+          inc_agents: N(r.inc_agents), dec_agents: N(r.dec_agents), same_agents: N(r.same_agents),
+          closed_agents: N(r.closed_agents), new_agents: N(r.new_agents),
+          inc_copies: N(r.inc_copies), dec_copies: N(r.dec_copies),
+          closed_copies: N(r.closed_copies), new_copies: N(r.new_copies),
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
   // ════ 11. Exceptions ════
   app.get('/api/supply-dash/exceptions', async (req, res) => {
     try {

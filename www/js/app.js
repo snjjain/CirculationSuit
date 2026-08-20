@@ -2321,7 +2321,28 @@ function _cmdLoad() {
       .then(d => { c.dcr = d; c._dcrLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._dcrLoading = false; c.dcr = { _err: true }; if (S.screen === 'command') render(); });
   }
+  const _grp  = S.live.cmdGrp  || 'state';
+  const _mode = S.live.cmdMode || 'prev';
+  const _dcK  = 'dc_' + _grp + '_' + _mode;
+  if (!c[_dcK] && !c['_l' + _dcK]) {
+    c['_l' + _dcK] = true;
+    fetch(_cmdBase() + '/api/supply-dash/day-compare?group=' + _grp + '&mode=' + _mode, { headers: api.h() })
+      .then(r => r.json())
+      .then(d => { c[_dcK] = d; c['_l' + _dcK] = false; if (S.screen === 'command') render(); })
+      .catch(() => { c['_l' + _dcK] = false; c[_dcK] = { _err: true }; if (S.screen === 'command') render(); });
+  }
+  if (!c.tr && !c._trLoading) {
+    c._trLoading = true;
+    fetch(_cmdBase() + '/api/supply-dash/trend?granularity=daily&days=90', { headers: api.h() })
+      .then(r => r.json())
+      .then(d => { c.tr = d; c._trLoading = false; if (S.screen === 'command') render(); })
+      .catch(() => { c._trLoading = false; c.tr = { _err: true }; if (S.screen === 'command') render(); });
+  }
 }
+
+window.cmdSetGrp  = g => { S.live.cmdGrp  = g; render(); };
+window.cmdSetMode = m => { S.live.cmdMode = m; render(); };
+window.cmdSetTab  = (k, v) => { (S.live.cmdTabs || (S.live.cmdTabs = {}))[k] = v; render(); };
 
 function _cmdSkel() {
   return `<div style="display:flex;gap:10px;flex-wrap:wrap;padding:4px 0">
@@ -2379,6 +2400,192 @@ function _cmdModuleCard({ icon, title, period, onClick, kpis, footer, error, loa
     </div>
     ${body}
   </div>`;
+}
+
+/* ── Command Centre analytics: cur-vs-baseline charts ───── */
+function _cmdSeg(opts, active, fn) {
+  return `<div style="display:inline-flex;background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:2px;gap:2px;flex-wrap:wrap">
+    ${opts.map(([v, l]) => `<button onclick="${fn}('${v}')" style="border:none;cursor:pointer;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;background:${v === active ? 'var(--surf)' : 'transparent'};color:${v === active ? 'var(--ink)' : 'var(--muted)'};box-shadow:${v === active ? '0 1px 3px rgba(0,0,0,.15)' : 'none'}">${l}</button>`).join('')}
+  </div>`;
+}
+
+function _cmdChip(diff, pctv) {
+  if (!diff) return `<span style="font-size:10.5px;font-weight:700;color:var(--muted);background:var(--bg);padding:1px 7px;border-radius:9px;white-space:nowrap">0</span>`;
+  const up = diff > 0;
+  return `<span style="font-size:10.5px;font-weight:700;color:${up ? 'var(--grn)' : 'var(--red)'};background:${up ? 'var(--grn-l)' : 'var(--red-l)'};padding:1px 7px;border-radius:9px;white-space:nowrap">${up ? '▲' : '▼'} ${VZ.fmt(Math.abs(diff))}${pctv != null ? ' · ' + Math.abs(pctv) + '%' : ''}</span>`;
+}
+
+function _cmdBullet(rows, curLbl, baseLbl) {
+  const max = Math.max(...rows.map(r => Math.max(r.cur, r.prev)), 1);
+  const body = rows.map(r => {
+    const cw = (r.cur / max * 100).toFixed(1), pw = (r.prev / max * 100).toFixed(1);
+    const color = r.diff > 0 ? 'var(--grn)' : r.diff < 0 ? 'var(--red)' : 'var(--chart-1)';
+    const tip = `<b>${esc(r.label)}</b><br>${curLbl}: ${VZ.full(r.cur)}<br>${baseLbl}: ${VZ.full(r.prev)}<br>Δ ${r.diff >= 0 ? '+' : ''}${VZ.full(r.diff)}${r.pct != null ? ' (' + (r.pct >= 0 ? '+' : '') + r.pct + '%)' : ''}`;
+    return `<div data-tip="${esc(tip)}" style="display:grid;grid-template-columns:minmax(62px,108px) 1fr auto;gap:10px;align-items:center;padding:5px 0">
+      <span style="font-size:11px;font-weight:600;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.label)}</span>
+      <div style="position:relative;height:15px;background:var(--bg);border-radius:8px">
+        <div style="position:absolute;top:0;bottom:0;left:0;width:${pw}%;background:var(--brd);border-radius:8px"></div>
+        <div style="position:absolute;top:2px;bottom:2px;left:0;width:${cw}%;background:${color};border-radius:7px;opacity:.92"></div>
+        <div style="position:absolute;top:-2px;bottom:-2px;left:${pw}%;width:2px;background:var(--ink-2)"></div>
+      </div>
+      <span style="display:flex;gap:7px;align-items:center;justify-content:flex-end;min-width:118px">
+        <b class="num" style="font-size:12px;color:var(--ink)">${VZ.fmt(r.cur)}</b>${_cmdChip(r.diff, r.pct)}
+      </span>
+    </div>`;
+  }).join('');
+  return body + `<div style="display:flex;gap:14px;font-size:10px;color:var(--muted);margin-top:8px;flex-wrap:wrap">
+    <span><i style="display:inline-block;width:16px;height:8px;background:var(--chart-1);border-radius:4px;vertical-align:middle;margin-right:4px"></i>current (green ▲ / red ▼ vs baseline)</span>
+    <span><i style="display:inline-block;width:16px;height:8px;background:var(--brd);border-radius:4px;vertical-align:middle;margin-right:4px"></i>baseline track</span>
+    <span><i style="display:inline-block;width:2px;height:10px;background:var(--ink-2);vertical-align:middle;margin-right:4px"></i>baseline mark</span>
+  </div>`;
+}
+
+function _cmdDiverge(rows, o) {
+  const max = Math.max(...rows.map(r => Math.max(r[o.l], r[o.r])), 1);
+  const head = `<div style="display:grid;grid-template-columns:minmax(62px,108px) 44px 1fr 1fr 44px;gap:6px;font-size:9.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;padding-bottom:5px">
+    <span></span><span style="text-align:right;color:${o.lColor}">${o.lLbl}</span><span></span><span></span><span style="color:${o.rColor}">${o.rLbl}</span></div>`;
+  const body = rows.map(r => {
+    const lv = r[o.l], rv = r[o.r];
+    const lw = Math.max(lv / max * 100, lv > 0 ? 2 : 0).toFixed(1);
+    const rw = Math.max(rv / max * 100, rv > 0 ? 2 : 0).toFixed(1);
+    return `<div data-tip="${esc(o.tip(r))}" style="display:grid;grid-template-columns:minmax(62px,108px) 44px 1fr 1fr 44px;gap:6px;align-items:center;padding:4px 0">
+      <span style="font-size:11px;font-weight:600;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.label)}</span>
+      <span class="num" style="font-size:11px;font-weight:700;text-align:right;color:${lv ? o.lColor : 'var(--muted)'}">${o.fmt(lv)}</span>
+      <div style="height:13px;background:var(--bg);border-radius:7px 0 0 7px;position:relative;border-right:1px solid var(--brd)">
+        <div style="position:absolute;right:0;top:1.5px;bottom:1.5px;width:${lw}%;background:${o.lColor};border-radius:6px 0 0 6px;opacity:.88"></div>
+      </div>
+      <div style="height:13px;background:var(--bg);border-radius:0 7px 7px 0;position:relative">
+        <div style="position:absolute;left:0;top:1.5px;bottom:1.5px;width:${rw}%;background:${o.rColor};border-radius:0 6px 6px 0;opacity:.88"></div>
+      </div>
+      <span class="num" style="font-size:11px;font-weight:700;color:${rv ? o.rColor : 'var(--muted)'}">${o.fmt(rv)}</span>
+    </div>`;
+  }).join('');
+  return head + body;
+}
+
+function _cmdDataTable(cols, rows) {
+  const th = cols.map((cName, i) => `<th style="text-align:${i ? 'right' : 'left'};padding:6px 8px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;border-bottom:2px solid var(--brd);white-space:nowrap">${cName}</th>`).join('');
+  const trs = rows.map(r => `<tr>${r.map((v, i) => `<td class="num" style="text-align:${i ? 'right' : 'left'};padding:6px 8px;font-size:12px;border-bottom:1px solid var(--brd);white-space:nowrap">${v}</td>`).join('')}</tr>`).join('');
+  return `<div style="overflow-x:auto;max-height:340px;overflow-y:auto"><table style="width:100%;border-collapse:collapse"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table></div>`;
+}
+
+function _cmdChartCard(o) {
+  const tab = (S.live.cmdTabs || {})[o.key] || 'chart';
+  const tabBtn = (v, l) => `<button onclick="cmdSetTab('${o.key}','${v}')" style="border:none;cursor:pointer;font-size:11px;font-weight:600;padding:3px 10px;border-radius:6px;background:${tab === v ? 'var(--bg)' : 'transparent'};color:${tab === v ? 'var(--ink)' : 'var(--muted)'}">${l}</button>`;
+  let body;
+  if (o.loading)      body = _cmdSkel();
+  else if (o.error)   body = `<p style="color:var(--red);font-size:13px;margin:8px 0">Failed to load. <a href="#" onclick="S.live.cmd=null;render();return false" style="color:var(--acc)">Retry</a></p>`;
+  else if (o.empty)   body = `<p style="color:var(--muted);font-size:12.5px;margin:8px 0">${o.empty}</p>`;
+  else                body = tab === 'data' && o.data ? o.data : o.chart;
+  return `<div class="_cmd-card" style="${o.span ? 'grid-column:1/-1' : ''}">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px;flex-wrap:wrap">
+      <span style="font-size:17px;line-height:1">${o.icon}</span>
+      <div style="min-width:0;flex:1">
+        <div style="font-weight:700;font-size:13.5px;color:var(--ink)">${o.title}</div>
+        ${o.sub ? `<div style="font-size:11px;color:var(--muted)">${o.sub}</div>` : ''}
+      </div>
+      ${o.data && !o.loading && !o.error && !o.empty ? `<div style="display:inline-flex;border:1px solid var(--brd);border-radius:7px;padding:2px;gap:2px">${tabBtn('chart', '📊 Chart')}${tabBtn('data', '▦ Data')}</div>` : ''}
+    </div>
+    ${body}
+    ${o.foot && tab === 'chart' ? `<div style="font-size:10.5px;color:var(--muted);margin-top:7px">${o.foot}</div>` : ''}
+  </div>`;
+}
+
+function _cmdAnalyticsSection(c) {
+  const grp   = S.live.cmdGrp  || 'state';
+  const mode  = S.live.cmdMode || 'prev';
+  const dc    = c['dc_' + grp + '_' + mode];
+  const tr    = c.tr;
+  const dmy   = iso => iso ? String(iso).split('-').reverse().join('/') : '—';
+  const modeL = { prev: 'Previous Day', d7: '7 Days Ago', d30: '30 Days Ago', covid: 'Pre-Covid (18/03/2020)' }[mode];
+
+  const loading = !dc, err = dc?._err;
+  const noData  = dc && !err && dc.no_data;
+  const all     = (!loading && !err && !noData) ? dc.rows : null;
+  let chartRows = all, moreNote = '';
+  if (all && all.length > 14) {
+    chartRows = all.slice(0, 14);
+    moreNote = `Top 14 of ${all.length} ${grp === 'unit' ? 'units' : 'groups'} by current copies — full list in the Data tab`;
+  }
+  const curL  = all ? 'Current · ' + dmy(dc.cur_date)  : 'Current';
+  const baseL = all ? 'Baseline · ' + dmy(dc.base_date) : 'Baseline';
+  const emptyMsg = noData
+    ? (mode === 'covid' ? 'No supply data loaded on/before 18/03/2020 yet — historical sync still in progress.' : 'No comparison data available for this selection.')
+    : null;
+
+  /* totals strip */
+  let totals = '';
+  if (all) {
+    const t = all.reduce((a, r) => ({
+      cur: a.cur + r.cur, prev: a.prev + r.prev,
+      inc: a.inc + r.inc_agents, dec: a.dec + r.dec_agents,
+      nw: a.nw + r.new_agents, cl: a.cl + r.closed_agents,
+    }), { cur: 0, prev: 0, inc: 0, dec: 0, nw: 0, cl: 0 });
+    const td = t.cur - t.prev;
+    const tp = t.prev ? Math.round(td / t.prev * 1000) / 10 : null;
+    totals = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:8px;margin-bottom:12px">
+      ${[[VZ.full(t.cur), 'Net Paid Sale · ' + dmy(dc.cur_date), 'var(--ink)'],
+         [VZ.full(t.prev), 'Baseline · ' + dmy(dc.base_date), 'var(--muted)'],
+         [(td >= 0 ? '+' : '−') + VZ.fmt(Math.abs(td)) + (tp != null ? ' (' + (tp >= 0 ? '+' : '') + tp + '%)' : ''), 'Net Change', td >= 0 ? 'var(--grn)' : 'var(--red)'],
+         ['▲ ' + VZ.full(t.inc), 'Agents Grew', 'var(--grn)'],
+         ['▼ ' + VZ.full(t.dec), 'Agents Declined', 'var(--red)'],
+         [VZ.full(t.nw) + ' / ' + VZ.full(t.cl), 'New / Closed Agencies', t.cl > t.nw ? 'var(--red)' : 'var(--grn)']]
+        .map(([v, l, col]) => `<div style="background:var(--surf);border:1px solid var(--brd);border-radius:9px;padding:9px 11px">
+          <div class="num" style="font-size:15px;font-weight:700;color:${col};line-height:1.2">${v}</div>
+          <div style="font-size:9.5px;color:var(--muted);margin-top:3px;text-transform:uppercase;letter-spacing:.04em">${l}</div>
+        </div>`).join('')}
+    </div>`;
+  }
+
+  /* data tables */
+  const npsData = all ? _cmdDataTable(
+    [grp === 'unit' ? 'Unit' : 'State', 'Baseline', 'Current', 'Δ Copies', 'Δ %'],
+    all.map(r => [esc(r.label), VZ.full(r.prev), VZ.full(r.cur), _cmdChip(r.diff, null), r.pct != null ? (r.pct >= 0 ? '+' : '') + r.pct + '%' : '—'])) : null;
+  const movData = all ? _cmdDataTable(
+    [grp === 'unit' ? 'Unit' : 'State', '▲ Grew', '▼ Declined', 'No Change', 'New', 'Closed'],
+    all.map(r => [esc(r.label), VZ.full(r.inc_agents), VZ.full(r.dec_agents), VZ.full(r.same_agents), VZ.full(r.new_agents), VZ.full(r.closed_agents)])) : null;
+  const copData = all ? _cmdDataTable(
+    [grp === 'unit' ? 'Unit' : 'State', 'Copies ▲', 'Copies ▼', 'Lost (Closed)', 'Gained (New)', 'Net'],
+    all.map(r => [esc(r.label), VZ.full(r.inc_copies), VZ.full(r.dec_copies), VZ.full(r.closed_copies), VZ.full(r.new_copies), _cmdChip(r.diff, null)])) : null;
+  const chnData = all ? _cmdDataTable(
+    [grp === 'unit' ? 'Unit' : 'State', 'Closed Agencies', 'Copies Lost', 'New Agencies', 'Copies Gained'],
+    all.map(r => [esc(r.label), VZ.full(r.closed_agents), VZ.full(r.closed_copies), VZ.full(r.new_agents), VZ.full(r.new_copies)])) : null;
+
+  const common = { loading, error: err, empty: emptyMsg };
+  const movTip = r => `<b>${esc(r.label)}</b><br>▲ grew: ${VZ.full(r.inc_agents)} · ▼ declined: ${VZ.full(r.dec_agents)}<br>no change: ${VZ.full(r.same_agents)}<br>new: ${VZ.full(r.new_agents)} · closed: ${VZ.full(r.closed_agents)}`;
+  const copTip = r => `<b>${esc(r.label)}</b><br>copies gained ▲: ${VZ.full(r.inc_copies)} · lost ▼: ${VZ.full(r.dec_copies)}<br>closed −${VZ.full(r.closed_copies)} · new +${VZ.full(r.new_copies)}<br><b>net Δ ${r.diff >= 0 ? '+' : ''}${VZ.full(r.diff)}</b>`;
+  const chnTip = r => `<b>${esc(r.label)}</b><br>closed: ${VZ.full(r.closed_agents)} agencies (−${VZ.full(r.closed_copies)} copies)<br>introduced: ${VZ.full(r.new_agents)} agencies (+${VZ.full(r.new_copies)} copies)`;
+
+  return `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:20px 0 10px">
+      <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase;padding-left:2px;flex:1;min-width:180px">
+        Supply Analytics — Current vs ${modeL}${all ? ' · ' + dmy(dc.cur_date) + ' vs ' + dmy(dc.base_date) : ''}
+      </div>
+      ${_cmdSeg([['state', 'By State'], ['unit', 'By Unit']], grp, 'cmdSetGrp')}
+      ${_cmdSeg([['prev', 'Prev Day'], ['d7', '7 Days'], ['d30', '30 Days'], ['covid', 'Covid 18/03/20']], mode, 'cmdSetMode')}
+    </div>
+    ${totals}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+      ${_cmdChartCard({ ...common, key: 'nps', icon: '📰', title: 'Net Paid Sale', sub: curL + ' vs ' + baseL,
+        chart: chartRows ? _cmdBullet(chartRows, curL, baseL) : '', data: npsData, foot: moreNote })}
+      ${_cmdChartCard({ ...common, key: 'mov', icon: '🧭', title: 'Agent Movement', sub: 'Agencies whose copies moved vs baseline',
+        chart: chartRows ? _cmdDiverge(chartRows, { l: 'dec_agents', r: 'inc_agents', lColor: 'var(--red)', rColor: 'var(--grn)', lLbl: '▼ Declined', rLbl: '▲ Grew', fmt: VZ.full, tip: movTip }) : '',
+        data: movData, foot: moreNote })}
+      ${_cmdChartCard({ ...common, key: 'cop', icon: '⚖️', title: 'Copies Variance', sub: 'Copies gained vs lost among running agencies',
+        chart: chartRows ? _cmdDiverge(chartRows, { l: 'dec_copies', r: 'inc_copies', lColor: 'var(--red)', rColor: 'var(--grn)', lLbl: '▼ Lost', rLbl: '▲ Gained', fmt: VZ.fmt, tip: copTip }) : '',
+        data: copData, foot: moreNote })}
+      ${_cmdChartCard({ ...common, key: 'chn', icon: '🔄', title: 'Agency Churn', sub: 'Closed vs newly introduced agencies',
+        chart: chartRows ? _cmdDiverge(chartRows, { l: 'closed_agents', r: 'new_agents', lColor: 'var(--red)', rColor: 'var(--grn)', lLbl: 'Closed', rLbl: 'New', fmt: VZ.full, tip: chnTip }) : '',
+        data: chnData, foot: moreNote })}
+      ${_cmdChartCard({
+        key: 'trend', icon: '📈', title: 'Net Sale Trend', sub: 'Daily copies · last 90 days', span: true,
+        loading: !tr, error: tr?._err,
+        empty: tr && !tr._err && !(tr.rows || []).length ? 'No trend data available.' : null,
+        chart: tr && !tr._err && (tr.rows || []).length
+          ? vzLine({ values: tr.rows.map(r => r.copies), labels: tr.rows.map(r => r.label), valueLabel: 'Copies' })
+          : '',
+      })}
+    </div>`;
 }
 
 VIEWS.command = () => {
@@ -2604,24 +2811,7 @@ VIEWS.command = () => {
       })}
     </div>
 
-    ${si && !si._err && (si.late?.length || si.app_not_running?.length) ? `
-    <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase;margin:18px 0 10px;padding-left:2px">
-      Taxi Deliveries — State / Unit / Route Detail · ${si.dates?.slice(-1)[0] || ''}
-    </div>
-    ${si.late?.length ? `<div class="card pad" style="margin-bottom:12px">
-      <div style="margin-bottom:10px">
-        <h3 style="margin:0 0 3px;font-size:14px;font-weight:700;color:#dc2626">SUPPLY TAXI REACHED AFTER 6 AM</h3>
-        <div style="font-size:11px;color:var(--muted)">${si.late.length} route${si.late.length!==1?'s':''} · Click a button in the row to send the alert</div>
-      </div>
-      <div style="overflow-x:auto">${renderAlertRows(si.late, 'last_late', 'color:#dc2626;font-weight:bold')}</div>
-    </div>` : ''}
-    ${si.app_not_running?.length ? `<div class="card pad" style="margin-bottom:12px">
-      <div style="margin-bottom:10px">
-        <h3 style="margin:0 0 3px;font-size:14px;font-weight:700;color:#d97706">APP NOT RUNNING (App KM = 0)</h3>
-        <div style="font-size:11px;color:var(--muted)">${si.app_not_running.length} route${si.app_not_running.length!==1?'s':''} · Click a button in the row to send the alert</div>
-      </div>
-      <div style="overflow-x:auto">${renderAlertRows(si.app_not_running, 'vehicle_no', 'color:#d97706;font-weight:bold')}</div>
-    </div>` : ''}` : ''}
+    ${_cmdAnalyticsSection(c)}
 
     <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase;margin:18px 0 10px;padding-left:2px">
       Pending Oracle Sync — will be connected progressively
