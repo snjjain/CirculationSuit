@@ -233,7 +233,13 @@ EXIT
 }
 
 // ── Run sqlplus: credentials sent via stdin (never on command line / disk) ───
+const _ora = require('./ora_client');
 function runSqlplus(sqlFile) {
+  // node-oracledb driver (server, no sqlplus binary) — else spawn sqlplus
+  if (_ora.driverAvailable()) return _ora.runViaDriver(sqlFile);
+  return _runSqlplusSpawn(sqlFile);
+}
+function _runSqlplusSpawn(sqlFile) {
   return new Promise((resolve, reject) => {
     const connectString =
       `${process.env.ORA_USER}/${process.env.ORA_PASSWORD}@//` +
@@ -326,7 +332,7 @@ async function main() {
       process.exit(1);
     }
   }
-  if (!fs.existsSync(SQLPLUS)) {
+  if ((!_ora.driverAvailable() && !fs.existsSync(SQLPLUS))) {
     log(`ERROR: sqlplus not found at ${SQLPLUS} (set SQLPLUS_PATH in .env)`);
     process.exit(1);
   }

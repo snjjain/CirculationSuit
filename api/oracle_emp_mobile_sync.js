@@ -45,7 +45,13 @@ const MYSQL = {
 
 function log(m) { console.log(`[emp-mobile-sync] ${m}`); }
 
+const _ora = require('./ora_client');
 function runSqlplus(sqlFile) {
+  // node-oracledb driver (server, no sqlplus binary) — else spawn sqlplus
+  if (_ora.driverAvailable()) return _ora.runViaDriver(sqlFile);
+  return _runSqlplusSpawn(sqlFile);
+}
+function _runSqlplusSpawn(sqlFile) {
   return new Promise((resolve, reject) => {
     const connectStr = `${process.env.ORA_USER}/${process.env.ORA_PASSWORD}@//${process.env.ORA_HOST}:${process.env.ORA_PORT || 1521}/${process.env.ORA_SERVICE}`;
     const proc = spawn(SQLPLUS, ['-L', '-S', '/nolog'], { env: { ...process.env, NLS_LANG: 'AMERICAN_AMERICA.AL32UTF8' }, windowsHide: true });
@@ -104,7 +110,7 @@ EXIT
   for (const k of ['ORA_HOST', 'ORA_SERVICE', 'ORA_USER', 'ORA_PASSWORD']) {
     if (!process.env[k]) { log(`ERROR: ${k} not set in .env`); process.exit(1); }
   }
-  if (!fs.existsSync(SQLPLUS)) { log(`ERROR: sqlplus not found at ${SQLPLUS}`); process.exit(1); }
+  if ((!_ora.driverAvailable() && !fs.existsSync(SQLPLUS))) { log(`ERROR: sqlplus not found at ${SQLPLUS}`); process.exit(1); }
 
   const c = await mysql.createConnection(MYSQL);
   try {

@@ -99,7 +99,13 @@ EXIT
 }
 
 // ── Run sqlplus, pass CONNECT via stdin ───────────────────────────────────────
+const _ora = require('./ora_client');
 function runSqlplus(sqlFile) {
+  // node-oracledb driver (server, no sqlplus binary) — else spawn sqlplus
+  if (_ora.driverAvailable()) return _ora.runViaDriver(sqlFile);
+  return _runSqlplusSpawn(sqlFile);
+}
+function _runSqlplusSpawn(sqlFile) {
   return new Promise((resolve, reject) => {
     const proc = spawn(SQLPLUS, ['-L', '-S', '/nolog'], {
       env: { ...process.env, NLS_LANG: 'AMERICAN_AMERICA.AL32UTF8' },

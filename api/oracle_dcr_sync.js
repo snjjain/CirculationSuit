@@ -43,7 +43,13 @@ const MYSQL_CFG = {
 
 const SQLPLUS_TIMEOUT_MS = 25 * 60 * 1000; // 25 min per query — kills hung Oracle calls
 
+const _ora = require('./ora_client');
 function runSqlplus(sqlFile) {
+  // node-oracledb driver (server, no sqlplus binary) — else spawn sqlplus
+  if (_ora.driverAvailable()) return _ora.runViaDriver(sqlFile);
+  return _runSqlplusSpawn(sqlFile);
+}
+function _runSqlplusSpawn(sqlFile) {
   return new Promise((resolve, reject) => {
     const connectStr = `${process.env.ORA_USER}/${process.env.ORA_PASSWORD}` +
       `@//${process.env.ORA_HOST}:${process.env.ORA_PORT || 1521}/${process.env.ORA_SERVICE}`;
