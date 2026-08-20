@@ -2345,17 +2345,20 @@ function _dcrAPlanText() {
   const visits = p.visits || [];
   const pri = s => s === 'high' ? '🔴' : s === 'medium' ? '🟡' : '⚪';
   const total = visits.reduce((s, v) => s + (v.target_amount || 0), 0);
+  const dt = p.date ? p.date.split('-').reverse().join('/') : '';
   const L = [];
-  L.push(`🗞 <b>Patrika Vitran — Visit Plan</b>`);
-  L.push(`📅 ${p.date || ''} · 👤 ${p.exec || ''} (${p.unit || ''})`);
+  L.push(`🗞 राजस्थान पत्रिका — कल का विज़िट प्लान`);
+  L.push(`📅 ${dt} · 👤 ${p.exec || ''} (${p.unit || ''})`);
   if (p.focus_message) L.push(`\n🎯 ${p.focus_message}`);
-  if (total > 0) L.push(`💰 Total target: ₹${total.toLocaleString('en-IN')}`);
+  if (total > 0) L.push(`💰 कुल वसूली लक्ष्य: ₹${total.toLocaleString('en-IN')}`);
   L.push('');
   visits.forEach((v, i) => {
-    L.push(`${v.rank || i + 1}. ${pri(v.priority)} <b>${v.ag_name || ''}</b>${v.city ? ' (' + v.city + ')' : ''}`);
-    if (v.action) L.push(`   ${v.action}${v.target_amount > 0 ? ' · Target ₹' + v.target_amount.toLocaleString('en-IN') : ''}`);
+    L.push(`${v.rank || i + 1}. ${pri(v.priority)} ${v.ag_name || ''}${v.city ? ' (' + v.city + ')' : ''}`);
+    if (v.action) L.push(`   ${v.action}${v.target_amount > 0 ? ' · लक्ष्य ₹' + v.target_amount.toLocaleString('en-IN') : ''}`);
     if (v.key_point) L.push(`   ⚠ ${v.key_point}`);
   });
+  L.push('');
+  L.push(`📈 हर विज़िट पर copy बढ़ाने (growth) का commitment ज़रूर लें — यही हमारा मुख्य लक्ष्य है! 💪`);
   return L.join('\n');
 }
 

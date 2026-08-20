@@ -1377,7 +1377,7 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const agText = agList.map((a,i) =>
         `${i+1}. ${a.name} (${a.city||'-'}) | OS:Rs${a.os.toLocaleString('en-IN')} | Last visit:${a.days>=999?'Never':a.days+'d ago'} | 60d visits:${a.cnt60} | Followup:Rs${a.fup_amt} by ${a.fup_date||'?'} | Note:"${a.last_rmk}"`
       ).join('\n');
-      const planPrompt = `You are a circulation manager at Rajasthan Patrika newspaper. Create a smart next-day field visit plan for executive ${execName} working in ${unitName} for the date ${tDate}.\n\nPrioritization logic:\n1. High outstanding balance (OS) = highest priority = needs recovery\n2. Pending followup commitment (fup_amt > 0) = visit to collect what was promised\n3. Not visited in 30+ days = coverage gap\n4. Never visited = must cover\n\nLimit to top 8 agencies. Write brief, actionable instructions.\n\nAgencies available:\n${agText}\n\nReturn ONLY valid JSON (no prose before or after):\n{"exec":"${execName}","unit":"${unitName}","date":"${tDate}","focus_message":"...motivational message in 1 line...","total_target":0,"visits":[{"rank":1,"ag_code":"...","ag_name":"...","city":"...","priority":"high|medium|low","action":"...collect/survey/followup instruction...","target_amount":0,"key_point":"...one critical thing to address..."}]}`;
+      const planPrompt = `You are a circulation manager at Rajasthan Patrika newspaper. Create a smart next-day field visit plan for executive ${execName} working in ${unitName} for the date ${tDate}.\n\nPrioritization logic:\n1. High outstanding balance (OS) = highest priority = needs recovery\n2. Pending followup commitment (fup_amt > 0) = visit to collect what was promised\n3. Not visited in 30+ days = coverage gap\n4. Never visited = must cover\n\nMOST IMPORTANT: Growth (increasing newspaper copies) is our MAIN GOAL. In EVERY visit's key_point, include asking the agent for a growth commitment (copy बढ़ाने का commitment).\n\nLimit to top 8 agencies. Write brief, actionable instructions.\nWrite focus_message, action and key_point in simple HINDI (Devanagari script). Keep agency names, amounts and dates as-is.\n\nAgencies available:\n${agText}\n\nReturn ONLY valid JSON (no prose before or after):\n{"exec":"${execName}","unit":"${unitName}","date":"${tDate}","focus_message":"...1 line motivational message in Hindi ending with growth reminder...","total_target":0,"visits":[{"rank":1,"ag_code":"...","ag_name":"...","city":"...","priority":"high|medium|low","action":"...Hindi instruction: वसूली/विज़िट/followup...","target_amount":0,"key_point":"...Hindi: one critical point + growth commitment ask..."}]}`;
 
       // Tier 1: Claude (if key configured)
       if (API_KEY) {
@@ -1409,22 +1409,25 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
         }
       }
 
-      // Tier 3: FREE rule engine — deterministic prioritization, always available
+      // Tier 3: FREE rule engine — deterministic prioritization, always available.
+      // Hindi output + growth-commitment ask on EVERY visit (growth is the main goal).
       const pick = agList.slice(0, 8).map((a, i) => {
         const priority = (a.os > 50000 || a.fup_amt > 0) ? 'high' : (a.os > 10000 || a.days >= 30) ? 'medium' : 'low';
         let action, key_point;
         if (a.fup_amt > 0) {
-          action = `Collect promised ₹${a.fup_amt.toLocaleString('en-IN')}${a.fup_date ? ' (was due ' + String(a.fup_date).slice(0,10) + ')' : ''}`;
-          key_point = 'Agent already committed this amount — remind and collect';
+          action = `वादा की गई राशि ₹${a.fup_amt.toLocaleString('en-IN')} वसूल करें${a.fup_date ? ' (due: ' + String(a.fup_date).slice(0,10) + ')' : ''}`;
+          key_point = 'एजेंट ने यह राशि देने का वादा किया था — याद दिलाकर वसूली करें, साथ में copy बढ़ाने का commitment लें';
         } else if (a.os > 0) {
-          action = `Recovery visit — outstanding ₹${a.os.toLocaleString('en-IN')}`;
-          key_point = a.days >= 30 ? `Not visited in ${a.days >= 999 ? 'ever' : a.days + ' days'} — rebuild contact first` : 'Get payment or a dated commitment';
+          action = `बकाया ₹${a.os.toLocaleString('en-IN')} की वसूली करें`;
+          key_point = a.days >= 30
+            ? `${a.days >= 999 ? 'कभी विज़िट नहीं हुई' : a.days + ' दिनों से विज़िट नहीं हुई'} — पहले संपर्क बनाएँ, फिर वसूली और growth की बात करें`
+            : 'नक़द लें या पक्की तारीख़ का वादा लें — और copy बढ़ाने का commitment ज़रूर लें';
         } else if (a.days >= 999) {
-          action = 'First visit — introduce, verify agency status, survey area';
-          key_point = 'Never visited — must cover';
+          action = 'पहली विज़िट — परिचय करें, एजेंसी की स्थिति देखें';
+          key_point = 'नई एजेंसी — growth की संभावना जांचें और copy बढ़ाने की बात करें';
         } else {
-          action = `Coverage visit — last seen ${a.days} days ago`;
-          key_point = 'Check supply satisfaction, discuss copy growth';
+          action = `संपर्क विज़िट — आख़िरी मुलाक़ात ${a.days} दिन पहले`;
+          key_point = 'सप्लाई संतुष्टि पूछें और copy बढ़ाने का commitment लें';
         }
         const target_amount = a.fup_amt > 0 ? a.fup_amt : (a.os > 0 ? Math.round(a.os * 0.25) : 0);
         return { rank: i + 1, ag_code: a.code, ag_name: a.name, city: a.city || '', priority, action, target_amount, key_point };
@@ -1433,8 +1436,8 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const plan = {
         exec: execName, unit: unitName, date: tDate,
         focus_message: totalTarget > 0
-          ? `Focus: recover ₹${totalTarget.toLocaleString('en-IN')} across ${pick.filter(v => v.target_amount > 0).length} agencies — collect or get dated commitments.`
-          : 'Focus: coverage and growth conversations — every visit should end with a copy-growth ask.',
+          ? `लक्ष्य: ${pick.filter(v => v.target_amount > 0).length} एजेंसियों से ₹${totalTarget.toLocaleString('en-IN')} की वसूली — नक़द लें या पक्की तारीख़ का वादा। हर विज़िट पर growth (copy बढ़ाने) का commitment ज़रूर लें — यही हमारा मुख्य लक्ष्य है!`
+          : 'लक्ष्य: हर एजेंसी पर संपर्क मज़बूत करें और copy बढ़ाने (growth) का commitment लें — यही हमारा मुख्य लक्ष्य है!',
         total_target: totalTarget, visits: pick,
       };
       res.json({ plan, exec_name: execName, unit_name: unitName, model: 'Rule Engine (free)' });
