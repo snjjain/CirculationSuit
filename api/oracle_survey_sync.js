@@ -30,6 +30,8 @@ const MYSQL_CONFIG = {
   database: process.env.MYSQL_DB       || 'patrika_vitran',
   user:     process.env.MYSQL_USER     || 'root',
   password: process.env.MYSQL_PASSWORD || '',
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
 };
 
 const LOG_FILE = path.resolve(__dirname, '../logs/oracle_sync.log');
@@ -403,10 +405,17 @@ async function main() {
         let done = false;
         for (let attempt = 1; attempt <= 3 && !done; attempt++) {
           try {
-            const r = await syncChunk(conn, chunks[i], tmpDir, i + 1, chunks.length);
-            totalInserted += r.inserted;
-            totalErrors   += r.errors;
-            done = true;
+            // Fresh connection per attempt — the Oracle spool can outlive MySQL
+            // wait_timeout, so a connection held across chunks arrives dead and
+            // poisons every retry ("Can't add new command when connection is in
+            // closed state"). Same fix as supply/DCR syncs.
+            const cconn = await mysql.createConnection(MYSQL_CONFIG);
+            try {
+              const r = await syncChunk(cconn, chunks[i], tmpDir, i + 1, chunks.length);
+              totalInserted += r.inserted;
+              totalErrors   += r.errors;
+              done = true;
+            } finally { try { await cconn.end(); } catch (_) {} }
           } catch (err) {
             log(`[chunk ${i+1}/${chunks.length}] attempt ${attempt} FAILED: ${err.message.split('\n')[0]}`);
             if (attempt === 3) failedChunks.push(chunks[i]);
