@@ -2217,7 +2217,7 @@ function _dcrARemarksTab() {
     <button class="btn sm pri" onclick="_dcrA.remEmpCode=document.getElementById('remExecSel').value;_dcrA.remarks=null;_dcrA._loadRem=false;_dcrA.aiResults=null;_dcrALoadRemarks();render()">Load Remarks</button>
     ${(_dcrA.remarks?.visits||[]).length ? `<button class="btn sm" onclick="dcrAAnalyzeRemarks()" style="background:#7c3aed;color:#fff;border:none" ${_dcrA._analyzing?'disabled':''}>🤖 ${_dcrA._analyzing?'Analyzing…':'Analyze with AI'}</button>` : ''}
     ${_dcrA._loadRem ? '<span style="font-size:12px;color:var(--ink-2)">Loading…</span>' : ''}
-    ${_dcrA._analyzing ? '<span style="font-size:12px;color:#7c3aed">⏳ Claude is reading remarks…</span>' : ''}
+    ${_dcrA._analyzing ? '<span style="font-size:12px;color:#7c3aed">⏳ AI is reading the remarks — local model can take 2–3 minutes…</span>' : ''}
   </div>`;
 
   if (!_dcrA.remarks) return filterBar + `<div style="color:var(--ink-2);font-size:13px;padding:30px 0;text-align:center">Select an executive (or leave blank for all), then click Load Remarks</div>`;
@@ -2283,7 +2283,7 @@ function _dcrANextPlanTab() {
     <button class="btn sm pri" style="background:#7c3aed;color:#fff;border:none" onclick="_dcrA.planEmpCode=document.getElementById('planExecSel').value;_dcrA.planDate=document.getElementById('planDateIn').value;dcrAGenPlan()" ${_dcrA._loadingPlan?'disabled':''}>
       ${_dcrA._loadingPlan ? '⏳ Generating…' : '🤖 Generate AI Plan'}
     </button>
-    ${_dcrA._loadingPlan ? '<span style="font-size:12px;color:#7c3aed">Claude is analyzing agency data…</span>' : ''}
+    ${_dcrA._loadingPlan ? '<span style="font-size:12px;color:#7c3aed">AI is analyzing agency data — local model can take 2–3 minutes…</span>' : ''}
   </div>`;
 
   if (!_dcrA.plan && !_dcrA._loadingPlan) {

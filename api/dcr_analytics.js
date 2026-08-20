@@ -1311,7 +1311,8 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
           `[${i+1}] ${v.visit_date||''} | Agency: ${dec(v.ag_name)||v.ag_code||'-'}\nRemarks: ${dec(v.remarks)||'(no remarks)'}`
         ).join('\n\n');
         const o = await ollamaChat(
-          `Analyze field visit notes from newspaper circulation executives. Remarks are Hindi/English/Hinglish mixed.\n\nFor each numbered visit extract:\n- payment_received: cash received NOW (number, 0 if none)\n- commitment_amount: promised payment (number, 0 if none)\n- commitment_date: "YYYY-MM-DD" or "soon" or null\n- growth_commitment: copies increase promised (number, 0)\n- issue: main problem, max 8 English words (null if none)\n- status: one of "productive"|"partial"|"follow-up"|"no-response"|"info-only"\n\nReturn ONLY a JSON array, no other text:\n[{"idx":1,"payment_received":0,"commitment_amount":0,"commitment_date":null,"growth_commitment":0,"issue":null,"status":"info-only"}]\n\nVisits:\n${visitList}`);
+          // 5-min budget: CPU inference of a 7-9B model on ~20 remarks is slow but accurate
+          `Analyze field visit notes from newspaper circulation executives. Remarks are Hindi/English/Hinglish mixed.\n\nFor each numbered visit extract:\n- payment_received: cash received NOW (number, 0 if none)\n- commitment_amount: promised payment (number, 0 if none)\n- commitment_date: "YYYY-MM-DD" or "soon" or null\n- growth_commitment: copies increase promised (number, 0)\n- issue: main problem, max 8 English words (null if none)\n- status: one of "productive"|"partial"|"follow-up"|"no-response"|"info-only"\n\nReturn ONLY a JSON array, no other text:\n[{"idx":1,"payment_received":0,"commitment_amount":0,"commitment_date":null,"growth_commitment":0,"issue":null,"status":"info-only"}]\n\nVisits:\n${visitList}`, 300000);
         if (o) {
           try {
             const jm = o.text.match(/\[[\s\S]*\]/);
@@ -1397,7 +1398,7 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
       // Tier 2: Ollama on LAN (free local LLM)
       if (process.env.OLLAMA_URL) {
-        const o = await ollamaChat(planPrompt, 90000);
+        const o = await ollamaChat(planPrompt, 300000);
         if (o) {
           try {
             const jm = o.text.match(/\{[\s\S]*\}/);
