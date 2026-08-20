@@ -1841,6 +1841,43 @@ window.dcrAGenPlan = async () => {
   if (S.screen === 'dcr_analytics') render();
 };
 
+/* ── DCR live sync (triggers oracle_dcr_sync.js → yesterday+today) ── */
+let _dcrSyncing = false;
+function dcrTriggerSync() {
+  if (_dcrSyncing) { toast('Sync already in progress…'); return; }
+  _dcrSyncing = true;
+  toast('Starting DCR sync (latest visits + attendance)…');
+  fetch(`${location.origin.replace(':8123',':8001')}/api/sync/dcr`, {
+    method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' }, body: '{}',
+  }).then(r => r.json()).then(d => {
+    if (d.error) { _dcrSyncing = false; toast('Sync error: ' + d.error); return; }
+    toast('DCR sync started — Oracle→MySQL takes ~1 min');
+    dcrPollSyncStatus();
+  }).catch(e => { _dcrSyncing = false; toast('Could not start sync: ' + e.message); });
+}
+function dcrPollSyncStatus() {
+  fetch(`${location.origin.replace(':8123',':8001')}/api/sync/dcr/status`, { headers: api.h() })
+    .then(r => r.json()).then(d => {
+      if (d.running) {
+        const last = d.recentLog?.slice(-1)[0] || '…';
+        toast('DCR sync: ' + last);
+        setTimeout(dcrPollSyncStatus, 8000);
+      } else {
+        _dcrSyncing = false;
+        if (d.status === 'success') {
+          toast('✅ DCR sync complete. Refreshing…');
+          // Refresh all DCR data
+          _dcrA.summary=_dcrA.monthly=_dcrA.execs=_dcrA.mapData=_dcrA.tourExecs=_dcrA.tourData=_dcrA.teamData=null;
+          _dcrA._loadS=_dcrA._loadM=_dcrA._loadE=_dcrA._loadMap=_dcrA._loadTE=_dcrA._loadTour=_dcrA._loadTeam=false;
+          if (S.screen === 'dcr_analytics') render();
+        } else if (d.status === 'error') {
+          toast('Sync failed: ' + (d.error || 'unknown error'));
+        }
+      }
+    }).catch(() => { _dcrSyncing = false; });
+}
+window.dcrTriggerSync = dcrTriggerSync;
+
 window.dcrAApplyFilter = () => {
   _dcrA.from = document.getElementById('dcrA-from')?.value || _dcrA.from;
   _dcrA.to   = document.getElementById('dcrA-to')?.value   || _dcrA.to;
@@ -1895,6 +1932,7 @@ VIEWS.dcr_analytics = () => {
         </div>
         <button class="btn sm pri" onclick="dcrAApplyFilter()">Apply</button>
         <button class="btn sm" onclick="_dcrA.from=monthStartISO();_dcrA.to=todayISO();_dcrA.unit_code='';_dcrA.state='';_dcrA.summary=_dcrA.monthly=_dcrA.execs=_dcrA.mapData=_dcrA.tourExecs=_dcrA.tourData=null;_dcrA._loadS=_dcrA._loadM=_dcrA._loadE=_dcrA._loadMap=_dcrA._loadTE=_dcrA._loadTour=false;if(_dcrMap){_dcrMap.remove();_dcrMap=null;}if(_dcrTourMap){_dcrTourMap.remove();_dcrTourMap=null;}render()">Reset</button>
+        <button class="btn sm" onclick="dcrTriggerSync()" style="background:var(--navy);color:#fff;margin-left:auto" title="Sync latest DCR visits from Oracle">🔄 Sync Live Data</button>
       </div>
     </div>`;
 
