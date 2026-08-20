@@ -1241,7 +1241,7 @@ function _dcrATourTab() {
     </div>`;
   } else if (d.office_missing) {
     officeBanner = `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;font-size:12px;margin-bottom:10px">
-      <b>⚠ Office location not set for unit ${esc(d.executive?.unit_code||'')}</b> — km calculation starts from first GPS visit.
+      <b>⚠ Start location not set</b> — no base location for this executive and no office for unit ${esc(d.executive?.unit_code||'')}; km calculation starts from first GPS visit.
       ${isAdmin ? `&nbsp;<a href="${location.origin.replace(':8123',':8001')}/api/admin/unit-locations/export" style="color:#d97706;font-weight:700" onclick="event.preventDefault();_dcrULDownload()">Download Units Excel</a>
       &nbsp;·&nbsp;<button class="btn sm" onclick="_dcrULUploadModal()" style="font-size:11px;padding:3px 10px">Upload Filled Excel</button>` : ''}
     </div>`;
@@ -1328,8 +1328,8 @@ window._dcrULDownload = async () => {
 
 // Upload modal for filled Excel
 window._dcrULUploadModal = () => {
-  modal(`<h3>Upload Unit Locations Excel</h3>
-    <p style="font-size:12px;color:var(--ink-2)">Fill in the Excel downloaded above with latitude &amp; longitude for each unit, then upload here.</p>
+  modal(`<h3>Upload Locations Excel</h3>
+    <p style="font-size:12px;color:var(--ink-2)">Fill latitude &amp; longitude in the downloaded Excel — sheet <b>Unit Locations</b> for branch offices, sheet <b>Executive Locations</b> for executives working from a remote base (their km calculation then starts there instead of the unit office). Leave rows blank to skip.</p>
     <input type="file" id="ulFile" accept=".xlsx,.xls" style="margin:10px 0;display:block">
     <div id="ulErr" style="color:var(--red);font-size:12px"></div>
     <div style="display:flex;gap:8px;margin-top:12px">
@@ -1350,7 +1350,7 @@ window._dcrULDoUpload = async () => {
     const d = await r.json();
     if (!r.ok) { errEl.textContent = d.detail || 'Upload failed'; return; }
     closeModals();
-    toast(`✅ Updated ${d.updated} unit locations (${d.skipped} skipped)`);
+    toast(`✅ Saved ${d.updated} unit + ${d.exec_updated || 0} executive locations (blank rows skipped)`);
     _dcrA.tourData = null; _dcrALoadTour(); // refresh current tour data
   } catch (e) { errEl.textContent = 'Upload error: ' + e.message; }
 };

@@ -46,6 +46,19 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`).catch(e => console.error('[dcr] unit_locations init:', e.message));
 
+  // Per-executive start-point: remote-based executives start km calculation from
+  // their own base location instead of the unit office (falls back to unit_locations)
+  q(`CREATE TABLE IF NOT EXISTS exec_locations (
+      emp_code   VARCHAR(20) PRIMARY KEY,
+      exec_name  VARCHAR(150),
+      unit_code  VARCHAR(8),
+      lat        DECIMAL(10,6),
+      lng        DECIMAL(10,6),
+      address    VARCHAR(500),
+      updated_by VARCHAR(100),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`).catch(e => console.error('[dcr] exec_locations init:', e.message));
+
   const XLSX = require('xlsx');
 
   // Separate query to get unit_code → unit_name (avoids cross-table collation JOIN issues)
@@ -594,10 +607,19 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
         appVisits = avRows;
       }
 
-      // 5a. Resolve unit code + office start-point from unit_locations table
+      // 5a. Resolve start-point: executive's own base location first (remote-based
+      // execs), then the unit office from unit_locations
       const unitCode = oracleVisits[0]?.unit_code || hm.unit_code || appVisits[0]?.unit_code || '';
       let officeGps = null, officeMissing = false;
-      if (unitCode) {
+      const { rows: elRows } = await q(
+        `SELECT lat, lng, exec_name, address FROM exec_locations WHERE emp_code = ? AND lat IS NOT NULL`, [String(emp_code)]
+      );
+      if (elRows.length) {
+        officeGps = {
+          lat: Number(elRows[0].lat), lng: Number(elRows[0].lng),
+          name: (elRows[0].exec_name || emp_code) + ' — base location', address: elRows[0].address || '',
+        };
+      } else if (unitCode) {
         const { rows: ulRows } = await q(
           `SELECT lat, lng, unit_name, address FROM unit_locations WHERE unit_code = ? AND lat IS NOT NULL`, [unitCode]
         );
@@ -607,7 +629,7 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
             name: ulRows[0].unit_name || unitCode, address: ulRows[0].address || '',
           };
         } else {
-          officeMissing = true; // unit known but no coordinates set yet
+          officeMissing = true; // no exec base and no unit coordinates set yet
         }
       }
 
@@ -1474,12 +1496,18 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
   app.get('/api/admin/unit-locations', async (req, res) => {
     try {
       if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
-      // Get all distinct units from hierarchy_master
+      // hierarchy_master has no unit_name — resolve names from dcr_agency_visit
       const { rows: allUnits } = await q(
-        `SELECT DISTINCT unit_code, MAX(unit_name) unit_name
-         FROM hierarchy_master WHERE unit_code IS NOT NULL AND unit_code != ''
-         GROUP BY unit_code ORDER BY unit_name`
+        `SELECT DISTINCT unit_code FROM hierarchy_master
+         WHERE unit_code IS NOT NULL AND unit_code != '' ORDER BY unit_code`
       );
+      const { rows: nmRows } = await q(
+        `SELECT unit_code, MAX(unit_name) unit_name FROM dcr_agency_visit
+         WHERE unit_code IS NOT NULL AND unit_code != '' GROUP BY unit_code`
+      );
+      const nmMap = {};
+      nmRows.forEach(r => { nmMap[r.unit_code] = r.unit_name; });
+      allUnits.forEach(u => { u.unit_name = nmMap[u.unit_code] || ''; });
       // Get existing coordinates
       const { rows: existing } = await q(`SELECT unit_code, unit_name, lat, lng, address, updated_by, updated_at FROM unit_locations`);
       const locMap = {};
@@ -1536,10 +1564,41 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
         };
       });
 
+      // Sheet 2: per-executive base locations (for remote-based executives)
+      const { rows: execRows } = await q(
+        `SELECT emp_code, MAX(executive_name) executive_name,
+                MAX(unit_code) unit_code, MAX(unit_name) unit_name
+         FROM dcr_agency_visit
+         WHERE mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 180 DAY)
+           AND emp_code IS NOT NULL AND emp_code != ''
+         GROUP BY emp_code`
+      );
+      const { rows: exLoc } = await q(`SELECT emp_code, lat, lng, address FROM exec_locations`);
+      const exMap = {};
+      exLoc.forEach(r => { exMap[r.emp_code] = r; });
+      execRows.sort((a, b) => String(a.unit_name || '').localeCompare(String(b.unit_name || '')) ||
+                              String(a.executive_name || '').localeCompare(String(b.executive_name || '')));
+      const execSheetRows = execRows.map(e => {
+        const l = exMap[e.emp_code] || {};
+        return {
+          'emp_code':       e.emp_code,
+          'executive_name': e.executive_name || '',
+          'unit_code':      e.unit_code || '',
+          'unit_name':      e.unit_name || '',
+          'latitude':       l.lat ? Number(l.lat) : '',
+          'longitude':      l.lng ? Number(l.lng) : '',
+          'address':        l.address || '',
+          'instructions':   'Fill ONLY for executives based at a remote location. Blank = unit office is used as start point.'
+        };
+      });
+
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(rows);
       ws['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 40 }, { wch: 55 }];
       XLSX.utils.book_append_sheet(wb, ws, 'Unit Locations');
+      const wsE = XLSX.utils.json_to_sheet(execSheetRows);
+      wsE['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 10 }, { wch: 24 }, { wch: 14 }, { wch: 14 }, { wch: 40 }, { wch: 62 }];
+      XLSX.utils.book_append_sheet(wb, wsE, 'Executive Locations');
       const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
       res.set({
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -1578,14 +1637,17 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       try {
         if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
         const wb = XLSX.read(req.body, { type: 'buffer' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
+        const validCoord = (la, lo) => !isNaN(la) && !isNaN(lo) && la >= 8 && la <= 38 && lo >= 68 && lo <= 98;
+
+        // Sheet 1: unit office locations
+        const ws = wb.Sheets['Unit Locations'] || wb.Sheets[wb.SheetNames[0]];
         const data = XLSX.utils.sheet_to_json(ws, { defval: '' });
         let updated = 0, skipped = 0;
         for (const row of data) {
-          const uc = String(row.unit_code || row['unit_code'] || '').trim();
+          const uc = String(row.unit_code || '').trim();
           const la = parseFloat(row.latitude  || row.lat || '');
           const lo = parseFloat(row.longitude || row.lng || '');
-          if (!uc || isNaN(la) || isNaN(lo) || la < 8 || la > 38 || lo < 68 || lo > 98) { skipped++; continue; }
+          if (!uc || !validCoord(la, lo)) { skipped++; continue; }
           await q(
             `INSERT INTO unit_locations (unit_code, unit_name, lat, lng, address, updated_by)
              VALUES (?, ?, ?, ?, ?, ?)
@@ -1595,7 +1657,29 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
           );
           updated++;
         }
-        res.json({ ok: true, updated, skipped });
+
+        // Sheet 2: per-executive base locations (remote-based executives)
+        let execUpdated = 0, execSkipped = 0;
+        const wsE = wb.Sheets['Executive Locations'];
+        if (wsE) {
+          const edata = XLSX.utils.sheet_to_json(wsE, { defval: '' });
+          for (const row of edata) {
+            const ec = String(row.emp_code || '').trim();
+            const la = parseFloat(row.latitude  || row.lat || '');
+            const lo = parseFloat(row.longitude || row.lng || '');
+            if (!ec || !validCoord(la, lo)) { execSkipped++; continue; }
+            await q(
+              `INSERT INTO exec_locations (emp_code, exec_name, unit_code, lat, lng, address, updated_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE exec_name=VALUES(exec_name), unit_code=VALUES(unit_code),
+                 lat=VALUES(lat), lng=VALUES(lng), address=VALUES(address), updated_by=VALUES(updated_by)`,
+              [ec, String(row.executive_name || ec), String(row.unit_code || ''), la, lo,
+               String(row.address || ''), req.auth?.name || 'import']
+            );
+            execUpdated++;
+          }
+        }
+        res.json({ ok: true, updated, skipped, exec_updated: execUpdated, exec_skipped: execSkipped });
       } catch (e) { res.status(500).json({ detail: e.message }); }
     }
   );
