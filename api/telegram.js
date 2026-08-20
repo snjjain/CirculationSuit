@@ -89,8 +89,31 @@ module.exports = function ({ app, q }) {
               text: `नमस्ते ${name || ''}! 🙏\n\nयह <b>Patrika Vitran Suite</b> का bot है — यहाँ आपको अपने daily visit plans और alerts मिलेंगे।\n\nजुड़ने के लिए नीचे का बटन दबाकर अपना mobile number share करें 👇`,
               reply_markup: { keyboard: [[{ text: '📱 Share my number / नंबर भेजें', request_contact: true }]], resize_keyboard: true, one_time_keyboard: true },
             });
+          } else if (/^(\+?91)?[\s-]?\d{10}$/.test((msg.text || '').trim())) {
+            // Typed mobile number (Telegram Desktop often hides the share-contact
+            // button). Verified against known staff numbers before linking.
+            const mobile = norm(msg.text);
+            const { rows: known } = await q(
+              `SELECT name FROM app_users WHERE mobile IS NOT NULL AND RIGHT(REPLACE(mobile,' ',''),10) = ? AND is_active = 1 LIMIT 1`,
+              [mobile]
+            );
+            if (known.length) {
+              await q(
+                `INSERT INTO telegram_users (chat_id, mobile, tg_name) VALUES (?, ?, ?)
+                 ON DUPLICATE KEY UPDATE mobile=VALUES(mobile), tg_name=VALUES(tg_name)`,
+                [chatId, mobile, name]
+              );
+              await tg('sendMessage', {
+                chat_id: chatId, parse_mode: 'HTML',
+                text: `✅ <b>Number linked:</b> ${mobile} (${known[0].name})\n\nआपका Telegram अब Patrika Vitran Suite से जुड़ गया है।\nआपके visit plans और alerts अब यहाँ मिलेंगे। 🗞`,
+                reply_markup: { remove_keyboard: true },
+              });
+              console.log(`[tg] linked (typed) ${mobile} -> chat ${chatId} (${name})`);
+            } else {
+              await sendTG(chatId, `⚠ Number <b>${mobile}</b> हमारे staff records में नहीं मिला।\nकृपया वही mobile number भेजें जो office में registered है, या नीचे के button से contact share करें (/start).`);
+            }
           } else {
-            await sendTG(chatId, 'ℹ Visit plans आपको automatic मिलेंगे. दोबारा link करने के लिए /start भेजें.');
+            await sendTG(chatId, 'ℹ Visit plans आपको automatic मिलेंगे. Link करने के लिए /start भेजें, या अपना 10-digit registered mobile number type करें.');
           }
         }
       } catch (e) {
