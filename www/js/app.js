@@ -3069,13 +3069,6 @@ VIEWS.command = () => {
     <!-- main card grid -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       ${_cmdModuleCard({
-        icon:'📦', title:'Supply', period:'Agent + Cash · ' + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…'),
-        onClick:"go('supply_dash')", accent:'var(--blue)',
-        kpis: supKpis, footer: supFooter,
-        loading: !sup && c._supLoading, error: sup?._err,
-        badge: supBadge, badgeColor: 'var(--blue)',
-      })}
-      ${_cmdModuleCard({
         icon:'💰', title:'Agency Outstanding', period:'Balance as on today',
         onClick:"go('outstanding')", accent:'var(--red)',
         kpis: ouKpis, footer: ouFooter,
@@ -3092,11 +3085,25 @@ VIEWS.command = () => {
         badgeColor: 'var(--grn)',
       })}
       ${_cmdModuleCard({
+        icon:'📦', title:'Supply', period:'Agent + Cash · ' + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…'),
+        onClick:"go('supply_dash')", accent:'var(--blue)',
+        kpis: supKpis, footer: supFooter,
+        loading: !sup && c._supLoading, error: sup?._err,
+        badge: supBadge, badgeColor: 'var(--blue)',
+      })}
+      ${_cmdModuleCard({
         icon:'🚕', title:'Taxi Deliveries', period:"Today's supply alerts",
         onClick:"go('transport')", accent: siBadgeColor || 'var(--gold)',
         kpis: siKpis, footer: siFooter,
         loading: !si && !c._siError, error: si?._err,
         badge: siBadge, badgeColor: siBadgeColor,
+      })}
+      ${_cmdModuleCard({
+        icon:'📍', title:'Field Intelligence', period:'DCR activity · current month',
+        onClick:"go('dcr_analytics')", accent: faBadgeColor || 'var(--acc)',
+        kpis: faKpis, footer: faFooter,
+        loading: !fa, error: fa?._err,
+        badge: faBadge, badgeColor: faBadgeColor,
       })}
       ${_cmdModuleCard({
         icon:'📋', title:'Survey Intelligence', period:'Reader survey outcomes · all time',
@@ -3105,13 +3112,6 @@ VIEWS.command = () => {
         loading: !sv && !c._svError, error: sv?._err,
         badge: sv && !sv._err ? fmtN(sv.total||0) + ' surveyed' : null,
         badgeColor: 'var(--acc)',
-      })}
-      ${_cmdModuleCard({
-        icon:'📍', title:'Field Intelligence', period:'DCR activity · current month',
-        onClick:"go('dcr_analytics')", accent: faBadgeColor || 'var(--acc)',
-        kpis: faKpis, footer: faFooter,
-        loading: !fa, error: fa?._err,
-        badge: faBadge, badgeColor: faBadgeColor,
       })}
     </div>
 
