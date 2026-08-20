@@ -527,6 +527,32 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: e.message }); }
   });
 
+  // ── GET /api/dcr-analytics/tour-days ────────────────────────────────────────
+  // Days on which an executive made field visits within a date range — lets the
+  // UI list clickable tour days instead of blind single-date picking.
+  app.get('/api/dcr-analytics/tour-days', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const { emp_code } = req.query;
+      if (!emp_code) return res.status(400).json({ detail: 'emp_code required' });
+      const from = isDate(req.query.from) ? req.query.from : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10);
+      const to   = isDate(req.query.to)   ? req.query.to   : new Date().toISOString().slice(0,10);
+      const { clause: sc, params: sp } = await resolveScope(req);
+      const { rows } = await q(
+        `SELECT DATE(mark_attn_date) tour_date,
+                COUNT(*) visits,
+                COUNT(DISTINCT visit_to_main_code) agencies,
+                SUM(latitude IS NOT NULL AND latitude != '' AND latitude != '0') gps_count,
+                MIN(from_time) first_time, MAX(till_time) last_time
+         FROM dcr_agency_visit
+         WHERE emp_code = ? AND mark_attn_date BETWEEN ? AND ?${sc}
+         GROUP BY tour_date ORDER BY tour_date DESC`,
+        [String(emp_code), from, to, ...sp]
+      );
+      res.json({ from, to, days: rows });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
   // ── GET /api/dcr-analytics/tour-route ───────────────────────────────────────
   // Single-day GPS tour route analysis for one executive
   // Query params: emp_code (required), date YYYY-MM-DD (required)

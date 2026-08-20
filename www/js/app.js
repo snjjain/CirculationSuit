@@ -946,6 +946,7 @@ let _dcrA = { tab: 'summary', summary: null, monthly: null, execs: null, mapData
                tourExecs: null, _loadTE: false,
                tourEmpCode: '', tourDate: todayISO(),
                tourData: null, _loadTour: false,
+               tourDays: null, _loadDays: false,
                // New tabs state
                analysis: null, _loadAn: false,
                coverage: null, _loadCov: false,
@@ -1037,7 +1038,7 @@ function _initTeamMap() {
       <span style="font-size:11px">Last visit: <b>${esc(e.last_ag_name||e.last_agcd||'—')}</b></span><br>
       <span style="font-size:11px;color:#6b7280">${e.last_time||''} · ${esc(e.last_city||'')} · ${e.visit_count} visits</span><br>
       ${e.last_purpose?`<span style="font-size:11px;color:#2563eb">${esc(e.last_purpose)}</span><br>`:''}
-      <button onclick="dcrASetTab('tour');_dcrA.tourEmpCode='${esc(e.emp_code)}';_dcrA.tourDate='${esc(d.date)}';_dcrA.tourData=null;_dcrA._loadTour=false;_dcrALoadTour();render();" style="font-size:11px;margin-top:4px;padding:2px 8px;border:1px solid #2563eb;border-radius:4px;color:#2563eb;background:none;cursor:pointer">View Tour Route →</button>`;
+      <button onclick="dcrASetTab('tour');_dcrA.tourEmpCode='${esc(e.emp_code)}';_dcrA.tourDate='${esc(d.date)}';_dcrA.tourData=null;_dcrA._loadTour=false;_dcrA.tourDays=null;_dcrA._loadDays=false;_dcrALoadTour();render();" style="font-size:11px;margin-top:4px;padding:2px 8px;border:1px solid #2563eb;border-radius:4px;color:#2563eb;background:none;cursor:pointer">View Tour Route →</button>`;
     L.marker([e.lat, e.lng], { icon: L.divIcon({ className: '', html: `<div style="background:${col};color:#fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.4);border:2px solid #fff">${initials}</div>`, iconAnchor:[15,15] }) })
       .addTo(_dcrTeamMap).bindPopup(popup);
   });
@@ -1084,7 +1085,7 @@ function _dcrATeamTab() {
         <td><span style="font-size:11px">${esc(e.last_ag_name||e.last_agcd||'—')}</span>${e.last_city?`<span style="font-size:10px;color:var(--ink-2)"> ${esc(e.last_city)}</span>`:''}</td>
         <td style="color:var(--ink-2)">${e.last_time||'—'}</td>
         <td class="r">${e.visit_count}</td>
-        <td><button class="btn sm" onclick="dcrASetTab('tour');_dcrA.tourEmpCode='${esc(e.emp_code)}';_dcrA.tourDate='${esc(d.date)}';_dcrA.tourData=null;_dcrA._loadTour=false;_dcrALoadTour();render();" style="font-size:10px;padding:2px 8px">Route →</button></td>
+        <td><button class="btn sm" onclick="dcrASetTab('tour');_dcrA.tourEmpCode='${esc(e.emp_code)}';_dcrA.tourDate='${esc(d.date)}';_dcrA.tourData=null;_dcrA._loadTour=false;_dcrA.tourDays=null;_dcrA._loadDays=false;_dcrALoadTour();render();" style="font-size:10px;padding:2px 8px">Route →</button></td>
       </tr>`).join('')}</tbody>
     </table></div>` : '';
 
@@ -1199,6 +1200,8 @@ function _initTourMap() {
 /* ── Tour Route tab renderer ── */
 function _dcrATourTab() {
   _dcrALoadTourExecs();
+  // A tour was opened from another tab (View Tour Route →): load its day list too
+  if (_dcrA.tourEmpCode && !_dcrA.tourDays && !_dcrA._loadDays) _dcrALoadTourDays();
   const execs = _dcrA.tourExecs?.executives || [];
   const d = _dcrA.tourData;
   const stats = d?.stats || {};
@@ -1206,18 +1209,47 @@ function _dcrATourTab() {
   const execOpts = execs.map(e => `<option value="${esc(e.emp_code)}" ${_dcrA.tourEmpCode===e.emp_code?'selected':''}>${esc(e.name||e.emp_code)} [${esc(e.unit_name||e.unit_code)}]</option>`).join('');
 
   const filterRow = `
-    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)">
-      <select id="tourExecSel" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink);max-width:260px">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <select id="tourExecSel" onchange="_dcrATourPickExec()" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink);max-width:260px">
         <option value="">— Select Executive —</option>${execOpts}
       </select>
-      <input type="date" id="tourDateIn" value="${_dcrA.tourDate}" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
-      <button class="btn sm pri" onclick="window._dcrATourLoad()">Load Route</button>
-      ${_dcrA._loadTour ? '<span style="font-size:12px;color:var(--ink-2)">Loading…</span>' : ''}
+      <span style="font-size:11px;color:var(--ink-2)">Tour days in ${_dcrA.from.split('-').reverse().join('/')} – ${_dcrA.to.split('-').reverse().join('/')} (top date filter)</span>
+      ${_dcrA._loadDays ? '<span style="font-size:12px;color:var(--ink-2)">⏳ Finding tour days…</span>' : ''}
+      ${_dcrA._loadTour ? '<span style="font-size:12px;color:var(--ink-2)">⏳ Loading route…</span>' : ''}
     </div>`;
 
-  if (!d && !_dcrA._loadTour) return filterRow + `<div style="color:var(--ink-2);font-size:13px;padding:30px 0;text-align:center">Select an executive and date, then click Load Route</div>`;
-  if (_dcrA._loadTour) return filterRow + `<div style="color:var(--ink-2);font-size:13px;padding:30px 0;text-align:center">⏳ Analysing tour route…</div>`;
-  if (d?._err) return filterRow + `<div style="color:var(--red);font-size:13px;padding:20px 0">Failed to load tour route data</div>`;
+  // Clickable tour-day list from the date-range filter
+  let daysRow = '';
+  if (_dcrA.tourEmpCode && _dcrA.tourDays) {
+    if (!_dcrA.tourDays.length) {
+      daysRow = `<div style="color:var(--ink-2);font-size:12.5px;padding:8px 0 14px">No field tours found for this executive between ${_dcrA.from.split('-').reverse().join('/')} and ${_dcrA.to.split('-').reverse().join('/')} — widen the date filter above and press Apply.</div>`;
+    } else {
+      const fmtDay = ds => {
+        const dt = new Date(ds + 'T00:00:00');
+        return { d: dt.getDate() + ' ' + dt.toLocaleDateString('en-IN', { month: 'short' }), w: dt.toLocaleDateString('en-IN', { weekday: 'short' }) };
+      };
+      daysRow = `<div style="display:flex;gap:8px;overflow-x:auto;padding:2px 0 12px;margin-bottom:12px;border-bottom:1px solid var(--border)">
+        ${_dcrA.tourDays.map(td => {
+          const ds = String(td.tour_date).slice(0, 10);
+          const f = fmtDay(ds);
+          const active = _dcrA.tourDate === ds;
+          const gps = Number(td.gps_count || 0);
+          return `<div onclick="_dcrATourPickDay('${ds}')" role="button"
+            style="flex:none;min-width:96px;padding:8px 12px;border-radius:10px;cursor:pointer;border:1.5px solid ${active ? 'var(--primary)' : 'var(--border)'};background:${active ? 'var(--primary)' : 'var(--surface-2)'};color:${active ? '#fff' : 'var(--ink)'}"
+            onmouseenter="if(!${active})this.style.borderColor='var(--primary)'" onmouseleave="this.style.borderColor='${active ? 'var(--primary)' : 'var(--border)'}'">
+            <div style="font-size:13px;font-weight:700">${f.d} <span style="font-weight:400;font-size:10.5px;opacity:.8">${f.w}</span></div>
+            <div style="font-size:10.5px;margin-top:3px;opacity:.85">${td.visits} visit${td.visits != 1 ? 's' : ''} · ${gps > 0 ? '📍' + gps : 'no GPS'}</div>
+            ${td.first_time ? `<div style="font-size:10px;margin-top:1px;opacity:.7">${td.first_time}${td.last_time ? '–' + td.last_time : ''}</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>`;
+    }
+  }
+
+  if (!_dcrA.tourEmpCode) return filterRow + `<div style="color:var(--ink-2);font-size:13px;padding:30px 0;text-align:center">Select an executive — their tour days in the selected date range will appear here</div>`;
+  if (!d && !_dcrA._loadTour) return filterRow + daysRow + (_dcrA._loadDays ? '' : `<div style="color:var(--ink-2);font-size:13px;padding:20px 0;text-align:center">Click a tour day above to see the route on the map</div>`);
+  if (_dcrA._loadTour) return filterRow + daysRow + `<div style="color:var(--ink-2);font-size:13px;padding:30px 0;text-align:center">⏳ Analysing tour route…</div>`;
+  if (d?._err) return filterRow + daysRow + `<div style="color:var(--red);font-size:13px;padding:20px 0">Failed to load tour route data</div>`;
 
   // Stats strip
   const statsStrip = `
@@ -1292,18 +1324,42 @@ function _dcrATourTab() {
       </div>
     </div>` : '';
 
-  return filterRow + officeBanner + statsStrip + mapDiv + visitTable + missedSection;
+  return filterRow + daysRow + officeBanner + statsStrip + mapDiv + visitTable + missedSection;
 }
 
-window._dcrATourLoad = () => {
-  const ec = document.getElementById('tourExecSel')?.value;
-  const dt = document.getElementById('tourDateIn')?.value;
-  if (!ec) { alert('Please select an executive'); return; }
-  if (!dt) { alert('Please select a date'); return; }
+function _dcrALoadTourDays() {
+  if (_dcrA._loadDays || !_dcrA.tourEmpCode) return;
+  _dcrA._loadDays = true;
+  const qs = `emp_code=${encodeURIComponent(_dcrA.tourEmpCode)}&from=${_dcrA.from}&to=${_dcrA.to}${_dcrA.unit_code ? '&unit_code=' + encodeURIComponent(_dcrA.unit_code) : ''}`;
+  fetch(`${location.origin.replace(':8123', ':8001')}/api/dcr-analytics/tour-days?${qs}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => {
+      _dcrA.tourDays = d.days || [];
+      _dcrA._loadDays = false;
+      // Auto-open the most recent tour day if nothing is loaded yet
+      if (_dcrA.tourDays.length && !_dcrA.tourData && !_dcrA._loadTour) {
+        _dcrA.tourDate = String(_dcrA.tourDays[0].tour_date).slice(0, 10);
+        _dcrALoadTour();
+      }
+      if (S.screen === 'dcr_analytics') render();
+    })
+    .catch(() => { _dcrA.tourDays = []; _dcrA._loadDays = false; if (S.screen === 'dcr_analytics') render(); });
+}
+
+window._dcrATourPickExec = () => {
+  const ec = document.getElementById('tourExecSel')?.value || '';
   _dcrA.tourEmpCode = ec;
-  _dcrA.tourDate    = dt;
-  _dcrA.tourData    = null;
-  _dcrA._loadTour   = false;
+  _dcrA.tourDays = null; _dcrA._loadDays = false;
+  _dcrA.tourData = null; _dcrA._loadTour = false;
+  if (_dcrTourMap) { _dcrTourMap.remove(); _dcrTourMap = null; }
+  if (ec) _dcrALoadTourDays();
+  render();
+};
+
+window._dcrATourPickDay = (ds) => {
+  if (_dcrA.tourDate === ds && _dcrA.tourData) return;
+  _dcrA.tourDate = ds;
+  _dcrA.tourData = null; _dcrA._loadTour = false;
   if (_dcrTourMap) { _dcrTourMap.remove(); _dcrTourMap = null; }
   _dcrALoadTour();
   render();
@@ -1903,6 +1959,7 @@ window.dcrAApplyFilter = () => {
   _dcrA.summary = _dcrA.monthly = _dcrA.execs = _dcrA.mapData = null;
   _dcrA._loadS = _dcrA._loadM = _dcrA._loadE = _dcrA._loadMap = false;
   _dcrA.tourExecs = null; _dcrA._loadTE = false;
+  _dcrA.tourDays = null; _dcrA._loadDays = false;
   _dcrA.analysis = null; _dcrA._loadAn = false;
   _dcrA.coverage = null; _dcrA._loadCov = false;
   _dcrA.remarks = null; _dcrA._loadRem = false; _dcrA.aiResults = null;
