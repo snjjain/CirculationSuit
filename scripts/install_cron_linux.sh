@@ -42,19 +42,28 @@ MARK_END="# PATRIKA-SYNC END"
 [ -d "$API_DIR" ] || { echo "ERROR: api dir not found at $API_DIR"; exit 1; }
 mkdir -p "$LOG_DIR"
 
-# ── sqlplus check (sync scripts refuse to run without it) ────────────────────
-SQLPLUS_FROM_ENV="$(grep -E '^SQLPLUS_PATH=' "$REPO_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
-if [ -n "$SQLPLUS_FROM_ENV" ] && [ -x "$SQLPLUS_FROM_ENV" ]; then
-  echo "sqlplus OK: $SQLPLUS_FROM_ENV (from .env)"
-elif command -v sqlplus >/dev/null 2>&1; then
-  SP="$(command -v sqlplus)"
-  echo "sqlplus found at $SP but SQLPLUS_PATH is not set in $REPO_DIR/.env"
-  echo "  -> add this line to .env:  SQLPLUS_PATH=$SP"
-  exit 1
+# ── Oracle access check: node-oracledb driver OR sqlplus binary ──────────────
+if [ -d "$API_DIR/node_modules/oracledb" ]; then
+  echo "Oracle access OK: node-oracledb driver installed (thick mode via Instant Client Basic)"
+  grep -q '^ORACLE_CLIENT_LIB_DIR=' "$REPO_DIR/.env" 2>/dev/null || {
+    echo "  NOTE: set ORACLE_CLIENT_LIB_DIR=/path/to/instantclient in $REPO_DIR/.env"
+    echo "        (or ensure LD_LIBRARY_PATH contains the instantclient dir)"
+  }
 else
-  echo "ERROR: sqlplus not found. Install Oracle Instant Client (basic + sqlplus),"
-  echo "then set SQLPLUS_PATH=/full/path/to/sqlplus in $REPO_DIR/.env and re-run."
-  exit 1
+  SQLPLUS_FROM_ENV="$(grep -E '^SQLPLUS_PATH=' "$REPO_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
+  if [ -n "$SQLPLUS_FROM_ENV" ] && [ -x "$SQLPLUS_FROM_ENV" ]; then
+    echo "sqlplus OK: $SQLPLUS_FROM_ENV (from .env)"
+  elif command -v sqlplus >/dev/null 2>&1; then
+    SP="$(command -v sqlplus)"
+    echo "sqlplus found at $SP but SQLPLUS_PATH is not set in $REPO_DIR/.env"
+    echo "  -> add this line to .env:  SQLPLUS_PATH=$SP"
+    exit 1
+  else
+    echo "ERROR: no Oracle access. Either run 'npm i oracledb' in $API_DIR (recommended,"
+    echo "uses Instant Client Basic already at /opt/oracle) OR install the sqlplus"
+    echo "package and set SQLPLUS_PATH in $REPO_DIR/.env. Then re-run."
+    exit 1
+  fi
 fi
 
 # ── IST -> server-local time conversion (GNU date) ───────────────────────────
