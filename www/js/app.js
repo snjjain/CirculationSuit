@@ -952,7 +952,8 @@ let _dcrA = { tab: 'summary', summary: null, monthly: null, execs: null, mapData
                coverage: null, _loadCov: false,
                remarks: null, _loadRem: false, remEmpCode: '', aiResults: null, _analyzing: false,
                planExecs: null, _loadPlanExecs: false,
-               planEmpCode: '', planDate: '', plan: null, _loadingPlan: false };
+               planEmpCode: '', planDate: '', plan: null, _loadingPlan: false,
+               teamPlan: null, _loadingTeam: false, teamUnit: '' };
 let _dcrMap = null;     // Leaflet map — agency map tab
 let _dcrTourMap = null; // Leaflet map — tour route tab
 let _dcrTeamMap = null; // Leaflet map — team live tab
@@ -2336,8 +2337,166 @@ function _dcrANextPlanTab() {
       <button class="btn sm" style="background:#229ED9;color:#fff;border:none" onclick="dcrAPlanTelegram()">✈️ Send Plan on Telegram</button>
     </div>` : '';
 
-  return controls + planCard + visitCards + emailBtn;
+  return controls + planCard + visitCards + emailBtn + _dcrATeamPlanSection();
 }
+
+/* ── Team Plan (all executives reporting to a Circulation Incharge) ── */
+function _dcrALoadIncharges() {
+  if (_dcrA._loadInch || _dcrA.incharges) return;
+  _dcrA._loadInch = true;
+  fetch(`${location.origin.replace(':8123', ':8001')}/api/dcr-analytics/incharges`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { _dcrA.incharges = d.incharges || []; _dcrA._loadInch = false; if (S.screen === 'dcr_analytics') render(); })
+    .catch(() => { _dcrA.incharges = []; _dcrA._loadInch = false; });
+}
+
+function _dcrATeamPlanSection() {
+  _dcrALoadIncharges();
+  const inchs = _dcrA.incharges || [];
+  const inchOpts = `<option value="">— Select Circulation Incharge —</option>` +
+    inchs.map(c => `<option value="${esc(c.code)}" ${_dcrA.teamUnit === c.code ? 'selected' : ''}>${esc(c.name)} (${c.exec_count} exec · ${esc(String(c.units || '').split(',').slice(0, 3).join(','))})</option>`).join('');
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+
+  const head = `
+    <div style="margin-top:26px;padding-top:16px;border-top:2px solid var(--brd2)">
+      <div style="font-size:13px;font-weight:700;margin-bottom:3px">👥 Team Plan — Circulation Incharge के लिए</div>
+      <div style="font-size:11px;color:var(--ink-2);margin-bottom:10px">Incharge को report करने वाले सभी Executives का combined suggested tour plan (top 3 agencies each) — Telegram पर भेजें ताकि उन्हें पता रहे कि team को क्या करना है</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">
+        <select id="teamInchSel" onchange="if(this.value)document.getElementById('teamUnitSel').value=''" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink);max-width:300px">${inchOpts}</select>
+        <span style="font-size:11px;color:var(--ink-2)">या Unit से:</span>
+        <select id="teamUnitSel" onchange="if(this.value)document.getElementById('teamInchSel').value=''" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink);max-width:200px">
+          <option value="">— Unit —</option>${(_dcrA.units || []).map(u => `<option value="${esc(u.unit_code)}">${esc(u.unit_name)}</option>`).join('')}
+        </select>
+        <input type="date" id="teamDateIn" value="${_dcrA.planDate || tomorrow}" min="${tomorrow}" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink)">
+        <button class="btn sm pri" onclick="dcrAGenTeamPlan()" ${_dcrA._loadingTeam ? 'disabled' : ''}>${_dcrA._loadingTeam ? '⏳ Generating…' : '👥 Generate Team Plan'}</button>
+        ${_dcrA._loadInch ? '<span style="font-size:11px;color:var(--ink-2)">Loading…</span>' : ''}
+      </div>`;
+
+  const tp = _dcrA.teamPlan;
+  if (!tp && !_dcrA._loadingTeam) return head + `</div>`;
+  if (_dcrA._loadingTeam) return head + `<div style="color:var(--ink-2);font-size:12px;padding:10px 0">⏳ पूरी team का plan बन रहा है…</div></div>`;
+  if (tp?._err) return head + `<div style="color:var(--red);font-size:12px;padding:10px 0">Team plan failed: ${esc(tp._err)}</div></div>`;
+  if (!(tp.execs || []).length) return head + `<div style="color:var(--ink-2);font-size:12px;padding:10px 0">इस unit में last 60 दिनों में कोई active executive नहीं मिला.</div></div>`;
+
+  const blocks = tp.execs.map(t => `
+    <div style="border:1px solid var(--brd2);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--bg)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <b style="font-size:12.5px">👤 ${esc(t.exec_name)}</b>
+        ${t.total_target > 0 ? `<span style="background:#d1fae5;color:#065f46;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px">Target ₹${t.total_target.toLocaleString('en-IN')}</span>` : ''}
+      </div>
+      ${(t.visits || []).map((v, i) => `
+        <div style="font-size:11.5px;padding:3px 0;border-top:${i ? '1px dashed var(--brd2)' : 'none'}">
+          ${i + 1}. <b>${esc(v.name)}</b>${v.city ? ' (' + esc(v.city) + ')' : ''}
+          ${v.os > 0 ? ` — Outstanding ₹${v.os.toLocaleString('en-IN')}` : ''}
+          <span style="color:var(--ink-2)"> · ${esc(v.note)}</span>
+          ${v.growth_ask > 0 ? `<span style="color:#15803d;font-weight:600"> · +${v.growth_ask} copies growth</span>` : ''}
+        </div>`).join('')}
+    </div>`).join('');
+
+  return head + `
+    <div style="font-size:12px;margin-bottom:10px">
+      <b>${tp.unit_name}</b> · ${tp.execs.length} Executives · Total Recovery Target: <b>₹${(tp.grand_total || 0).toLocaleString('en-IN')}</b>
+    </div>
+    ${blocks}
+    <button class="btn sm" style="background:#229ED9;color:#fff;border:none;margin-top:6px" onclick="dcrATeamTelegram()">✈️ Send to Incharge on Telegram</button>
+  </div>`;
+}
+
+window.dcrAGenTeamPlan = async () => {
+  const ci = document.getElementById('teamInchSel')?.value;
+  const uc = document.getElementById('teamUnitSel')?.value;
+  const dt = document.getElementById('teamDateIn')?.value;
+  if (!ci && !uc) { toast('Circulation Incharge या Unit चुनें'); return; }
+  _dcrA.teamUnit = ci || uc; _dcrA._loadingTeam = true; _dcrA.teamPlan = null; render();
+  try {
+    const r = await fetch(`${location.origin.replace(':8123', ':8001')}/api/dcr-analytics/team-plan`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(ci ? { circ_incharge: ci, plan_date: dt } : { unit_code: uc, plan_date: dt }),
+    });
+    const d = await r.json();
+    _dcrA.teamPlan = r.ok ? d : { _err: d.detail || r.status };
+  } catch (e) { _dcrA.teamPlan = { _err: e.message }; }
+  _dcrA._loadingTeam = false;
+  if (S.screen === 'dcr_analytics') render();
+};
+
+function _dcrATeamPlanText() {
+  const tp = _dcrA.teamPlan || {};
+  const dt = tp.date ? tp.date.split('-').reverse().join('/') : '';
+  const withVisits = (tp.execs || []).filter(t => (t.visits || []).length);
+  const L = [];
+  L.push(`🗞 राजस्थान पत्रिका — Team Visit Plan`);
+  L.push(`📅 ${dt}${tp.incharge?.name ? ' · 👔 ' + tp.incharge.name + ' की Team' : ' · 🏢 ' + (tp.unit_name || '')}`);
+  L.push(`👥 ${withVisits.length} Executives · Total Recovery Target: ₹${(tp.grand_total || 0).toLocaleString('en-IN')}`);
+  withVisits.forEach(t => {
+    L.push('');
+    L.push(`👤 ${t.exec_name}${t.total_target > 0 ? ' — Target ₹' + t.total_target.toLocaleString('en-IN') : ''}`);
+    (t.visits || []).forEach((v, i) => {
+      L.push(`${i + 1}. ${v.name}${v.city ? ' (' + v.city + ')' : ''}${v.os > 0 ? ' — Outstanding ₹' + v.os.toLocaleString('en-IN') : ''}`);
+      L.push(`   ${v.note}${v.growth_ask > 0 ? ' · कम से कम ' + v.growth_ask + ' Copies Growth का Commitment लें' : ''}`);
+    });
+  });
+  L.push('');
+  L.push(`📈 Special Focus:`);
+  L.push(`हर Executive हर Visit पर Recovery के साथ Copy Growth का clear Commitment ज़रूर ले — यही हमारा मुख्य लक्ष्य है! 💪`);
+  return L.join('\n');
+}
+
+window.dcrATeamTelegram = async () => {
+  const text = _dcrATeamPlanText();
+  const tp = _dcrA.teamPlan || {};
+  let pre = { mobile: '' };
+  try {
+    const r = await fetch(`${location.origin.replace(':8123', ':8001')}/api/telegram/resolve?person_code=${encodeURIComponent(tp.incharge?.code || '')}&name=${encodeURIComponent(tp.incharge?.name || '')}`, { headers: api.h() });
+    pre = await r.json();
+  } catch (_) {}
+  modal(`<h3>✈️ Send Team Plan on Telegram</h3>
+    <p style="font-size:12px;color:var(--ink-2)">To: <b>${esc(tp.incharge?.name || 'Circulation Incharge')}</b>${pre.linked ? ' · <span style="color:var(--grn)">✓ Telegram linked</span>' : ''} (Incharge को पहले bot से link होना ज़रूरी है — /start भेजकर number share करें).</p>
+    <input id="tgMob" type="tel" maxlength="10" value="${esc(pre.mobile || '')}" placeholder="Incharge का 10-digit mobile" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;margin-bottom:8px;background:var(--bg);color:var(--ink)">
+    <textarea id="tgText" rows="12" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;font-size:12px;background:var(--bg);color:var(--ink)">${esc(text)}</textarea>
+    <div id="tgErr" style="color:var(--red);font-size:12px;margin-top:6px"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn pri block" onclick="_dcrATgTeamSend()">Send</button>
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+};
+
+window._dcrATgTeamSend = async () => {
+  const mob = document.getElementById('tgMob')?.value?.replace(/\D/g, '').slice(-10);
+  const full = document.getElementById('tgText')?.value || '';
+  const errEl = document.getElementById('tgErr');
+  if (!mob || mob.length !== 10) { errEl.textContent = 'Valid 10-digit mobile डालें'; return; }
+  // Telegram limit 4096 chars — split at executive blocks if needed
+  const parts = [];
+  if (full.length <= 3800) parts.push(full);
+  else {
+    const chunks = full.split('\n\n👤 ');
+    let cur = chunks.shift();
+    for (const c of chunks) {
+      if ((cur + '\n\n👤 ' + c).length > 3600) { parts.push(cur); cur = '👤 ' + c; }
+      else cur += '\n\n👤 ' + c;
+    }
+    parts.push(cur);
+  }
+  errEl.textContent = 'Sending…';
+  try {
+    for (let i = 0; i < parts.length; i++) {
+      const text = parts.length > 1 ? `${parts[i]}\n\n(भाग ${i + 1}/${parts.length})` : parts[i];
+      const r = await fetch(`${location.origin.replace(':8123', ':8001')}/api/telegram/send`, {
+        method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mobile: mob, text }),
+      });
+      const d = await r.json();
+      if (r.status === 404 && d.detail === 'not_linked') {
+        errEl.innerHTML = `यह number अभी link नहीं है.<br><b>Incharge से कहें:</b> Telegram में <b>@${esc(d.bot_username || 'bot')}</b> खोलें → <b>Start</b> दबाएँ → <b>📱 Share my number</b> पर tap करें. फिर दोबारा भेजें.`;
+        return;
+      }
+      if (!r.ok) { errEl.textContent = d.detail || 'Send failed'; return; }
+    }
+    closeModals();
+    toast('✈️ Team plan sent to Incharge ✓');
+  } catch (e) { errEl.textContent = 'Send failed: ' + e.message; }
+};
 
 /* ── Send AI plan to the executive on Telegram ── */
 function _dcrAPlanText() {

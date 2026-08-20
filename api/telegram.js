@@ -140,13 +140,22 @@ module.exports = function ({ app, q }) {
   app.get('/api/telegram/resolve', async (req, res) => {
     try {
       if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
-      const empCode = String(req.query.emp_code || '').trim();
-      const name    = String(req.query.name || '').trim();
+      const empCode    = String(req.query.emp_code || '').trim();
+      const personCode = String(req.query.person_code || '').trim();
+      const name       = String(req.query.name || '').trim();
       let mobile = '', linked = false, source = '';
 
       if (empCode) {
         const { rows } = await q(`SELECT mobile FROM telegram_users WHERE emp_code = ? LIMIT 1`, [empCode]);
         if (rows.length) { mobile = rows[0].mobile; linked = true; source = 'telegram_link'; }
+      }
+      if (!mobile && personCode) {
+        // Incharge / manager lookup — app_users is keyed by hierarchy person_code
+        const { rows } = await q(
+          `SELECT mobile FROM app_users WHERE person_code = ? AND mobile IS NOT NULL AND mobile != '' LIMIT 1`,
+          [personCode]
+        );
+        if (rows.length) { mobile = norm(rows[0].mobile); source = 'app_users_person'; }
       }
       if (!mobile && name) {
         // DCR exec names and app_users names come from the same HR master — match by name

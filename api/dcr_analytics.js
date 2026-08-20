@@ -1472,6 +1472,136 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
+  // ── GET /api/dcr-analytics/incharges ────────────────────────────────────────
+  // Circulation Incharges with their team size (from PLI hierarchy mapping)
+  app.get('/api/dcr-analytics/incharges', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const { rows } = await q(
+        `SELECT circ_incharge code, MAX(circ_incharge_name) name,
+                COUNT(DISTINCT exec_code) exec_count,
+                GROUP_CONCAT(DISTINCT unit_code ORDER BY unit_code) units
+         FROM exec_hierarchy_mapping
+         WHERE circ_incharge IS NOT NULL AND circ_incharge != '' AND circ_incharge_name IS NOT NULL
+         GROUP BY circ_incharge ORDER BY MAX(circ_incharge_name)`
+      );
+      res.json({ incharges: rows });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ── POST /api/dcr-analytics/team-plan ───────────────────────────────────────
+  // Combined next-day tour plan for ALL executives reporting to a Circulation
+  // Incharge (from PLI hierarchy mapping), or of a unit. Rule engine only
+  // (fast, deterministic); top 3 agencies per executive with growth ask.
+  app.post('/api/dcr-analytics/team-plan', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const { unit_code, circ_incharge, plan_date } = req.body || {};
+      if (!unit_code && !circ_incharge) return res.status(400).json({ detail: 'unit_code or circ_incharge required' });
+      const tDate = isDate(plan_date) ? plan_date : new Date(Date.now() + 86400000).toISOString().slice(0,10);
+      const { clause: sc, params: sp } = await resolveScope(req);
+
+      let execRows, unitName, incharge = null;
+      if (circ_incharge) {
+        // Team = executives mapped to this incharge in the PLI hierarchy
+        const { rows: mapRows } = await q(
+          `SELECT exec_code, MAX(exec_desc) exec_name, GROUP_CONCAT(DISTINCT unit_code) units,
+                  MAX(circ_incharge_name) ci_name
+           FROM exec_hierarchy_mapping
+           WHERE circ_incharge = ? AND exec_desc IS NOT NULL AND exec_desc != 'N/A'
+           GROUP BY exec_code ORDER BY MAX(exec_desc) LIMIT 20`,
+          [String(circ_incharge)]
+        );
+        // Keep only PLI-active executives when the flag knows them (separate
+        // query — no cross-collation JOIN); fall back to all if that empties it
+        const { rows: actRows } = await q(
+          `SELECT executive_code FROM exec_master WHERE is_active_pli = 'Y'`
+        );
+        const activeSet = new Set(actRows.map(r => r.executive_code));
+        let team = mapRows.filter(r => activeSet.has(r.exec_code));
+        if (!team.length) team = mapRows;
+        execRows = team.map(r => ({ emp_code: null, exec_name: r.exec_name, unit_name: r.units }));
+        incharge = { code: String(circ_incharge), name: mapRows[0]?.ci_name || '' };
+        unitName = incharge.name ? `Team of ${incharge.name}` : String(circ_incharge);
+      } else {
+        // Active executives of the unit (visited in last 60 days)
+        const { rows } = await q(
+          `SELECT emp_code, MAX(executive_name) exec_name, MAX(unit_name) unit_name
+           FROM dcr_agency_visit
+           WHERE unit_code = ? AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)${sc}
+           GROUP BY emp_code ORDER BY MAX(executive_name) LIMIT 15`,
+          [String(unit_code), ...sp]
+        );
+        execRows = rows;
+        unitName = rows[0]?.unit_name || String(unit_code);
+      }
+      if (!execRows.length) return res.json({ date: tDate, unit_code, unit_name: unitName || '', incharge, execs: [], grand_total: 0 });
+
+      const teams = [];
+      for (const ex of execRows) {
+        const [agR, visitR, osR] = await Promise.all([
+          q(`SELECT agcd, ag_name, COALESCE(city_name, dist_name) city_name
+             FROM agency_master
+             WHERE executive_name=? AND CAST(dpcd AS UNSIGNED)=1
+               AND (supply_stop_flag IS NULL OR supply_stop_flag!='Y') AND suspend_date IS NULL
+             LIMIT 150`, [ex.exec_name]),
+          q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, MAX(followup_amount) fup_amt, MAX(followup_date) fup_date
+             FROM dcr_agency_visit WHERE ${ex.emp_code ? 'emp_code=?' : 'executive_name=?'} AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+             GROUP BY visit_to_main_code`, [ex.emp_code || ex.exec_name]),
+          q(`SELECT ao.ag_code, ao.cl_amt FROM agency_outstanding ao
+             JOIN agency_master am ON am.agcd=ao.ag_code AND CAST(am.dpcd AS UNSIGNED)=1
+             WHERE am.executive_name=? AND ao.period_label='CURRENT' AND ao.cl_amt>0
+             GROUP BY ao.ag_code`, [ex.exec_name]),
+        ]);
+        const vMap = {}, osMap = {};
+        for (const r of visitR.rows) vMap[r.ag_code] = r;
+        for (const r of osR.rows) osMap[r.ag_code] = +r.cl_amt;
+        const seen = new Set();
+        const top = agR.rows.filter(r => !seen.has(r.agcd) && seen.add(r.agcd))
+          .map(ag => {
+            const v = vMap[ag.agcd] || {};
+            const os = osMap[ag.agcd] || 0;
+            const days = v.last_visit ? Math.floor((Date.now() - new Date(v.last_visit)) / 86400000) : 999;
+            return { code: ag.agcd, name: ag.ag_name, city: ag.city_name || '', os, days, fup_amt: +(v.fup_amt||0), fup_date: v.fup_date || '' };
+          })
+          .sort((a, b) => b.os - a.os || b.days - a.days).slice(0, 3);
+        teams.push({ emp_code: ex.emp_code, exec_name: ex.exec_name, visits: top });
+      }
+
+      // One supply query for ALL selected agencies → growth ask (~5% of avg, min 5, max 50)
+      const allCodes = [...new Set(teams.flatMap(t => t.visits.map(v => v.code)))];
+      const supMap = {};
+      if (allCodes.length) {
+        const ph = allCodes.map(() => '?').join(',');
+        const { rows: supRows } = await q(
+          `SELECT agcd, AVG(sup_copy) avg_sup FROM supply_data
+           WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) AND agcd IN (${ph})
+           GROUP BY agcd`, allCodes);
+        supRows.forEach(r => { supMap[r.agcd] = Math.round(+r.avg_sup || 0); });
+      }
+      let grandTotal = 0;
+      for (const t of teams) {
+        let sub = 0;
+        t.visits = t.visits.map(v => {
+          const avg = supMap[v.code] || 0;
+          const growth_ask = avg ? Math.min(50, Math.max(5, Math.round(avg * 0.05 / 5) * 5)) : 0;
+          const target_amount = v.fup_amt > 0 ? v.fup_amt : (v.os > 0 ? Math.round(v.os * 0.25) : 0);
+          sub += target_amount;
+          const note = v.fup_amt > 0
+            ? `वादा की गई Payment ₹${v.fup_amt.toLocaleString('en-IN')} due${v.fup_date ? ' ' + String(v.fup_date).slice(0,10) : ''}`
+            : v.days >= 999 ? 'अब तक कोई Visit नहीं'
+            : v.days >= 30 ? `${v.days} दिन से Visit नहीं`
+            : 'Cash Recovery / Confirmed Date लें';
+          return { ...v, growth_ask, target_amount, note };
+        });
+        t.total_target = sub;
+        grandTotal += sub;
+      }
+
+      res.json({ date: tDate, unit_code, unit_name: unitName, incharge, execs: teams, grand_total: grandTotal, model: 'Rule Engine (free)' });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
   // ── GET /api/dcr-analytics/team-live ────────────────────────────────────────
   // Last known GPS punch for every executive in the unit — "where is my team today"
   // Query params: date YYYY-MM-DD (default today), unit_code / state (scope)
