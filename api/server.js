@@ -4289,7 +4289,7 @@ app.get('/api/supply/sync-status', async (req, res) => {
 });
 
 // ── AI Insights & Action Center ───────────────────────────────────────────────
-require('./insights')({ app, q, getScopeUnitCodes, getOuScopeFilter, getColScopeFilter, scopeToTaxiNames });
+const insightsApi = require('./insights')({ app, q, getScopeUnitCodes, getOuScopeFilter, getColScopeFilter, scopeToTaxiNames });
 
 // ── Ask AI (natural-language Q&A) ─────────────────────────────────────────────
 require('./ask_ai')({ app, q, getScopeUnitCodes });
@@ -4320,6 +4320,9 @@ require('./exec_targets')({ app, q, getScopeUnitCodes });
 
 // ── Agency Rating Engine ───────────────────────────────────────────────────────
 require('./agency_rating')({ app, q, getScopeUnitCodes });
+
+// ── Strategic AI Nexus — proactive circulation-boss briefing & tour planning ──
+require('./ai_nexus')({ app, q, getScopeUnitCodes, getOuScopeFilter, computeInsights: insightsApi.computeInsights });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 if (require.main === module) {

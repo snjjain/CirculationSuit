@@ -4,6 +4,7 @@
 /* ---------- navigation model (menus & submenus from both references) ---------- */
 const DASH_MENU = [
   ["command",       "Command Centre",          "📊"],
+  ["ai_nexus",      "Strategic AI Nexus",      "🧭"],
   ["ai_insights",   "AI Insights & Actions",   "🤖"],
   ["supply_dash",   "Supply Dashboard",        "📦"],
   ["collections",   "Collections",             "₹"],
@@ -4376,6 +4377,229 @@ VIEWS.ai_insights = () => {
   }
 
   return pagehead('AI Insights & Actions', 'What needs attention · why it happened · what to do next') + `
+    <style>@keyframes _cmdPulse{0%,100%{opacity:1}50%{opacity:.45}}
+    ._cmd-card{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:16px 18px}
+    ._cmd-strip-item{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px}</style>
+    ${tabBar}${body}`;
+};
+
+/* ═══════════ Strategic AI Nexus — proactive "AI Circulation Boss" briefing ═══════════ */
+const _NEXUS_TAG = {
+  URGENT_ACTION:       ['crit',   '🔴 Urgent Action'],
+  WIN_BACK:            ['purple', '🔄 Win-Back Opportunity'],
+  SUPPLY_AT_RISK:      ['warn',   '📉 Supply At Risk'],
+  COLLECTION_RECOVERY: ['info',   '💰 Collection Recovery'],
+  VISIT_OVERDUE:       ['mut',    '👀 Visit Overdue'],
+  MONITOR:             ['good',  '🟢 Monitor'],
+};
+
+function _nexusState() { return S.live.nexus || (S.live.nexus = { tab: 'overview' }); }
+
+function _nexusLoadBriefing(force) {
+  const st = _nexusState();
+  if (st._brLoading || (st.briefing && !force)) return;
+  st._brLoading = true; if (force) st.briefing = null;
+  fetch(api.base + '/api/ai-nexus/briefing' + (force ? '?refresh=1' : ''), { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.briefing = d; st._brLoading = false; st._brErr = false; if (S.screen === 'ai_nexus') render(); })
+    .catch(() => { st._brLoading = false; st._brErr = true; if (S.screen === 'ai_nexus') render(); });
+}
+function _nexusLoadTour(force) {
+  const st = _nexusState();
+  if (st._tourLoading || (st.tour && !force)) return;
+  st._tourLoading = true; if (force) st.tour = null;
+  fetch(api.base + '/api/ai-nexus/tour-plan?days=7', { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.tour = d; st._tourLoading = false; st._tourErr = false; if (S.screen === 'ai_nexus') render(); })
+    .catch(() => { st._tourLoading = false; st._tourErr = true; if (S.screen === 'ai_nexus') render(); });
+}
+function _nexusLoadNearby(force) {
+  const st = _nexusState();
+  if (st._nearLoading || (st.nearby && !force)) return;
+  st._nearLoading = true; if (force) st.nearby = null;
+  fetch(api.base + '/api/ai-nexus/nearby-alerts', { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.nearby = d; st._nearLoading = false; st._nearErr = false; if (S.screen === 'ai_nexus') render(); })
+    .catch(() => { st._nearLoading = false; st._nearErr = true; if (S.screen === 'ai_nexus') render(); });
+}
+function _nexusLoadCompetitor(force) {
+  const st = _nexusState();
+  if (st._compLoading || (st.competitor && !force)) return;
+  st._compLoading = true;
+  fetch(api.base + '/api/ai-nexus/competitor', { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.competitor = d; st._compLoading = false; if (S.screen === 'ai_nexus') render(); })
+    .catch(() => { st._compLoading = false; st.competitor = { available: false, message: 'Failed to load.' }; if (S.screen === 'ai_nexus') render(); });
+}
+
+window.nexusTab = t => { _nexusState().tab = t; render(); };
+window.nexusRefresh = () => {
+  const st = _nexusState();
+  if (st.tab === 'tour') _nexusLoadTour(true);
+  else if (st.tab === 'nearby') _nexusLoadNearby(true);
+  else if (st.tab === 'competitor') _nexusLoadCompetitor(true);
+  else _nexusLoadBriefing(true);
+  render();
+};
+
+function _nexusTagChips(tags) {
+  return (tags || []).map(t => { const [c, l] = _NEXUS_TAG[t] || ['mut', t]; return chip(c, l); }).join(' ');
+}
+
+function _nexusAgCard(a) {
+  return `<div class="_cmd-card" style="margin-bottom:10px;padding:13px 16px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+      <div style="min-width:0">
+        <div style="font-weight:700;font-size:14px;color:var(--ink)">${esc(a.ag_name || a.agcd)}</div>
+        <div style="font-size:11.5px;color:var(--muted);margin-top:1px">${esc(a.unit_name || '')}${a.city_name ? ' · ' + esc(a.city_name) : ''} · Exec: ${esc(a.exec_name || '—')}</div>
+      </div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${_nexusTagChips(a.tags)}</div>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:9px;font-size:12px">
+      ${a.outstanding != null ? `<span><b style="color:var(--ink)">${_cmdFmtC(a.outstanding)}</b> <span style="color:var(--muted)">outstanding</span></span>` : ''}
+      ${a.opportunity_copies ? `<span><b style="color:var(--purple,#7c4dff)">+${VZ.full(a.opportunity_copies)}</b> <span style="color:var(--muted)">copies recoverable</span></span>` : ''}
+      ${a.peak30_supply != null && a.tags && a.tags.includes('SUPPLY_AT_RISK') ? `<span><b style="color:var(--ink)">${VZ.full(a.cur_supply)}</b> <span style="color:var(--muted)">of ${VZ.full(a.peak30_supply)} peak</span></span>` : ''}
+      <span><span style="color:var(--muted)">Last visit:</span> <b style="color:var(--ink)">${a.last_visit ? esc(a.last_visit) + ' (' + a.days_since_visit + 'd ago)' : 'Never'}</b></span>
+    </div>
+  </div>`;
+}
+
+function _nexusOverview(st) {
+  _nexusLoadBriefing();
+  const d = st.briefing;
+  if (st._brErr) return `<div class="card pad" style="color:var(--red)">Failed to load briefing. <a href="#" onclick="nexusRefresh();return false" style="color:var(--acc)">Retry</a></div>`;
+  if (!d) return _cmdSkel() + _cmdSkel();
+  const ei = d.expected_impact || {};
+  return `
+    <div class="_cmd-card" style="margin-bottom:14px;border-left:4px solid var(--acc)">
+      <div style="font-size:11px;font-weight:800;color:var(--acc);letter-spacing:.06em;margin-bottom:6px">🤖 AI SUMMARY${d.engine === 'template' ? ' · rule-based (add ANTHROPIC_API_KEY for narrative mode)' : ''}</div>
+      <div style="font-size:14.5px;line-height:1.5;color:var(--ink)">${esc(d.ai_summary || '')}</div>
+    </div>
+    ${_cmdKpiGrid([
+      [ei.agencies_flagged ?? 0, 'Agencies Flagged', 'var(--red)'],
+      ['+' + VZ.fmt(ei.supply_growth_copies || 0), 'Win-Back Copies/Day', 'var(--purple,#7c4dff)'],
+      [ei.fmt_collection_recovery || '₹0', 'Collection Recoverable', 'var(--gold-d)'],
+      [d.overdue_count ?? 0, 'Visits Overdue', 'var(--muted)'],
+      [(d.nearby_alerts || []).length, 'Nearby Clusters', 'var(--blue)'],
+      [ei.agencies_scoped ?? 0, 'Agencies In Scope', 'var(--ink)'],
+    ])}
+    <div class="_cmd-card" style="margin-top:14px">
+      <div style="font-weight:700;font-size:14px;color:var(--ink);margin-bottom:10px">📋 AI Recommendations to Management</div>
+      ${(d.recommendations || []).length
+        ? `<ol style="margin:0;padding-left:20px;display:grid;gap:8px">${(d.recommendations || []).map(r => `<li style="font-size:13px;line-height:1.5;color:var(--ink-2)">${esc(r)}</li>`).join('')}</ol>`
+        : `<div style="color:var(--muted);font-size:13px">No specific recommendations right now — scope looks healthy.</div>`}
+    </div>
+    ${(d.immediate_attention || []).length ? `<div style="margin-top:14px">
+      <div style="font-weight:700;font-size:14px;color:var(--ink);margin-bottom:10px">🔴 Immediate Attention Required</div>
+      ${d.immediate_attention.map(i => `<div class="_cmd-card" style="margin-bottom:8px;border-left:3px solid var(--red)">
+        <div style="font-weight:700;font-size:13px;color:var(--ink)">${esc(i.title)}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(i.impact || i.why || '')}</div>
+      </div>`).join('')}
+    </div>` : ''}
+    <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:10px">Generated ${esc(String(d.generated_at || '').slice(0, 16).replace('T', ' '))} UTC${d.cached ? ' · cached (max 10 min old)' : ''}</div>`;
+}
+
+function _nexusOpportunities(st) {
+  _nexusLoadBriefing();
+  const d = st.briefing;
+  if (st._brErr) return `<div class="card pad" style="color:var(--red)">Failed to load. <a href="#" onclick="nexusRefresh();return false" style="color:var(--acc)">Retry</a></div>`;
+  if (!d) return _cmdSkel() + _cmdSkel();
+  const opps = d.opportunities || [];
+  return `<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">🚀 Agencies whose supply has dropped ≥30% from their own 30-day peak — recoverable business, ranked by copies at stake.</div>
+    ${opps.length ? opps.map(_nexusAgCard).join('')
+      : `<div class="card pad" style="text-align:center;color:var(--muted);padding:28px">No win-back opportunities detected in this scope right now.</div>`}`;
+}
+
+function _nexusRisks(st) {
+  _nexusLoadBriefing();
+  const d = st.briefing;
+  if (st._brErr) return `<div class="card pad" style="color:var(--red)">Failed to load. <a href="#" onclick="nexusRefresh();return false" style="color:var(--acc)">Retry</a></div>`;
+  if (!d) return _cmdSkel() + _cmdSkel();
+  const col = d.collection_opportunities || [], sup = d.supply_risks || [];
+  return `
+    <div style="font-weight:700;font-size:14px;color:var(--ink);margin-bottom:4px">💰 Collection Recovery</div>
+    <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">High outstanding, overdue visit, or both — ranked by amount pending.</div>
+    ${col.length ? col.map(_nexusAgCard).join('') : `<div class="card pad" style="text-align:center;color:var(--muted);padding:18px;margin-bottom:14px">No high-outstanding agencies flagged.</div>`}
+    <div style="font-weight:700;font-size:14px;color:var(--ink);margin:18px 0 4px">📉 Supply At Risk</div>
+    <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Previously-supplying agencies now at zero — intervention required.</div>
+    ${sup.length ? sup.map(_nexusAgCard).join('') : `<div class="card pad" style="text-align:center;color:var(--muted);padding:18px">No agencies at zero supply.</div>`}`;
+}
+
+function _nexusTourDay(day) {
+  return `<div style="background:var(--bg);border-radius:10px;padding:11px 13px;margin-bottom:8px">
+    <div style="font-weight:700;font-size:12.5px;color:var(--ink);margin-bottom:6px">Day ${day.day} — ${esc(day.date)}</div>
+    ${day.agencies.map(a => `<div style="padding:5px 0;border-bottom:1px dashed var(--brd);font-size:12.5px">
+      <b style="color:var(--ink)">${esc(a.ag_name)}</b> ${_nexusTagChips(a.tags)}<br>
+      <span style="color:var(--muted)">${a.city_name ? esc(a.city_name) + ' · ' : ''}${a.outstanding ? _cmdFmtC(a.outstanding) + ' outstanding · ' : ''}${a.opportunity_copies ? '+' + VZ.full(a.opportunity_copies) + ' copies · ' : ''}last visit ${a.last_visit ? esc(a.last_visit) : 'never'}</span>
+    </div>`).join('')}
+    ${day.suggested_addons && day.suggested_addons.length ? `<div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--brd)">
+      <div style="font-size:10.5px;font-weight:700;color:var(--acc);letter-spacing:.04em;margin-bottom:4px">✚ NEARBY — ADD TO ROUTE</div>
+      ${day.suggested_addons.map(x => `<div style="font-size:11.5px;color:var(--ink-2);padding:2px 0">${esc(x.ag_name)} — ${x.distance_km} km, ${esc(x.reason || '')}${x.opportunity_copies ? `, +${x.opportunity_copies} copies` : ''}${x.outstanding ? `, ${_cmdFmtC(x.outstanding)}` : ''}</div>`).join('')}
+    </div>` : ''}
+  </div>`;
+}
+
+function _nexusTour(st) {
+  _nexusLoadTour();
+  const d = st.tour;
+  if (st._tourErr) return `<div class="card pad" style="color:var(--red)">Failed to load tour plan. <a href="#" onclick="nexusRefresh();return false" style="color:var(--acc)">Retry</a></div>`;
+  if (!d) return _cmdSkel() + _cmdSkel();
+  const execs = d.executives || [];
+  return `<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">📅 AI-generated next ${d.days || 7}-day plan per executive, prioritized by outstanding, supply decline and visit recency. ${esc(d.note || '')}</div>
+    ${execs.length ? execs.map(ex => `<div class="_cmd-card" style="margin-bottom:12px">
+      <div style="font-weight:700;font-size:14px;color:var(--ink);margin-bottom:2px">${esc(ex.exec_name)}</div>
+      <div style="font-size:11.5px;color:var(--muted);margin-bottom:10px">${esc(ex.unit_name || '')}</div>
+      ${ex.plan.map(_nexusTourDay).join('')}
+    </div>`).join('')
+      : `<div class="card pad" style="text-align:center;color:var(--muted);padding:28px">No flagged agencies to plan a tour around in this scope.</div>`}`;
+}
+
+function _nexusNearby(st) {
+  _nexusLoadNearby();
+  const d = st.nearby;
+  if (st._nearErr) return `<div class="card pad" style="color:var(--red)">Failed to load. <a href="#" onclick="nexusRefresh();return false" style="color:var(--acc)">Retry</a></div>`;
+  if (!d) return _cmdSkel() + _cmdSkel();
+  const clusters = d.clusters || [];
+  return `<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">📍 High-priority agencies within ${d.radius_km || 5} km of each other — combine into a single trip instead of separate visits.</div>
+    ${clusters.length ? clusters.map(c => `<div class="_cmd-card" style="margin-bottom:10px">
+      <div style="font-weight:700;font-size:13px;color:var(--ink);margin-bottom:8px">${esc(c.unit_name)} · ${c.agencies.length} agencies within ${d.radius_km || 5} km</div>
+      ${c.agencies.map(a => `<div style="padding:4px 0;border-bottom:1px dashed var(--brd);font-size:12.5px">
+        <b style="color:var(--ink)">${esc(a.ag_name)}</b> ${_nexusTagChips(a.tags)}
+        <div style="color:var(--muted);font-size:11.5px">${a.exec_name ? 'Exec: ' + esc(a.exec_name) + ' · ' : ''}${a.outstanding ? _cmdFmtC(a.outstanding) + ' outstanding · ' : ''}${a.opportunity_copies ? '+' + a.opportunity_copies + ' copies · ' : ''}${a.days_since_visit != null ? a.days_since_visit + 'd since visit' : 'never visited'}</div>
+      </div>`).join('')}
+    </div>`).join('')
+      : `<div class="card pad" style="text-align:center;color:var(--muted);padding:28px">No geographic clusters of flagged agencies found — either GPS coverage is sparse or flagged agencies are well spread out.</div>`}`;
+}
+
+function _nexusCompetitor(st) {
+  _nexusLoadCompetitor();
+  const d = st.competitor;
+  if (!d) return _cmdSkel();
+  return `<div class="card pad" style="text-align:center;color:var(--muted);padding:34px">
+    <div style="font-size:30px;margin-bottom:10px">📊</div>
+    <div style="font-size:14px;color:var(--ink);font-weight:700;margin-bottom:6px">Competitor Intelligence — Awaiting Data</div>
+    <div style="font-size:13px;max-width:480px;margin:0 auto">${esc(d.message || 'Competitor cash-sale and credit-sale data has not been uploaded yet.')}</div>
+  </div>`;
+}
+
+VIEWS.ai_nexus = () => {
+  const st = _nexusState();
+  const tabs = [['overview', '🤖 Overview'], ['opportunities', '🚀 Opportunities'], ['risks', '⚠️ Risks'],
+                ['tour', '📅 7-Day Tour Plan'], ['nearby', '📍 Nearby Alerts'], ['competitor', '📊 Competitor Intel']];
+  const tabBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+    ${tabs.map(([k, l]) => `<button class="btn ${st.tab === k ? 'pri' : ''}" onclick="nexusTab('${k}')">${l}</button>`).join('')}
+    <button class="btn" style="margin-left:auto" onclick="nexusRefresh()">↻ Refresh</button>
+  </div>`;
+
+  let body;
+  if (st.tab === 'opportunities') body = _nexusOpportunities(st);
+  else if (st.tab === 'risks') body = _nexusRisks(st);
+  else if (st.tab === 'tour') body = _nexusTour(st);
+  else if (st.tab === 'nearby') body = _nexusNearby(st);
+  else if (st.tab === 'competitor') body = _nexusCompetitor(st);
+  else body = _nexusOverview(st);
+
+  return pagehead('Strategic AI Nexus', 'Your AI Circulation Boss — opportunities, risks, tour plans and nearby-agency alerts, computed from live data') + `
     <style>@keyframes _cmdPulse{0%,100%{opacity:1}50%{opacity:.45}}
     ._cmd-card{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:16px 18px}
     ._cmd-strip-item{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px}</style>

@@ -610,60 +610,66 @@ module.exports = function registerInsights(ctx) {
 
   const PRIORITY_RANK = { P1: 0, P2: 1, P3: 2 };
 
+  // Shared aggregation — used by GET /api/insights and reused by other modules
+  // (e.g. ai_nexus.js) that need the same P1/P2/P3 signal set for a scope.
+  async function computeInsights(personCode, hl, opts = {}) {
+    const cacheKey = `${personCode}|${hl}`;
+    const hit = cache.get(cacheKey);
+    if (hit && Date.now() - hit.at < CACHE_MS && !opts.refresh) return { ...hit.data, cached: true };
+
+    const fakeReq = { headers: { 'x-person-code': personCode, 'x-hierarchy-level': String(hl) } };
+    const [scOu, scCol] = await Promise.all([getOuScopeFilter(fakeReq), getColScopeFilter(fakeReq)]);
+    const unitCodes = await getScopeUnitCodes(personCode, hl); // null = admin
+
+    const results = await Promise.allSettled([
+      aOutstandingMoM(scOu),
+      aStoppedSupplyOS(scOu),
+      aCollectionTrend(scCol, scOu),
+      aShortPayment(scOu),
+      aTaxi(unitCodes),
+      aSurvey(scOu),
+      aDigitalCollection(scCol),
+      aSupplyPulse(scOu),
+      aDcrInsights(scOu),
+    ]);
+    const insights = [];
+    const errors = [];
+    for (const r of results) {
+      if (r.status === 'fulfilled') insights.push(...r.value);
+      else errors.push(String(r.reason && r.reason.message || r.reason));
+    }
+    insights.sort((a, b) =>
+      (PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]) ||
+      (N(b.metrics && (b.metrics.delta || b.metrics.os || b.metrics.growth || b.metrics.count)) -
+       N(a.metrics && (a.metrics.delta || a.metrics.os || a.metrics.growth || a.metrics.count))));
+
+    // attach open action counts so the UI can show "already being handled"
+    const keys = insights.map(i => i.id);
+    let openMap = {};
+    if (keys.length) {
+      const ph = keys.map(() => '?').join(',');
+      const aR = await q(`SELECT insight_key, COUNT(*) n FROM action_items WHERE insight_key IN (${ph}) AND status IN ('open','in_progress') GROUP BY insight_key`, keys);
+      openMap = Object.fromEntries(aR.rows.map(r => [r.insight_key, N(r.n)]));
+    }
+    insights.forEach(i => { i.open_actions = openMap[i.id] || 0; });
+
+    const data = {
+      generated_at: new Date().toISOString(),
+      count: insights.length,
+      insights,
+      errors: errors.length ? errors : undefined,
+    };
+    cache.set(cacheKey, { at: Date.now(), data });
+    return data;
+  }
+
   // ── GET /api/insights ───────────────────────────────────────────────────────
   app.get('/api/insights', async (req, res) => {
     try {
       const personCode = req.headers['x-person-code'] || '';
       const hl = parseInt(req.headers['x-hierarchy-level'] || '1', 10);
-      const cacheKey = `${personCode}|${hl}`;
-      const hit = cache.get(cacheKey);
-      if (hit && Date.now() - hit.at < CACHE_MS && !req.query.refresh) {
-        return res.json({ ...hit.data, cached: true });
-      }
-
-      const [scOu, scCol] = await Promise.all([getOuScopeFilter(req), getColScopeFilter(req)]);
-      const unitCodes = await getScopeUnitCodes(personCode, hl); // null = admin
-
-      const results = await Promise.allSettled([
-        aOutstandingMoM(scOu),
-        aStoppedSupplyOS(scOu),
-        aCollectionTrend(scCol, scOu),
-        aShortPayment(scOu),
-        aTaxi(unitCodes),
-        aSurvey(scOu),
-        aDigitalCollection(scCol),
-        aSupplyPulse(scOu),
-        aDcrInsights(scOu),
-      ]);
-      const insights = [];
-      const errors = [];
-      for (const r of results) {
-        if (r.status === 'fulfilled') insights.push(...r.value);
-        else errors.push(String(r.reason && r.reason.message || r.reason));
-      }
-      insights.sort((a, b) =>
-        (PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]) ||
-        (N(b.metrics && (b.metrics.delta || b.metrics.os || b.metrics.growth || b.metrics.count)) -
-         N(a.metrics && (a.metrics.delta || a.metrics.os || a.metrics.growth || a.metrics.count))));
-
-      // attach open action counts so the UI can show "already being handled"
-      const keys = insights.map(i => i.id);
-      let openMap = {};
-      if (keys.length) {
-        const ph = keys.map(() => '?').join(',');
-        const aR = await q(`SELECT insight_key, COUNT(*) n FROM action_items WHERE insight_key IN (${ph}) AND status IN ('open','in_progress') GROUP BY insight_key`, keys);
-        openMap = Object.fromEntries(aR.rows.map(r => [r.insight_key, N(r.n)]));
-      }
-      insights.forEach(i => { i.open_actions = openMap[i.id] || 0; });
-
-      const data = {
-        generated_at: new Date().toISOString(),
-        count: insights.length,
-        insights: insights.slice(0, parseInt(req.query.limit || '15', 10)),
-        errors: errors.length ? errors : undefined,
-      };
-      cache.set(cacheKey, { at: Date.now(), data });
-      res.json(data);
+      const data = await computeInsights(personCode, hl, { refresh: !!req.query.refresh });
+      res.json({ ...data, insights: data.insights.slice(0, parseInt(req.query.limit || '15', 10)) });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
@@ -865,4 +871,6 @@ module.exports = function registerInsights(ctx) {
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
+
+  return { computeInsights };
 };
