@@ -4251,8 +4251,8 @@ function _aiLoadCfg(force) {
   st._cfgLoading = true; if (force) st.cfg = null;
   fetch(api.base + '/api/email-config', { headers: api.h() })
     .then(r => r.json())
-    .then(d => { st.cfg = d; st._cfgLoading = false; if (S.screen === 'ai_nexus') render(); })
-    .catch(() => { st._cfgLoading = false; st.cfg = { units: [], contacts: [] }; if (S.screen === 'ai_nexus') render(); });
+    .then(d => { st.cfg = d; st._cfgLoading = false; if (S.screen === 'email_config') render(); })
+    .catch(() => { st._cfgLoading = false; st.cfg = { units: [], contacts: [] }; if (S.screen === 'email_config') render(); });
 }
 
 window.aiFilterModule = v => { _aiState().fltModule = v || ''; render(); };
@@ -4756,7 +4756,6 @@ window.nexusRefresh = () => {
   if (st.tab === 'nearby') _nexusLoadNearby(true);
   else if (st.tab === 'competitor') _nexusLoadCompetitor(true);
   else if (st.tab === 'actions') _aiLoadActions(true);
-  else if (st.tab === 'email') _aiLoadCfg(true);
   else if (st.tab === 'overview') { _nexusLoadBriefing(true); _aiLoad(true); }
   else _nexusLoadBriefing(true);
   render();
@@ -4993,7 +4992,7 @@ VIEWS.ai_nexus = () => {
   const st = _nexusState();
   const tabs = [['overview', '🤖 Overview'], ['opportunities', '🚀 Opportunities'], ['risks', '⚠️ Risks'],
                 ['nearby', '📍 Nearby Alerts'], ['competitor', '📊 Competitor Intel'],
-                ['ask', '💬 Ask AI'], ['actions', '⚡ Action Center'], ['email', '✉ Email Config']];
+                ['ask', '💬 Ask AI'], ['actions', '⚡ Action Center']];
   const showRefresh = !['ask'].includes(st.tab);
   const tabBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
     ${tabs.map(([k, l]) => `<button class="btn ${st.tab === k ? 'pri' : ''}" onclick="nexusTab('${k}')">${l}</button>`).join('')}
@@ -5007,7 +5006,6 @@ VIEWS.ai_nexus = () => {
   else if (st.tab === 'competitor') body = _nexusCompetitor(st);
   else if (st.tab === 'ask') body = _aiAskTab(_askState());
   else if (st.tab === 'actions') body = _aiActionsTab(_aiState());
-  else if (st.tab === 'email') body = _aiCfgTab(_aiState());
   else body = _nexusOverview(st);
 
   return pagehead('Strategic AI Nexus', 'Your AI Circulation Boss — insights, opportunities, risks, nearby-agency alerts and actions, computed from live data. 7-Day Tour Plan now lives in Field Visit Intelligence.') + `
@@ -10952,6 +10950,15 @@ VIEWS.audit_log = () => {
      <div class="card" style="padding:0;overflow:hidden">${body}</div>`;
 };
 
+/* ---- Email Config (moved out of Strategic AI Nexus into Administration) ---- */
+VIEWS.email_config = () => {
+  return pagehead('Email Config', 'Unit-wise recipients for AI Insights one-click alerts') +
+    `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+      <button class="btn" onclick="_aiLoadCfg(true);render()">↻ Refresh</button>
+    </div>
+    ${_aiCfgTab(_aiState())}`;
+};
+
 /* ---- Manage Rights ---- */
 const MR_ALL_MODULES = [
   { key: 'agent',  label: 'Agent App',   icon: '🏢' },
@@ -12967,6 +12974,7 @@ function navGroups() {
     { id: "user_mgmt",     label: "User Management", icon: "👥" },
     { id: "manage_rights", label: "Manage Rights",   icon: "🔐" },
     { id: "audit_log",     label: "Audit Trail",     icon: "📜" },
+    { id: "email_config",  label: "Email Config",    icon: "✉" },
   ]});
   return groups;
 }
