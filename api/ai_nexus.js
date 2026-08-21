@@ -40,16 +40,61 @@ module.exports = function registerAiNexus(ctx) {
   // Publications excluded from Agent Sale-based signals — matches Supply Dashboard convention.
   const EXCLUDE_PUBS = ['P14'];
   const NEARBY_RADIUS_KM = 5;
+  // "Flagged" = worth an executive's attention. MONITOR (healthy) and NO_VISIT_HISTORY
+  // (never visited, but no outstanding/supply signal either — a data-coverage gap, not a
+  // business risk) are excluded from every flagged-agency list, count and ranking.
+  const isFlagged = s => !s.tags.includes('MONITOR') && !s.tags.includes('NO_VISIT_HISTORY');
 
-  // ── Optional Claude narrative (same convention as ask_ai.js) ────────────────
+  // ── Narrative engine: free local Ollama first, optional Claude second, ─────
+  // deterministic template last — same 3-tier convention as ask_ai.js (and the
+  // AI Remarks / Next-Day Plan already shipped in Field Visit Intelligence).
+  const OLLAMA_URL = (process.env.OLLAMA_URL || 'http://localhost:11434').replace(/\/$/, '');
+  const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
+  let ollamaOk = false;
+  async function detectOllama() {
+    try {
+      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 1500);
+      const r = await fetch(OLLAMA_URL + '/api/tags', { signal: ctrl.signal });
+      clearTimeout(t);
+      if (!r.ok) { ollamaOk = false; return; }
+      const d = await r.json();
+      const names = (d.models || []).map(m => m.name || m.model || '');
+      ollamaOk = names.some(n => n === OLLAMA_MODEL || n.split(':')[0] === OLLAMA_MODEL.split(':')[0]);
+    } catch (_) { ollamaOk = false; }
+  }
+  detectOllama();
+  setInterval(detectOllama, 5 * 60 * 1000);
+
+  async function ollamaChat(system, userMsg, maxTokens) {
+    const r = await fetch(OLLAMA_URL + '/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL, stream: false, format: 'json',
+        options: { temperature: 0, num_predict: maxTokens || 1500 },
+        messages: [{ role: 'system', content: system }, { role: 'user', content: userMsg }],
+      }),
+    });
+    if (!r.ok) throw new Error('Ollama HTTP ' + r.status);
+    const d = await r.json();
+    return d.message?.content || '';
+  }
+
   let anthropic = null;
   try {
     if (process.env.ANTHROPIC_API_KEY) {
       const Anthropic = require('@anthropic-ai/sdk');
       anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     }
-  } catch (_) { /* SDK not installed / key missing — template fallback below */ }
+  } catch (_) { /* SDK not installed / key missing — Ollama/template still work */ }
   const CLAUDE_MODEL = process.env.ASK_AI_MODEL || 'claude-opus-5';
+
+  async function claudeChat(system, userMsg, maxTokens) {
+    const resp = await anthropic.messages.create({
+      model: CLAUDE_MODEL, max_tokens: maxTokens || 1400, system, messages: [{ role: 'user', content: userMsg }],
+    });
+    if (resp.stop_reason === 'refusal') throw new Error('Model declined the request');
+    return resp.content.filter(b => b.type === 'text').map(b => b.text).join('');
+  }
 
   // ── Core: per-agency signal set for the caller's scope ───────────────────────
   // Merges agency_master (active CREDIT SALE agencies) + agency_outstanding
@@ -126,19 +171,27 @@ module.exports = function registerAiNexus(ctx) {
       const cur = s ? N(s.cur) : (o ? N(o.last_supply_copies) : 0);
       const declinePct = peak30 > 0 ? Math.round((cur - peak30) / peak30 * 1000) / 10 : null;
 
+      // "Never visited" is only a signal worth acting on when paired with real business
+      // potential (outstanding or supply activity) — DCR visit-history coverage is sparse
+      // (~28k agencies have no visit record at all), so treating every unvisited agency as
+      // urgent would flag almost the entire base and drown out the genuinely urgent ones.
+      const neverVisited = daysSinceVisit == null;
+      const hasPotential = outstanding >= 25000 || peak30 >= 20;
+      const visitStale = daysSinceVisit != null && daysSinceVisit >= 21;
+
       const tags = [];
-      if (outstanding >= 100000 && (daysSinceVisit == null || daysSinceVisit >= 14)) tags.push('URGENT_ACTION');
+      if (outstanding >= 100000 && ((daysSinceVisit != null && daysSinceVisit >= 14) || (neverVisited && hasPotential))) tags.push('URGENT_ACTION');
       if (peak30 >= 50 && declinePct != null && declinePct <= -30) tags.push('WIN_BACK');
       if (peak30 > 0 && cur === 0) tags.push('SUPPLY_AT_RISK');
-      if (daysSinceVisit == null || daysSinceVisit >= 21) tags.push('VISIT_OVERDUE');
+      if (visitStale || (neverVisited && hasPotential)) tags.push('VISIT_OVERDUE');
       if (outstanding >= 50000 && !tags.includes('URGENT_ACTION')) tags.push('COLLECTION_RECOVERY');
-      if (!tags.length) tags.push('MONITOR');
+      if (!tags.length) tags.push(neverVisited ? 'NO_VISIT_HISTORY' : 'MONITOR');
 
       const score = (outstanding / 50000) * 3
-        + (daysSinceVisit == null ? 12 : Math.min(daysSinceVisit / 7, 8)) * 2
+        + (neverVisited ? (hasPotential ? 12 : 0) : Math.min(daysSinceVisit / 7, 8)) * 2
         + (declinePct != null && declinePct < 0 ? Math.min(-declinePct / 10, 10) : 0) * 2;
 
-      return {
+      const sig = {
         unit_code: a.unit_code, agcd: a.agcd, ag_name: a.ag_name, unit_name: a.unit_name, city_name: a.city_name,
         exec_code: a.executive_code || null, exec_name: a.executive_name || '(Unassigned)',
         outstanding, last_visit: lastVisit ? fmtDate(lastVisit) : null, days_since_visit: daysSinceVisit,
@@ -147,6 +200,8 @@ module.exports = function registerAiNexus(ctx) {
         lat: gps ? gps.lat : null, lng: gps ? gps.lng : null,
         tags, score: Math.round(score * 10) / 10,
       };
+      sig.expected_outcome = expectedOutcome(sig);
+      return sig;
     });
   }
 
@@ -155,7 +210,7 @@ module.exports = function registerAiNexus(ctx) {
   // admin's PAN-India scope (thousands of agencies) still resolves quickly.
   function computeNearbyClusters(signals) {
     const flagged = signals
-      .filter(s => !s.tags.includes('MONITOR') && s.lat != null && s.lng != null)
+      .filter(s => isFlagged(s) && s.lat != null && s.lng != null)
       .sort((a, b) => b.score - a.score)
       .slice(0, 200);
 
@@ -183,56 +238,6 @@ module.exports = function registerAiNexus(ctx) {
         combined_score: Math.round(g.reduce((s, a) => s + a.score, 0) * 10) / 10,
       }))
       .sort((a, b) => b.combined_score - a.combined_score);
-  }
-
-  // ── 7-day tour plan: bucket each executive's top flagged agencies by day,
-  //    chained by nearest-neighbour when GPS is available ─────────────────────
-  function buildTourPlan(signals, days) {
-    const byExec = new Map();
-    signals.filter(s => !s.tags.includes('MONITOR')).forEach(s => {
-      const k = s.exec_code || s.exec_name;
-      if (!byExec.has(k)) byExec.set(k, { exec_code: s.exec_code, exec_name: s.exec_name, unit_name: s.unit_name, agencies: [] });
-      byExec.get(k).agencies.push(s);
-    });
-
-    const PER_DAY = 2;
-    const executives = [];
-    for (const ex of byExec.values()) {
-      const pool = ex.agencies.sort((a, b) => b.score - a.score).slice(0, days * PER_DAY);
-      const chosenAgcds = new Set(pool.map(a => a.agcd));
-      const plan = [];
-      const today = new Date();
-      for (let d = 0; d < days; d++) {
-        const dayAgencies = pool.slice(d * PER_DAY, d * PER_DAY + PER_DAY);
-        if (!dayAgencies.length) continue;
-        // suggested add-ons: other flagged agencies (same unit, not already in this exec's week)
-        // within radius of any of today's primary stops
-        const addons = [];
-        dayAgencies.forEach(primary => {
-          if (primary.lat == null) return;
-          ex.agencies.forEach(cand => {
-            if (chosenAgcds.has(cand.agcd) || addons.find(x => x.agcd === cand.agcd)) return;
-            if (cand.lat == null) return;
-            if (haversineKm(primary.lat, primary.lng, cand.lat, cand.lng) <= NEARBY_RADIUS_KM) {
-              addons.push({ agcd: cand.agcd, ag_name: cand.ag_name, distance_km: Math.round(haversineKm(primary.lat, primary.lng, cand.lat, cand.lng) * 10) / 10,
-                tags: cand.tags, opportunity_copies: cand.opportunity_copies, outstanding: cand.outstanding, reason: cand.tags[0] });
-            }
-          });
-        });
-        const date = new Date(today); date.setDate(date.getDate() + d + 1);
-        plan.push({
-          day: d + 1, date: fmtDate(date),
-          agencies: dayAgencies.map(a => ({
-            agcd: a.agcd, ag_name: a.ag_name, city_name: a.city_name, tags: a.tags,
-            outstanding: a.outstanding, opportunity_copies: a.opportunity_copies,
-            days_since_visit: a.days_since_visit, last_visit: a.last_visit,
-          })),
-          suggested_addons: addons.slice(0, 3),
-        });
-      }
-      if (plan.length) executives.push({ exec_code: ex.exec_code, exec_name: ex.exec_name, unit_name: ex.unit_name, plan });
-    }
-    return executives.sort((a, b) => b.plan.reduce((s, p) => s + p.agencies.length, 0) - a.plan.reduce((s, p) => s + p.agencies.length, 0));
   }
 
   // ── Narrative: Claude if configured, deterministic template otherwise ───────
@@ -264,25 +269,76 @@ module.exports = function registerAiNexus(ctx) {
   }
 
   async function aiNarrative(digest) {
-    if (!anthropic) return deterministicNarrative(digest);
+    if (!ollamaOk && !anthropic) return deterministicNarrative(digest);
+    const sys = `You are the AI Circulation Boss for a newspaper circulation organization — proactive, decisive, ` +
+      `data-grounded. Given a JSON digest of computed signals (never invent numbers not present in it), reply ONLY ` +
+      `with JSON: {"summary":"2-3 sentence executive summary citing real numbers","recommendations":["decisive, ` +
+      `numbered-style sentence per item, e.g. 'Add Agency ABC to Day 2 — 2.8 km from planned route, +180 copies ` +
+      `opportunity, ₹75,000 pending, not visited 28 days.'"]}. Max 8 recommendations. Never say \"you may consider\" — ` +
+      `be decisive.`;
+    const userMsg = JSON.stringify(digest).slice(0, 24000);
     try {
-      const sys = `You are the AI Circulation Boss for a newspaper circulation organization — proactive, decisive, ` +
-        `data-grounded. Given a JSON digest of computed signals (never invent numbers not present in it), reply ONLY ` +
-        `with JSON: {"summary":"2-3 sentence executive summary citing real numbers","recommendations":["decisive, ` +
-        `numbered-style sentence per item, e.g. 'Add Agency ABC to Day 2 — 2.8 km from planned route, +180 copies ` +
-        `opportunity, ₹75,000 pending, not visited 28 days.'"]}. Max 8 recommendations. Never say \"you may consider\" — ` +
-        `be decisive.`;
-      const resp = await anthropic.messages.create({
-        model: CLAUDE_MODEL, max_tokens: 1400, system: sys,
-        messages: [{ role: 'user', content: JSON.stringify(digest).slice(0, 24000) }],
-      });
-      if (resp.stop_reason === 'refusal') throw new Error('Model declined the request');
-      const text = resp.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      const text = ollamaOk ? await ollamaChat(sys, userMsg, 1400) : await claudeChat(sys, userMsg, 1400);
       const parsed = extractJson(text);
-      return { ...parsed, engine: 'claude' };
+      return { ...parsed, engine: ollamaOk ? 'ollama' : 'claude' };
     } catch (e) {
       return deterministicNarrative(digest);
     }
+  }
+
+  // ── Expected business outcome of a single visit (per doc §"expected business
+  //    outcome of each visit") — deterministic, no LLM needed for this.
+  function expectedOutcome(a) {
+    const bits = [];
+    if (a.tags.includes('WIN_BACK')) bits.push(`+${a.opportunity_copies} copies/day if supply restored to peak`);
+    if (a.outstanding > 0) bits.push(`${fmtINR(a.outstanding)} recoverable`);
+    if (a.tags.includes('SUPPLY_AT_RISK')) bits.push('diagnose zero-supply cause');
+    if (!bits.length) bits.push('confirm agency health, log visit');
+    return bits.join(' + ');
+  }
+
+  // ── Hindi narrative — used only for email/Telegram drafts (dashboard stays
+  //    English). Ollama first (grounded in the same live digest), deterministic
+  //    Hindi template if Ollama is unavailable or returns something unusable. ──
+  const TAG_HI = {
+    URGENT_ACTION: 'तत्काल कार्रवाई आवश्यक', WIN_BACK: 'वापसी योग्य अवसर',
+    SUPPLY_AT_RISK: 'आपूर्ति जोखिम में', COLLECTION_RECOVERY: 'वसूली आवश्यक',
+    VISIT_OVERDUE: 'भ्रमण बकाया', NO_VISIT_HISTORY: 'भ्रमण इतिहास नहीं', MONITOR: 'सामान्य',
+  };
+  const hiTags = tags => (tags || []).map(t => TAG_HI[t] || t).join(', ');
+
+  function deterministicNarrativeHindi(digest) {
+    const { opportunities, collection_opportunities, supply_risks, expected_impact } = digest;
+    const parts = [];
+    if (opportunities.length) parts.push(`${opportunities.length} एजेंसियों में वापसी योग्य अवसर है, कुल मिलाकर लगभग ${(expected_impact.supply_growth_copies || 0).toLocaleString('en-IN')} प्रतियाँ/दिन।`);
+    if (collection_opportunities.length) parts.push(`${collection_opportunities.length} एजेंसियों से ${fmtINR(expected_impact.collection_recovery)} वसूली योग्य है।`);
+    if (supply_risks.length) parts.push(`${supply_risks.length} एजेंसियाँ शून्य आपूर्ति पर पहुँच गई हैं।`);
+    const summary = parts.length ? parts.join(' ') : 'फिलहाल इस क्षेत्र में कोई बड़ा जोखिम या अवसर नहीं मिला — सभी संकेतक सामान्य हैं।';
+
+    const recs = [];
+    opportunities.slice(0, 3).forEach(a => recs.push(
+      `${a.ag_name} (${a.unit_name}) की आपूर्ति अपने 30-दिन के उच्चतम स्तर से ${Math.abs(a.decline_pct)}% गिर चुकी है — पुनः प्राप्ति से लगभग ${a.opportunity_copies} प्रतियाँ/दिन जुड़ेंगी।`));
+    collection_opportunities.slice(0, 3).forEach(a => recs.push(
+      `${a.ag_name} (${a.unit_name}) से ${fmtINR(a.outstanding)} बकाया वसूल करें — ${a.days_since_visit == null ? 'अभी तक भ्रमण नहीं हुआ' : a.days_since_visit + ' दिन से भ्रमण नहीं हुआ'}।`));
+    supply_risks.slice(0, 2).forEach(a => recs.push(
+      `${a.ag_name} (${a.unit_name}) की आपूर्ति 30-दिन के ${a.peak30_supply} प्रतियों के उच्चतम स्तर से शून्य हो गई है — तुरंत भ्रमण कर कारण जानें।`));
+    return { summary, recommendations: recs.slice(0, 8) };
+  }
+
+  async function hindiNarrative(digest) {
+    if (ollamaOk) {
+      try {
+        const sys = 'आप एक समाचार पत्र परिसंचरण संगठन के लिए एआई सर्कुलेशन बॉस हैं। दिए गए JSON आंकड़ों ' +
+          '(वास्तविक डेटा, कभी न बदलें) के आधार पर, केवल हिंदी में, वास्तविक संख्याओं (₹, प्रतियाँ, दिन) के साथ ' +
+          'निर्णायक सुझाव दें। केवल इस JSON फॉर्मेट में उत्तर दें: {"summary":"2-3 वाक्य","recommendations":["निर्णायक ' +
+          'वाक्य, जैसे: एजेंसी ABC को दूसरे दिन जोड़ें — योजना मार्ग से 2.8 किमी दूर, +180 प्रतियों का अवसर, ₹75,000 ' +
+          'बकाया, 28 दिन से भ्रमण नहीं"]}। अधिकतम 8 सुझाव।';
+        const text = await ollamaChat(sys, JSON.stringify(digest).slice(0, 24000), 1400);
+        const parsed = extractJson(text);
+        if (parsed && parsed.summary) return { ...parsed, engine: 'ollama' };
+      } catch (_) { /* fall through to deterministic Hindi */ }
+    }
+    return { ...deterministicNarrativeHindi(digest), engine: 'template' };
   }
 
   // ── Briefing cache (per scope, 10 min) — mirrors insights.js ────────────────
@@ -291,7 +347,7 @@ module.exports = function registerAiNexus(ctx) {
 
   // ════ GET /api/ai-nexus/status ════
   app.get('/api/ai-nexus/status', (req, res) => {
-    res.json({ ai_configured: !!anthropic, model: anthropic ? CLAUDE_MODEL : 'template' });
+    res.json({ ollama_configured: ollamaOk, ai_configured: ollamaOk || !!anthropic, model: ollamaOk ? OLLAMA_MODEL : anthropic ? CLAUDE_MODEL : 'template' });
   });
 
   // ════ GET /api/ai-nexus/briefing ════
@@ -316,10 +372,16 @@ module.exports = function registerAiNexus(ctx) {
       const overdue_count = signals.filter(s => s.tags.includes('VISIT_OVERDUE')).length;
       const nearby = computeNearbyClusters(signals).slice(0, 8);
 
+      // Q10 "which opportunities are not being acted upon" — P1/P2 insights with zero
+      // open action_items logged against them (nobody has emailed/assigned/escalated yet).
+      const unaddressed_opportunities = (insightsData.insights || [])
+        .filter(i => (i.priority === 'P1' || i.priority === 'P2') && !i.open_actions)
+        .slice(0, 8);
+
       const expected_impact = {
         supply_growth_copies: Math.round(signals.filter(s => s.tags.includes('WIN_BACK')).reduce((s, a) => s + a.opportunity_copies, 0)),
         collection_recovery: Math.round(collection_opportunities.reduce((s, a) => s + a.outstanding, 0)),
-        agencies_flagged: signals.filter(s => !s.tags.includes('MONITOR')).length,
+        agencies_flagged: signals.filter(isFlagged).length,
         agencies_scoped: signals.length,
       };
 
@@ -334,6 +396,7 @@ module.exports = function registerAiNexus(ctx) {
         supply_risks,
         overdue_count,
         nearby_alerts: nearby,
+        unaddressed_opportunities,
         expected_impact: { ...expected_impact, fmt_collection_recovery: fmtINR(expected_impact.collection_recovery) },
         ai_summary: narrative.summary,
         recommendations: narrative.recommendations || [],
@@ -341,20 +404,6 @@ module.exports = function registerAiNexus(ctx) {
       };
       cache.set(cacheKey, { at: Date.now(), data });
       res.json(data);
-    } catch (e) { res.status(500).json({ detail: String(e) }); }
-  });
-
-  // ════ GET /api/ai-nexus/tour-plan ════
-  app.get('/api/ai-nexus/tour-plan', async (req, res) => {
-    try {
-      const days = Math.min(Math.max(parseInt(req.query.days || '7', 10) || 7, 1), 14);
-      const signals = await buildAgencySignals(req);
-      const executives = buildTourPlan(signals, days);
-      res.json({
-        generated_at: new Date().toISOString(), days, executives,
-        note: 'AI-generated from live outstanding/supply/visit signals. Once executive-submitted tour plans are ' +
-              'available, this will additionally validate planned routes and flag missed nearby agencies (spec §4).',
-      });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
@@ -375,5 +424,65 @@ module.exports = function registerAiNexus(ctx) {
       message: 'Competitor cash-sale and credit-sale data has not been uploaded yet. Once provided, this tab will ' +
         'show per-agency and per-unit market-share comparisons against competing publications.',
     });
+  });
+
+  // ════ POST /api/ai-nexus/draft — Hindi email/Telegram draft ════
+  // kind: 'briefing' (whole digest) | 'agency' (single flagged agency). Body composed
+  // server-side in Hindi; sending itself reuses the existing generic
+  // /api/insights/send-email and /api/telegram/send endpoints.
+  app.post('/api/ai-nexus/draft', async (req, res) => {
+    try {
+      const { channel = 'email', kind = 'briefing', briefing, agency } = req.body || {};
+      const fromName = process.env.SMTP_FROM_NAME || 'Patrika Circulation MIS';
+      let subject, body, unitCodes = [], execCode = null;
+
+      if (kind === 'agency' && agency) {
+        const a = agency;
+        subject = `[कार्रवाई आवश्यक] ${a.ag_name} — ${hiTags(a.tags)}`;
+        body = [
+          'प्रिय टीम,', '',
+          `एजेंसी: ${a.ag_name} (${a.unit_name}${a.city_name ? ', ' + a.city_name : ''})`,
+          `स्थिति: ${hiTags(a.tags)}`,
+          a.outstanding ? `बकाया राशि: ${fmtINR(a.outstanding)}` : null,
+          a.opportunity_copies ? `संभावित वृद्धि: +${a.opportunity_copies} प्रतियाँ/दिन` : null,
+          `अंतिम भ्रमण: ${a.last_visit ? a.last_visit + ' (' + a.days_since_visit + ' दिन पहले)' : 'अभी तक नहीं'}`,
+          a.expected_outcome ? `अपेक्षित परिणाम: ${a.expected_outcome}` : null,
+          '', 'कृपया 48 घंटे में समीक्षा करें और स्थिति सूचित करें।', '',
+          'धन्यवाद,', fromName, '(यह सूचना लाइव डेटा से स्वचालित रूप से तैयार की गई है)',
+        ].filter(Boolean).join('\n');
+        unitCodes = [a.unit_code]; execCode = a.exec_code;
+      } else {
+        const b = briefing || {};
+        const digest = {
+          opportunities: b.opportunities || [], collection_opportunities: b.collection_opportunities || [],
+          supply_risks: b.supply_risks || [], expected_impact: b.expected_impact || {},
+        };
+        const narrative = await hindiNarrative(digest);
+        subject = `दैनिक एआई परिसंचरण रिपोर्ट — ${new Date().toISOString().slice(0, 10)}`;
+        body = [
+          'नमस्ते,', '', 'आज की एआई परिसंचरण रिपोर्ट (स्ट्रैटेजिक एआई नेक्सस) प्रस्तुत है:', '',
+          narrative.summary, '', 'मुख्य आँकड़े:',
+          `• ध्यान देने योग्य एजेंसियाँ: ${b.expected_impact?.agencies_flagged ?? 0}`,
+          `• वापसी योग्य अवसर: ${(b.opportunities || []).length} एजेंसियाँ`,
+          `• वसूली योग्य बकाया: ${b.expected_impact?.fmt_collection_recovery || '₹0'}`,
+          `• शून्य आपूर्ति एजेंसियाँ: ${(b.supply_risks || []).length}`, '',
+          'सुझाए गए कदम:', ...narrative.recommendations.map((r, i) => `${i + 1}. ${r}`), '',
+          'धन्यवाद,', fromName, '(यह रिपोर्ट लाइव डेटा से स्वचालित रूप से तैयार की गई है)',
+        ].join('\n');
+      }
+
+      let recipients = [];
+      if (unitCodes.length) {
+        const ph = unitCodes.map(() => '?').join(',');
+        const r = await q(`SELECT unit_code, unit_name, role_label, person_name, email FROM unit_email_config WHERE unit_code IN (${ph}) AND is_active = 1`, unitCodes);
+        recipients = r.rows;
+      }
+      let mobile = null;
+      if (channel === 'telegram' && execCode) {
+        const { rows } = await q(`SELECT mobile_no FROM exec_master WHERE executive_code = ? LIMIT 1`, [execCode]);
+        mobile = rows[0]?.mobile_no || null;
+      }
+      res.json({ subject, body, recipients, mobile, channel });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 };

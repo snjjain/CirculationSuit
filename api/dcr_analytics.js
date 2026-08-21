@@ -1472,6 +1472,156 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
+  // ── POST /api/dcr-analytics/week-plan ────────────────────────────────────
+  // 7-day version of next-day-plan — same data source, same 3-tier engine
+  // (Claude Haiku → Ollama → rule engine), same Hinglish style; spreads the
+  // top ~21 agencies (3/day) across the week instead of picking 8 for one day.
+  app.post('/api/dcr-analytics/week-plan', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const { emp_code, start_date } = req.body || {};
+      if (!emp_code) return res.status(400).json({ detail: 'emp_code required' });
+      const API_KEY = process.env.ANTHROPIC_API_KEY;
+      const VISITS_PER_DAY = 3, TOTAL_DAYS = 7;
+
+      const sDate = isDate(start_date) ? start_date : new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+      const dayDates = Array.from({ length: TOTAL_DAYS }, (_, i) => {
+        const d = new Date(sDate); d.setDate(d.getDate() + i); return d.toISOString().slice(0, 10);
+      });
+
+      const execInfoR = await q(
+        `SELECT MAX(executive_name) exec_name FROM dcr_agency_visit WHERE emp_code=? AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY) LIMIT 1`,
+        [emp_code]
+      );
+      const execName = execInfoR.rows[0]?.exec_name || emp_code;
+
+      const [agR, visitR, osR] = await Promise.all([
+        q(`SELECT agcd, ag_name, COALESCE(city_name, dist_name) city_name, unit_name
+           FROM agency_master
+           WHERE executive_name=? AND CAST(dpcd AS UNSIGNED)=1
+             AND (supply_stop_flag IS NULL OR supply_stop_flag!='Y') AND suspend_date IS NULL
+           LIMIT 150`, [execName]),
+        q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, COUNT(*) cnt, MAX(visit_remarks) last_remarks, MAX(followup_amount) fup_amt, MAX(followup_date) fup_date
+           FROM dcr_agency_visit WHERE emp_code=? AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+           GROUP BY visit_to_main_code`, [emp_code]),
+        q(`SELECT ao.ag_code, ao.cl_amt FROM agency_outstanding ao
+           JOIN agency_master am ON am.agcd=ao.ag_code AND CAST(am.dpcd AS UNSIGNED)=1
+           WHERE am.executive_name=? AND ao.period_label='CURRENT' AND ao.cl_amt>0
+           GROUP BY ao.ag_code`, [execName]),
+      ]);
+
+      const vMap = {}, osMap = {};
+      for (const r of visitR.rows) vMap[r.ag_code] = r;
+      for (const r of osR.rows) osMap[r.ag_code] = +r.cl_amt;
+
+      const unitName = agR.rows[0]?.unit_name || '';
+      const seenAg = new Set();
+      const agRowsUniq = agR.rows.filter(r => !seenAg.has(r.agcd) && seenAg.add(r.agcd));
+
+      const agList = agRowsUniq.map(ag => {
+        const v = vMap[ag.agcd] || {};
+        const os = osMap[ag.agcd] || 0;
+        const days = v.last_visit ? Math.floor((Date.now() - new Date(v.last_visit)) / 86400000) : 999;
+        return { code: ag.agcd, name: ag.ag_name, city: ag.city_name || ag.dist_name, os, days, cnt60: +(v.cnt || 0), last_rmk: (v.last_remarks || '').slice(0, 80), fup_amt: +(v.fup_amt || 0), fup_date: v.fup_date || '' };
+      }).sort((a, b) => b.os - a.os || b.days - a.days).slice(0, VISITS_PER_DAY * TOTAL_DAYS);
+
+      const supMap = {};
+      if (agList.length) {
+        const ph = agList.map(() => '?').join(',');
+        const { rows: supRows } = await q(
+          `SELECT agcd, AVG(sup_copy) avg_sup FROM supply_data
+           WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) AND agcd IN (${ph})
+           GROUP BY agcd`, agList.map(a => a.code));
+        supRows.forEach(r => { supMap[r.agcd] = Math.round(+r.avg_sup || 0); });
+      }
+      agList.forEach(a => {
+        a.avg_sup = supMap[a.code] || 0;
+        a.growth_ask = a.avg_sup ? Math.min(50, Math.max(5, Math.round(a.avg_sup * 0.05 / 5) * 5)) : 0;
+      });
+
+      const agText = agList.map((a, i) =>
+        `${i + 1}. ${a.name} (${a.city || '-'}) | OS:Rs${a.os.toLocaleString('en-IN')} | Last visit:${a.days >= 999 ? 'Never' : a.days + 'd ago'} | 60d visits:${a.cnt60} | Followup:Rs${a.fup_amt} by ${a.fup_date || '?'} | Avg supply:${a.avg_sup || '?'} copies/day | Suggested growth ask:+${a.growth_ask || '?'} copies | Note:"${a.last_rmk}"`
+      ).join('\n');
+      const weekPrompt = `You are a circulation manager at Rajasthan Patrika newspaper. Create a smart 7-DAY field visit plan (Day 1 to Day 7, starting ${sDate}) for executive ${execName} working in ${unitName}.\n\nPrioritization logic:\n1. High outstanding balance (OS) = highest priority = needs recovery\n2. Pending followup commitment (fup_amt > 0) = visit to collect what was promised\n3. Not visited in 30+ days = coverage gap\n4. Never visited = must cover\n\nMOST IMPORTANT: Copy Growth is our MAIN GOAL. In EVERY visit's key_point, ask for a specific copy-growth commitment using that agency's "Suggested growth ask" number.\n\nSpread ~${VISITS_PER_DAY} visits per day across all 7 days. NEVER repeat the same agency twice across the whole week.\nLanguage: Hinglish — simple Hindi (Devanagari) mixed with common English business words (Visit, Recovery, Outstanding, Payment, Confirmed Date, Commitment, Copy Growth), the way Indian office teams talk. Keep agency names, amounts and dates as-is.\n\nAgencies available:\n${agText}\n\nReturn ONLY valid JSON (no prose before or after):\n{"exec":"${execName}","unit":"${unitName}","start_date":"${sDate}","days":[{"day":1,"date":"${dayDates[0]}","focus_message":"...1 line Hindi motivational message ending with growth reminder...","total_target":0,"visits":[{"rank":1,"ag_code":"...","ag_name":"...","city":"...","priority":"high|medium|low","action":"...Hindi instruction...","target_amount":0,"key_point":"...Hindi: one critical point + growth commitment ask..."}]}, ... repeat for all 7 days ...]}`;
+
+      if (API_KEY) {
+        try {
+          const Anthropic = require('@anthropic-ai/sdk');
+          const client = new Anthropic({ apiKey: API_KEY });
+          const resp = await client.messages.create({
+            model: 'claude-haiku-4-5-20251001', max_tokens: 4000,
+            messages: [{ role: 'user', content: weekPrompt }]
+          });
+          const text = resp.content[0]?.text || '{}';
+          const jm = text.match(/\{[\s\S]*\}/);
+          const plan = jm ? JSON.parse(jm[0]) : null;
+          if (plan && (plan.days || []).length)
+            return res.json({ plan, exec_name: execName, unit_name: unitName, model: 'Claude Haiku' });
+        } catch (_) { /* fall through */ }
+      }
+
+      if (process.env.OLLAMA_URL) {
+        const o = await ollamaChat(weekPrompt, 300000);
+        if (o) {
+          try {
+            const jm = o.text.match(/\{[\s\S]*\}/);
+            const plan = jm ? JSON.parse(jm[0]) : null;
+            if (plan && (plan.days || []).length)
+              return res.json({ plan, exec_name: execName, unit_name: unitName, model: o.model });
+          } catch (_) { /* fall through */ }
+        }
+      }
+
+      // Tier 3: FREE rule engine — same per-agency Hinglish logic as next-day-plan,
+      // bucketed VISITS_PER_DAY agencies per day across the week.
+      const buildVisit = (a, rank) => {
+        const priority = (a.os > 50000 || a.fup_amt > 0) ? 'high' : (a.os > 10000 || a.days >= 30) ? 'medium' : 'low';
+        const gAsk = a.growth_ask > 0
+          ? `कम से कम ${a.growth_ask} Copies की Growth का Commitment ज़रूर लें।`
+          : `Copy Growth का Commitment ज़रूर लें।`;
+        let action, key_point;
+        if (a.fup_amt > 0) {
+          action = `वादा की गई Payment ₹${a.fup_amt.toLocaleString('en-IN')} वसूल करें${a.fup_date ? ' (due: ' + String(a.fup_date).slice(0, 10) + ')' : ''}`;
+          key_point = `Agent ने यह राशि देने का वादा किया था — Recovery करें। ${gAsk}`;
+        } else if (a.os > 0 && a.days >= 999) {
+          action = `Outstanding: ₹${a.os.toLocaleString('en-IN')}`;
+          key_point = `अब तक कोई Visit नहीं हुई है। पहले Agency से proper contact establish करें, उसके बाद Recovery और Copy Growth पर discussion करें।`;
+        } else if (a.os > 0 && a.days >= 30) {
+          action = `Outstanding: ₹${a.os.toLocaleString('en-IN')}`;
+          key_point = `पिछले ${a.days} दिनों से Visit नहीं हुई है। Recovery के साथ ${gAsk}`;
+        } else if (a.os > 0) {
+          action = `Outstanding: ₹${a.os.toLocaleString('en-IN')}`;
+          key_point = `Cash Recovery करें या Payment की Confirmed Date लें। Recovery के साथ ${gAsk}`;
+        } else if (a.days >= 999) {
+          action = `पहली Visit — परिचय करें और Agency की स्थिति देखें`;
+          key_point = `Contact establish करें और Copy Growth की संभावना पर discussion करें।`;
+        } else {
+          action = `Contact Visit — आख़िरी Visit ${a.days} दिन पहले`;
+          key_point = `Supply satisfaction पूछें। ${gAsk}`;
+        }
+        const target_amount = a.fup_amt > 0 ? a.fup_amt : (a.os > 0 ? Math.round(a.os * 0.25) : 0);
+        return { rank, ag_code: a.code, ag_name: a.name, city: a.city || '', priority, action, target_amount, key_point };
+      };
+
+      const days = [];
+      for (let d = 0; d < TOTAL_DAYS; d++) {
+        const chunk = agList.slice(d * VISITS_PER_DAY, d * VISITS_PER_DAY + VISITS_PER_DAY);
+        if (!chunk.length) continue;
+        const visits = chunk.map((a, i) => buildVisit(a, i + 1));
+        const total_target = visits.reduce((s, v) => s + v.target_amount, 0);
+        days.push({
+          day: d + 1, date: dayDates[d],
+          focus_message: total_target > 0
+            ? `Target: ${visits.filter(v => v.target_amount > 0).length} Agencies से ₹${total_target.toLocaleString('en-IN')} की Recovery करनी है। हर Visit पर Copy Growth का Commitment लेना अनिवार्य है!`
+            : `हर Agency पर contact मज़बूत करें और Copy Growth का Commitment लें!`,
+          total_target, visits,
+        });
+      }
+      const plan = { exec: execName, unit: unitName, start_date: sDate, days };
+      res.json({ plan, exec_name: execName, unit_name: unitName, model: 'Rule Engine (free)' });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
   // ── GET /api/dcr-analytics/incharges ────────────────────────────────────────
   // Circulation Incharges with their team size (from PLI hierarchy mapping)
   app.get('/api/dcr-analytics/incharges', async (req, res) => {
@@ -1599,6 +1749,124 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       }
 
       res.json({ date: tDate, unit_code, unit_name: unitName, incharge, execs: teams, grand_total: grandTotal, model: 'Rule Engine (free)' });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ── POST /api/dcr-analytics/week-team-plan ──────────────────────────────────
+  // 7-day version of team-plan — same Circulation Incharge / Unit picker (this
+  // IS the hierarchy's "Unit Wise" level), top 3 agencies/exec spread across the
+  // week (~21 total) instead of 3 for one day. Rule engine only, same as team-plan.
+  app.post('/api/dcr-analytics/week-team-plan', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const { unit_code, circ_incharge, start_date } = req.body || {};
+      if (!unit_code && !circ_incharge) return res.status(400).json({ detail: 'unit_code or circ_incharge required' });
+      const VISITS_PER_DAY = 3, TOTAL_DAYS = 7;
+      const sDate = isDate(start_date) ? start_date : new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+      const dayDates = Array.from({ length: TOTAL_DAYS }, (_, i) => {
+        const d = new Date(sDate); d.setDate(d.getDate() + i); return d.toISOString().slice(0, 10);
+      });
+      const { clause: sc, params: sp } = await resolveScope(req);
+
+      let execRows, unitName, incharge = null;
+      if (circ_incharge) {
+        const { rows: mapRows } = await q(
+          `SELECT exec_code, MAX(exec_desc) exec_name, GROUP_CONCAT(DISTINCT unit_code) units,
+                  MAX(circ_incharge_name) ci_name
+           FROM exec_hierarchy_mapping
+           WHERE circ_incharge = ? AND exec_desc IS NOT NULL AND exec_desc != 'N/A'
+           GROUP BY exec_code ORDER BY MAX(exec_desc) LIMIT 20`,
+          [String(circ_incharge)]
+        );
+        const { rows: actRows } = await q(`SELECT executive_code FROM exec_master WHERE is_active_pli = 'Y'`);
+        const activeSet = new Set(actRows.map(r => r.executive_code));
+        let team = mapRows.filter(r => activeSet.has(r.exec_code));
+        if (!team.length) team = mapRows;
+        execRows = team.map(r => ({ emp_code: null, exec_name: r.exec_name, unit_name: r.units }));
+        incharge = { code: String(circ_incharge), name: mapRows[0]?.ci_name || '' };
+        unitName = incharge.name ? `Team of ${incharge.name}` : String(circ_incharge);
+      } else {
+        const { rows } = await q(
+          `SELECT emp_code, MAX(executive_name) exec_name, MAX(unit_name) unit_name
+           FROM dcr_agency_visit
+           WHERE unit_code = ? AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)${sc}
+           GROUP BY emp_code ORDER BY MAX(executive_name) LIMIT 15`,
+          [String(unit_code), ...sp]
+        );
+        execRows = rows;
+        unitName = rows[0]?.unit_name || String(unit_code);
+      }
+      if (!execRows.length) return res.json({ start_date: sDate, unit_code, unit_name: unitName || '', incharge, execs: [], grand_total: 0 });
+
+      const teams = [];
+      for (const ex of execRows) {
+        const [agR, visitR, osR] = await Promise.all([
+          q(`SELECT agcd, ag_name, COALESCE(city_name, dist_name) city_name
+             FROM agency_master
+             WHERE executive_name=? AND CAST(dpcd AS UNSIGNED)=1
+               AND (supply_stop_flag IS NULL OR supply_stop_flag!='Y') AND suspend_date IS NULL
+             LIMIT 150`, [ex.exec_name]),
+          q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, MAX(followup_amount) fup_amt, MAX(followup_date) fup_date
+             FROM dcr_agency_visit WHERE ${ex.emp_code ? 'emp_code=?' : 'executive_name=?'} AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+             GROUP BY visit_to_main_code`, [ex.emp_code || ex.exec_name]),
+          q(`SELECT ao.ag_code, ao.cl_amt FROM agency_outstanding ao
+             JOIN agency_master am ON am.agcd=ao.ag_code AND CAST(am.dpcd AS UNSIGNED)=1
+             WHERE am.executive_name=? AND ao.period_label='CURRENT' AND ao.cl_amt>0
+             GROUP BY ao.ag_code`, [ex.exec_name]),
+        ]);
+        const vMap = {}, osMap = {};
+        for (const r of visitR.rows) vMap[r.ag_code] = r;
+        for (const r of osR.rows) osMap[r.ag_code] = +r.cl_amt;
+        const seen = new Set();
+        const top = agR.rows.filter(r => !seen.has(r.agcd) && seen.add(r.agcd))
+          .map(ag => {
+            const v = vMap[ag.agcd] || {};
+            const os = osMap[ag.agcd] || 0;
+            const days = v.last_visit ? Math.floor((Date.now() - new Date(v.last_visit)) / 86400000) : 999;
+            return { code: ag.agcd, name: ag.ag_name, city: ag.city_name || '', os, days, fup_amt: +(v.fup_amt || 0), fup_date: v.fup_date || '' };
+          })
+          .sort((a, b) => b.os - a.os || b.days - a.days).slice(0, VISITS_PER_DAY * TOTAL_DAYS);
+        teams.push({ emp_code: ex.emp_code, exec_name: ex.exec_name, agencies: top });
+      }
+
+      const allCodes = [...new Set(teams.flatMap(t => t.agencies.map(v => v.code)))];
+      const supMap = {};
+      if (allCodes.length) {
+        const ph = allCodes.map(() => '?').join(',');
+        const { rows: supRows } = await q(
+          `SELECT agcd, AVG(sup_copy) avg_sup FROM supply_data
+           WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) AND agcd IN (${ph})
+           GROUP BY agcd`, allCodes);
+        supRows.forEach(r => { supMap[r.agcd] = Math.round(+r.avg_sup || 0); });
+      }
+
+      const noteFor = v => v.fup_amt > 0
+        ? `वादा की गई Payment ₹${v.fup_amt.toLocaleString('en-IN')} due${v.fup_date ? ' ' + String(v.fup_date).slice(0, 10) : ''}`
+        : v.days >= 999 ? 'अब तक कोई Visit नहीं'
+        : v.days >= 30 ? `${v.days} दिन से Visit नहीं`
+        : 'Cash Recovery / Confirmed Date लें';
+
+      let grandTotal = 0;
+      for (const t of teams) {
+        const days = [];
+        for (let d = 0; d < TOTAL_DAYS; d++) {
+          const chunk = t.agencies.slice(d * VISITS_PER_DAY, d * VISITS_PER_DAY + VISITS_PER_DAY);
+          if (!chunk.length) continue;
+          const visits = chunk.map(v => {
+            const avg = supMap[v.code] || 0;
+            const growth_ask = avg ? Math.min(50, Math.max(5, Math.round(avg * 0.05 / 5) * 5)) : 0;
+            const target_amount = v.fup_amt > 0 ? v.fup_amt : (v.os > 0 ? Math.round(v.os * 0.25) : 0);
+            grandTotal += target_amount;
+            return { ...v, growth_ask, target_amount, note: noteFor(v) };
+          });
+          days.push({ day: d + 1, date: dayDates[d], total_target: visits.reduce((s, v) => s + v.target_amount, 0), visits });
+        }
+        t.days = days;
+        t.total_target = days.reduce((s, d) => s + d.total_target, 0);
+        delete t.agencies;
+      }
+
+      res.json({ start_date: sDate, unit_code, unit_name: unitName, incharge, execs: teams, grand_total: grandTotal, model: 'Rule Engine (free)' });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 

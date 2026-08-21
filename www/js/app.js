@@ -2025,6 +2025,7 @@ VIEWS.dcr_analytics = () => {
     <button class="${tab==='coverage'?'on':''}" onclick="dcrASetTab('coverage')">⚠️ Agency Coverage</button>
     <button class="${tab==='remarks'?'on':''}"  onclick="dcrASetTab('remarks')">💬 AI Remarks</button>
     <button class="${tab==='plan'?'on':''}"     onclick="dcrASetTab('plan')">📋 Next Day Plan</button>
+    <button class="${tab==='weekplan'?'on':''}" onclick="dcrASetTab('weekplan')">📅 7-Day Tour Plan</button>
   </div>`;
 
   let body = '';
@@ -2037,6 +2038,7 @@ VIEWS.dcr_analytics = () => {
   else if (tab === 'coverage') body = _dcrACoverageTab();
   else if (tab === 'remarks') body = _dcrARemarksTab();
   else if (tab === 'plan') body = _dcrANextPlanTab();
+  else if (tab === 'weekplan') body = _dcrAWeekPlanTab();
 
   return hdr + filterBar + tabs + `<div class="card pad">${body}</div>`;
 };
@@ -2566,6 +2568,318 @@ window._dcrATgSend = async () => {
     if (!r.ok) { errEl.textContent = d.detail || 'Send failed'; return; }
     closeModals();
     toast('✈️ Plan sent on Telegram ✓');
+  } catch (e) { errEl.textContent = 'Send failed: ' + e.message; }
+};
+
+/* ── 7-Day Tour Plan tab — same process as Next Day Plan, spread over a week ── */
+window.dcrAGenWeekPlan = async () => {
+  const code = _dcrA.weekEmpCode;
+  if (!code) return;
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0,10);
+  const startDate = _dcrA.weekStartDate || tomorrow;
+  _dcrA._loadingWeek = true; _dcrA.weekPlan = null; render();
+  try {
+    const r = await fetch(`${location.origin.replace(':8123', ':8001')}/api/dcr-analytics/week-plan`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emp_code: code, start_date: startDate }),
+    });
+    const d = await r.json();
+    _dcrA.weekPlan = d;
+  } catch (_) { _dcrA.weekPlan = { _err: true }; }
+  _dcrA._loadingWeek = false;
+  if (S.screen === 'dcr_analytics') render();
+};
+
+function _dcrAWeekPlanTab() {
+  _dcrALoadPlanExecs();
+  const execs = _dcrA.tourExecs?.executives || _dcrA.planExecs || [];
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0,10);
+
+  const execOpts = `<option value="">— Select Executive —</option>` + execs.map(e =>
+    `<option value="${esc(e.emp_code)}" ${_dcrA.weekEmpCode===e.emp_code?'selected':''}>${esc(e.name||e.emp_code)} [${esc(e.unit_name||e.unit_code||'')}]</option>`
+  ).join('');
+
+  const controls = `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--brd2)">
+    <select id="weekExecSel" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink);max-width:280px">${execOpts}</select>
+    <input type="date" id="weekStartIn" value="${_dcrA.weekStartDate || tomorrow}" min="${tomorrow}" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink)">
+    <button class="btn sm pri" style="background:#7c3aed;color:#fff;border:none" onclick="_dcrA.weekEmpCode=document.getElementById('weekExecSel').value;_dcrA.weekStartDate=document.getElementById('weekStartIn').value;dcrAGenWeekPlan()" ${_dcrA._loadingWeek?'disabled':''}>
+      ${_dcrA._loadingWeek ? '⏳ Generating…' : '🤖 Generate 7-Day Plan'}
+    </button>
+    ${_dcrA._loadingWeek ? '<span style="font-size:12px;color:#7c3aed">AI is planning a full week — local model can take a few minutes…</span>' : ''}
+  </div>`;
+
+  if (!_dcrA.weekPlan && !_dcrA._loadingWeek) {
+    return controls + `<div style="color:var(--ink-2);font-size:13px;padding:30px 0;text-align:center">
+      <div style="font-size:32px;margin-bottom:10px">📅</div>
+      <div>Select an executive and start date, then click "Generate 7-Day Plan"</div>
+      <div style="font-size:11px;margin-top:6px">Same prioritization as Next Day Plan — outstanding, followups, visit recency — spread across the week</div>
+    </div>` + _dcrAWeekTeamPlanSection();
+  }
+  if (_dcrA._loadingWeek) return controls + `<div style="color:var(--ink-2);padding:40px 0;text-align:center">⏳ पूरे हफ़्ते की योजना बन रही है…</div>`;
+  if (_dcrA.weekPlan?._err) return controls + `<div style="color:var(--red);padding:20px 0">Failed to generate plan.</div>`;
+
+  const p = _dcrA.weekPlan?.plan || {};
+  const daysArr = p.days || [];
+  const prioColor = s => s === 'high' ? '#ef4444' : s === 'medium' ? '#f59e0b' : '#6b7280';
+  const weekTotal = daysArr.reduce((s, d) => s + (d.total_target || 0), 0);
+  const weekVisits = daysArr.reduce((s, d) => s + (d.visits || []).length, 0);
+
+  const planCard = `
+    <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;border-radius:12px;padding:16px 18px;margin-bottom:16px">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;opacity:.8">AI 7-Day Tour Plan for ${esc(p.exec||'')} · ${esc(p.unit||'')}</div>
+      <div style="font-size:18px;font-weight:700;margin:6px 0">${esc(p.start_date||'')} onward</div>
+      <div style="display:flex;gap:20px;margin-top:12px">
+        <div><div style="font-size:10px;opacity:.7">PLANNED VISITS</div><div style="font-size:22px;font-weight:800">${weekVisits}</div></div>
+        <div><div style="font-size:10px;opacity:.7">WEEK TARGET</div><div style="font-size:22px;font-weight:800">₹${weekTotal.toLocaleString('en-IN')}</div></div>
+      </div>
+    </div>`;
+
+  const dayBlocks = daysArr.map(day => `
+    <div style="border:1px solid var(--brd2);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:var(--bg)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <b style="font-size:13px">Day ${day.day} — ${esc(day.date||'')}</b>
+        ${day.total_target > 0 ? `<span style="background:#d1fae5;color:#065f46;font-size:11px;font-weight:700;padding:3px 10px;border-radius:10px">₹${day.total_target.toLocaleString('en-IN')}</span>` : ''}
+      </div>
+      ${day.focus_message ? `<div style="font-size:11.5px;font-style:italic;color:var(--ink-2);margin-bottom:8px">"${esc(day.focus_message)}"</div>` : ''}
+      ${(day.visits||[]).map((v,i) => `
+        <div style="border-left:3px solid ${prioColor(v.priority)};padding:6px 10px;margin-bottom:6px;background:var(--card)">
+          <div style="display:flex;align-items:center;gap:8px">
+            <b style="font-size:12.5px">${i+1}. ${esc(v.ag_name||'')}</b>
+            <span style="font-size:10.5px;color:var(--ink-2)">${esc(v.city||'')}</span>
+            <span style="margin-left:auto;background:${prioColor(v.priority)}22;color:${prioColor(v.priority)};font-size:9.5px;padding:1px 7px;border-radius:9px;font-weight:700;text-transform:uppercase">${v.priority||''}</span>
+          </div>
+          <div style="font-size:11px;margin-top:3px"><span style="color:var(--ink-2)">Action: </span>${esc(v.action||'')}${v.target_amount > 0 ? ` · ₹${v.target_amount.toLocaleString('en-IN')}` : ''}</div>
+          <div style="font-size:11px"><span style="color:var(--ink-2)">Key Point: </span><b>${esc(v.key_point||'')}</b></div>
+        </div>`).join('')}
+    </div>`).join('');
+
+  const tgBtn = _dcrA.weekEmpCode ? `
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--brd2)">
+      <button class="btn sm" style="background:#229ED9;color:#fff;border:none" onclick="dcrAWeekPlanTelegram()">✈️ Send Week Plan on Telegram</button>
+    </div>` : '';
+
+  return controls + planCard + dayBlocks + tgBtn + _dcrAWeekTeamPlanSection();
+}
+
+function _dcrAWeekPlanText() {
+  const p = _dcrA.weekPlan?.plan || {};
+  const pri = s => s === 'high' ? '🔴' : s === 'medium' ? '🟡' : '⚪';
+  const total = (p.days||[]).reduce((s,d) => s + (d.total_target||0), 0);
+  const L = [];
+  L.push(`🗞 राजस्थान पत्रिका — अगले 7 दिनों का Visit Plan`);
+  L.push(`👤 ${p.exec || ''} (${p.unit || ''}) · शुरू: ${p.start_date || ''}`);
+  if (total > 0) L.push(`💰 Week Recovery Target: ₹${total.toLocaleString('en-IN')}`);
+  (p.days || []).forEach(day => {
+    L.push(`\n📅 Day ${day.day} — ${day.date}`);
+    if (day.focus_message) L.push(`🎯 ${day.focus_message}`);
+    (day.visits || []).forEach((v, i) => {
+      L.push(`${i+1}. ${pri(v.priority)} ${v.ag_name||''}${v.city ? ' ('+v.city+')' : ''}`);
+      if (v.action) L.push(`${v.action}${v.target_amount > 0 ? ' · Target: ₹'+v.target_amount.toLocaleString('en-IN') : ''}`);
+      if (v.key_point) L.push(`⚠️ ${v.key_point}`);
+    });
+  });
+  return L.join('\n');
+}
+
+window.dcrAWeekPlanTelegram = async () => {
+  const p = _dcrA.weekPlan?.plan || {};
+  const execName = _dcrA.weekPlan?.exec_name || p.exec || '';
+  let pre = { mobile: '', linked: false, enabled: true, bot_username: null };
+  try {
+    const r = await fetch(`${location.origin.replace(':8123',':8001')}/api/telegram/resolve?emp_code=${encodeURIComponent(_dcrA.weekEmpCode || '')}&name=${encodeURIComponent(execName)}`, { headers: api.h() });
+    pre = await r.json();
+  } catch (_) {}
+  if (!pre.enabled) { toast('⚠ Telegram bot not configured — set TELEGRAM_BOT_TOKEN in server .env'); return; }
+  const text = _dcrAWeekPlanText();
+  modal(`<h3>✈️ Send 7-Day Plan on Telegram</h3>
+    <p style="font-size:12px;color:var(--ink-2)">To <b>${esc(execName)}</b>. ${pre.linked ? '<span style="color:var(--grn)">✓ Telegram linked</span>' : pre.mobile ? '<span style="color:#d97706">Number found — link status will be checked on send</span>' : 'Enter executive mobile number.'}</p>
+    <input id="tgMob" type="tel" maxlength="10" value="${esc(pre.mobile || '')}" placeholder="10-digit mobile" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;margin-bottom:8px;background:var(--bg);color:var(--ink)">
+    <textarea id="tgText" rows="12" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;font-size:12px;background:var(--bg);color:var(--ink)">${esc(text)}</textarea>
+    <div id="tgErr" style="color:var(--red);font-size:12px;margin-top:6px"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn pri block" onclick="_dcrATgWeekSend()">Send</button>
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+};
+
+window._dcrATgWeekSend = async () => {
+  const mob = document.getElementById('tgMob')?.value?.replace(/\D/g, '').slice(-10);
+  const full = document.getElementById('tgText')?.value || '';
+  const errEl = document.getElementById('tgErr');
+  if (!mob || mob.length !== 10) { errEl.textContent = 'Enter a valid 10-digit mobile'; return; }
+  // Telegram limit 4096 chars — split by day if the week plan is long
+  const parts = [];
+  if (full.length <= 3800) parts.push(full);
+  else {
+    const chunks = full.split('\n📅 Day ');
+    let cur = chunks.shift();
+    for (const c of chunks) {
+      const withDay = '📅 Day ' + c;
+      if ((cur + '\n' + withDay).length > 3600) { parts.push(cur); cur = withDay; }
+      else cur += '\n' + withDay;
+    }
+    parts.push(cur);
+  }
+  errEl.textContent = 'Sending…';
+  try {
+    for (let i = 0; i < parts.length; i++) {
+      const text = parts.length > 1 ? `${parts[i]}\n\n(भाग ${i + 1}/${parts.length})` : parts[i];
+      const r = await fetch(`${location.origin.replace(':8123',':8001')}/api/telegram/send`, {
+        method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mobile: mob, text, emp_code: _dcrA.weekEmpCode || '' }),
+      });
+      const d = await r.json();
+      if (r.status === 404 && d.detail === 'not_linked') {
+        errEl.innerHTML = `This number is not linked yet.<br><b>Ask the executive to:</b> open Telegram → search <b>@${esc(d.bot_username || 'the bot')}</b> → press <b>Start</b> → tap <b>📱 Share my number</b>. Then send again.`;
+        return;
+      }
+      if (!r.ok) { errEl.textContent = d.detail || 'Send failed'; return; }
+    }
+    closeModals();
+    toast('✈️ 7-day plan sent on Telegram ✓');
+  } catch (e) { errEl.textContent = 'Send failed: ' + e.message; }
+};
+
+/* ── Week Team Plan (all executives reporting to a Circulation Incharge) ── */
+function _dcrAWeekTeamPlanSection() {
+  _dcrALoadIncharges();
+  const inchs = _dcrA.incharges || [];
+  const inchOpts = `<option value="">— Select Circulation Incharge —</option>` +
+    inchs.map(c => `<option value="${esc(c.code)}" ${_dcrA.weekTeamUnit === c.code ? 'selected' : ''}>${esc(c.name)} (${c.exec_count} exec · ${esc(String(c.units || '').split(',').slice(0, 3).join(','))})</option>`).join('');
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+
+  const head = `
+    <div style="margin-top:26px;padding-top:16px;border-top:2px solid var(--brd2)">
+      <div style="font-size:13px;font-weight:700;margin-bottom:3px">👥 7-Day Team Plan — Circulation Incharge के लिए</div>
+      <div style="font-size:11px;color:var(--ink-2);margin-bottom:10px">Incharge को report करने वाले सभी Executives का combined 7-दिन का tour plan (top ~21 agencies each, spread over the week)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">
+        <select id="weekTeamInchSel" onchange="if(this.value)document.getElementById('weekTeamUnitSel').value=''" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink);max-width:300px">${inchOpts}</select>
+        <span style="font-size:11px;color:var(--ink-2)">या Unit से:</span>
+        <select id="weekTeamUnitSel" onchange="if(this.value)document.getElementById('weekTeamInchSel').value=''" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink);max-width:200px">
+          <option value="">— Unit —</option>${(_dcrA.units || []).map(u => `<option value="${esc(u.unit_code)}">${esc(u.unit_name)}</option>`).join('')}
+        </select>
+        <input type="date" id="weekTeamStartIn" value="${_dcrA.weekStartDate || tomorrow}" min="${tomorrow}" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink)">
+        <button class="btn sm pri" onclick="dcrAGenWeekTeamPlan()" ${_dcrA._loadingWeekTeam ? 'disabled' : ''}>${_dcrA._loadingWeekTeam ? '⏳ Generating…' : '👥 Generate 7-Day Team Plan'}</button>
+      </div>`;
+
+  const tp = _dcrA.weekTeamPlan;
+  if (!tp && !_dcrA._loadingWeekTeam) return head + `</div>`;
+  if (_dcrA._loadingWeekTeam) return head + `<div style="color:var(--ink-2);font-size:12px;padding:10px 0">⏳ पूरी team का week plan बन रहा है…</div></div>`;
+  if (tp?._err) return head + `<div style="color:var(--red);font-size:12px;padding:10px 0">Week team plan failed: ${esc(tp._err)}</div></div>`;
+  if (!(tp.execs || []).length) return head + `<div style="color:var(--ink-2);font-size:12px;padding:10px 0">इस unit में last 60 दिनों में कोई active executive नहीं मिला.</div></div>`;
+
+  const blocks = tp.execs.map(t => `
+    <div style="border:1px solid var(--brd2);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--bg)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <b style="font-size:12.5px">👤 ${esc(t.exec_name)}</b>
+        ${t.total_target > 0 ? `<span style="background:#d1fae5;color:#065f46;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px">Week Target ₹${t.total_target.toLocaleString('en-IN')}</span>` : ''}
+      </div>
+      ${(t.days || []).map(day => `
+        <div style="font-size:11px;font-weight:700;color:var(--ink-2);margin-top:6px">Day ${day.day} — ${esc(day.date)}${day.total_target ? ' · ₹' + day.total_target.toLocaleString('en-IN') : ''}</div>
+        ${(day.visits || []).map((v, i) => `
+          <div style="font-size:11.5px;padding:3px 0;border-top:${i ? '1px dashed var(--brd2)' : 'none'}">
+            ${i + 1}. <b>${esc(v.name)}</b>${v.city ? ' (' + esc(v.city) + ')' : ''}
+            ${v.os > 0 ? ` — Outstanding ₹${v.os.toLocaleString('en-IN')}` : ''}
+            <span style="color:var(--ink-2)"> · ${esc(v.note)}</span>
+            ${v.growth_ask > 0 ? `<span style="color:#15803d;font-weight:600"> · +${v.growth_ask} copies growth</span>` : ''}
+          </div>`).join('')}`).join('')}
+    </div>`).join('');
+
+  return head + `
+    <div style="font-size:12px;margin-bottom:10px">
+      <b>${esc(tp.unit_name)}</b> · ${tp.execs.length} Executives · Total Week Recovery Target: <b>₹${(tp.grand_total || 0).toLocaleString('en-IN')}</b>
+    </div>
+    ${blocks}
+    <button class="btn sm" style="background:#229ED9;color:#fff;border:none;margin-top:6px" onclick="dcrAWeekTeamTelegram()">✈️ Send to Incharge on Telegram</button>
+  </div>`;
+}
+
+window.dcrAGenWeekTeamPlan = async () => {
+  const ci = document.getElementById('weekTeamInchSel')?.value;
+  const uc = document.getElementById('weekTeamUnitSel')?.value;
+  const dt = document.getElementById('weekTeamStartIn')?.value;
+  if (!ci && !uc) { toast('Circulation Incharge या Unit चुनें'); return; }
+  _dcrA.weekTeamUnit = ci || uc; _dcrA._loadingWeekTeam = true; _dcrA.weekTeamPlan = null; render();
+  try {
+    const r = await fetch(`${location.origin.replace(':8123', ':8001')}/api/dcr-analytics/week-team-plan`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(ci ? { circ_incharge: ci, start_date: dt } : { unit_code: uc, start_date: dt }),
+    });
+    const d = await r.json();
+    _dcrA.weekTeamPlan = r.ok ? d : { _err: d.detail || r.status };
+  } catch (e) { _dcrA.weekTeamPlan = { _err: e.message }; }
+  _dcrA._loadingWeekTeam = false;
+  if (S.screen === 'dcr_analytics') render();
+};
+
+function _dcrAWeekTeamPlanText() {
+  const tp = _dcrA.weekTeamPlan || {};
+  const L = [];
+  L.push(`🗞 राजस्थान पत्रिका — 7-दिन Team Tour Plan`);
+  L.push(`👥 ${tp.unit_name || ''} · शुरू: ${tp.start_date || ''}`);
+  if (tp.grand_total) L.push(`💰 Week Recovery Target: ₹${tp.grand_total.toLocaleString('en-IN')}`);
+  (tp.execs || []).forEach(t => {
+    L.push(`\n👤 ${t.exec_name}${t.total_target ? ' · ₹' + t.total_target.toLocaleString('en-IN') : ''}`);
+    (t.days || []).forEach(day => {
+      L.push(`Day ${day.day} (${day.date}):`);
+      (day.visits || []).forEach((v, i) => L.push(`  ${i+1}. ${v.name}${v.city ? ' ('+v.city+')' : ''} — ${v.note}`));
+    });
+  });
+  return L.join('\n');
+}
+
+window.dcrAWeekTeamTelegram = async () => {
+  const text = _dcrAWeekTeamPlanText();
+  const tp = _dcrA.weekTeamPlan || {};
+  let pre = { mobile: '' };
+  try {
+    const r = await fetch(`${location.origin.replace(':8123', ':8001')}/api/telegram/resolve?person_code=${encodeURIComponent(tp.incharge?.code || '')}&name=${encodeURIComponent(tp.incharge?.name || '')}`, { headers: api.h() });
+    pre = await r.json();
+  } catch (_) {}
+  modal(`<h3>✈️ Send 7-Day Team Plan on Telegram</h3>
+    <p style="font-size:12px;color:var(--ink-2)">To: <b>${esc(tp.incharge?.name || 'Circulation Incharge')}</b>${pre.linked ? ' · <span style="color:var(--grn)">✓ Telegram linked</span>' : ''}.</p>
+    <input id="tgMob" type="tel" maxlength="10" value="${esc(pre.mobile || '')}" placeholder="Incharge का 10-digit mobile" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;margin-bottom:8px;background:var(--bg);color:var(--ink)">
+    <textarea id="tgText" rows="12" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;font-size:12px;background:var(--bg);color:var(--ink)">${esc(text)}</textarea>
+    <div id="tgErr" style="color:var(--red);font-size:12px;margin-top:6px"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn pri block" onclick="_dcrATgWeekTeamSend()">Send</button>
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+};
+
+window._dcrATgWeekTeamSend = async () => {
+  const mob = document.getElementById('tgMob')?.value?.replace(/\D/g, '').slice(-10);
+  const full = document.getElementById('tgText')?.value || '';
+  const errEl = document.getElementById('tgErr');
+  if (!mob || mob.length !== 10) { errEl.textContent = 'Valid 10-digit mobile डालें'; return; }
+  const parts = [];
+  if (full.length <= 3800) parts.push(full);
+  else {
+    const chunks = full.split('\n\n👤 ');
+    let cur = chunks.shift();
+    for (const c of chunks) {
+      if ((cur + '\n\n👤 ' + c).length > 3600) { parts.push(cur); cur = '👤 ' + c; }
+      else cur += '\n\n👤 ' + c;
+    }
+    parts.push(cur);
+  }
+  errEl.textContent = 'Sending…';
+  try {
+    for (let i = 0; i < parts.length; i++) {
+      const text = parts.length > 1 ? `${parts[i]}\n\n(भाग ${i + 1}/${parts.length})` : parts[i];
+      const r = await fetch(`${location.origin.replace(':8123', ':8001')}/api/telegram/send`, {
+        method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mobile: mob, text }),
+      });
+      const d = await r.json();
+      if (r.status === 404 && d.detail === 'not_linked') {
+        errEl.innerHTML = `यह number अभी link नहीं है.<br><b>Incharge से कहें:</b> Telegram में <b>@${esc(d.bot_username || 'bot')}</b> खोलें → <b>Start</b> दबाएँ → <b>📱 Share my number</b> पर tap करें. फिर दोबारा भेजें.`;
+        return;
+      }
+      if (!r.ok) { errEl.textContent = d.detail || 'Send failed'; return; }
+    }
+    closeModals();
+    toast('✈️ 7-day team plan sent to Incharge ✓');
   } catch (e) { errEl.textContent = 'Send failed: ' + e.message; }
 };
 
@@ -4391,32 +4705,24 @@ const _NEXUS_TAG = {
   COLLECTION_RECOVERY: ['info',   '💰 Collection Recovery'],
   VISIT_OVERDUE:       ['mut',    '👀 Visit Overdue'],
   MONITOR:             ['good',  '🟢 Monitor'],
+  NO_VISIT_HISTORY:    ['mut',   '📇 No Visit History Yet'],
 };
 
 function _nexusState() { return S.live.nexus || (S.live.nexus = { tab: 'overview' }); }
 
 function _nexusLoadBriefing(force) {
   const st = _nexusState();
-  if (st._brLoading || (st.briefing && !force)) return;
-  st._brLoading = true; if (force) st.briefing = null;
+  if (st._brLoading || (st.briefing && !force) || (st._brErr && !force)) return;
+  st._brLoading = true; st._brErr = false; if (force) st.briefing = null;
   fetch(api.base + '/api/ai-nexus/briefing' + (force ? '?refresh=1' : ''), { headers: api.h() })
     .then(r => r.json())
     .then(d => { st.briefing = d; st._brLoading = false; st._brErr = false; if (S.screen === 'ai_nexus') render(); })
     .catch(() => { st._brLoading = false; st._brErr = true; if (S.screen === 'ai_nexus') render(); });
 }
-function _nexusLoadTour(force) {
-  const st = _nexusState();
-  if (st._tourLoading || (st.tour && !force)) return;
-  st._tourLoading = true; if (force) st.tour = null;
-  fetch(api.base + '/api/ai-nexus/tour-plan?days=7', { headers: api.h() })
-    .then(r => r.json())
-    .then(d => { st.tour = d; st._tourLoading = false; st._tourErr = false; if (S.screen === 'ai_nexus') render(); })
-    .catch(() => { st._tourLoading = false; st._tourErr = true; if (S.screen === 'ai_nexus') render(); });
-}
 function _nexusLoadNearby(force) {
   const st = _nexusState();
-  if (st._nearLoading || (st.nearby && !force)) return;
-  st._nearLoading = true; if (force) st.nearby = null;
+  if (st._nearLoading || (st.nearby && !force) || (st._nearErr && !force)) return;
+  st._nearLoading = true; st._nearErr = false; if (force) st.nearby = null;
   fetch(api.base + '/api/ai-nexus/nearby-alerts', { headers: api.h() })
     .then(r => r.json())
     .then(d => { st.nearby = d; st._nearLoading = false; st._nearErr = false; if (S.screen === 'ai_nexus') render(); })
@@ -4435,8 +4741,7 @@ function _nexusLoadCompetitor(force) {
 window.nexusTab = t => { _nexusState().tab = t; render(); };
 window.nexusRefresh = () => {
   const st = _nexusState();
-  if (st.tab === 'tour') _nexusLoadTour(true);
-  else if (st.tab === 'nearby') _nexusLoadNearby(true);
+  if (st.tab === 'nearby') _nexusLoadNearby(true);
   else if (st.tab === 'competitor') _nexusLoadCompetitor(true);
   else _nexusLoadBriefing(true);
   render();
@@ -4447,10 +4752,11 @@ function _nexusTagChips(tags) {
 }
 
 function _nexusAgCard(a) {
+  const uc = esc(String(a.unit_code || '')), ac = esc(String(a.agcd || ''));
   return `<div class="_cmd-card" style="margin-bottom:10px;padding:13px 16px">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
-      <div style="min-width:0">
-        <div style="font-weight:700;font-size:14px;color:var(--ink)">${esc(a.ag_name || a.agcd)}</div>
+      <div role="button" style="min-width:0;cursor:pointer" onclick="nexusOpenAgency('${uc}','${ac}','${esc((a.ag_name||'').replace(/'/g,"\\'"))}')" title="Click for full agency detail">
+        <div style="font-weight:700;font-size:14px;color:var(--ink)">${esc(a.ag_name || a.agcd)} <span style="color:var(--acc);font-size:11px">›</span></div>
         <div style="font-size:11.5px;color:var(--muted);margin-top:1px">${esc(a.unit_name || '')}${a.city_name ? ' · ' + esc(a.city_name) : ''} · Exec: ${esc(a.exec_name || '—')}</div>
       </div>
       <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${_nexusTagChips(a.tags)}</div>
@@ -4460,6 +4766,11 @@ function _nexusAgCard(a) {
       ${a.opportunity_copies ? `<span><b style="color:var(--purple,#7c4dff)">+${VZ.full(a.opportunity_copies)}</b> <span style="color:var(--muted)">copies recoverable</span></span>` : ''}
       ${a.peak30_supply != null && a.tags && a.tags.includes('SUPPLY_AT_RISK') ? `<span><b style="color:var(--ink)">${VZ.full(a.cur_supply)}</b> <span style="color:var(--muted)">of ${VZ.full(a.peak30_supply)} peak</span></span>` : ''}
       <span><span style="color:var(--muted)">Last visit:</span> <b style="color:var(--ink)">${a.last_visit ? esc(a.last_visit) + ' (' + a.days_since_visit + 'd ago)' : 'Never'}</b></span>
+    </div>
+    ${a.expected_outcome ? `<div style="margin-top:7px;font-size:11.5px;color:var(--muted)"><b style="color:var(--grn)">▶ अपेक्षित परिणाम:</b> ${esc(a.expected_outcome)}</div>` : ''}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn" style="font-size:11.5px" onclick="nexusDraftAgency('${uc}','${ac}','email')">✉ Email (Hindi)</button>
+      <button class="btn" style="font-size:11.5px;background:#229ED9;color:#fff;border:none" onclick="nexusDraftAgency('${uc}','${ac}','telegram')">✈️ Telegram (Hindi)</button>
     </div>
   </div>`;
 }
@@ -4472,7 +4783,13 @@ function _nexusOverview(st) {
   const ei = d.expected_impact || {};
   return `
     <div class="_cmd-card" style="margin-bottom:14px;border-left:4px solid var(--acc)">
-      <div style="font-size:11px;font-weight:800;color:var(--acc);letter-spacing:.06em;margin-bottom:6px">🤖 AI SUMMARY${d.engine === 'template' ? ' · rule-based (add ANTHROPIC_API_KEY for narrative mode)' : ''}</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+        <div style="font-size:11px;font-weight:800;color:var(--acc);letter-spacing:.06em">🤖 AI SUMMARY${d.engine === 'ollama' ? ' · Ollama' : d.engine === 'template' ? ' · rule-based (Ollama not detected — start it locally for AI narrative)' : ''}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn" style="font-size:11.5px" onclick="nexusDraftBriefing('email')">✉ Email Briefing (Hindi)</button>
+          <button class="btn" style="font-size:11.5px;background:#229ED9;color:#fff;border:none" onclick="nexusDraftBriefing('telegram')">✈️ Telegram Briefing (Hindi)</button>
+        </div>
+      </div>
       <div style="font-size:14.5px;line-height:1.5;color:var(--ink)">${esc(d.ai_summary || '')}</div>
     </div>
     ${_cmdKpiGrid([
@@ -4492,6 +4809,14 @@ function _nexusOverview(st) {
     ${(d.immediate_attention || []).length ? `<div style="margin-top:14px">
       <div style="font-weight:700;font-size:14px;color:var(--ink);margin-bottom:10px">🔴 Immediate Attention Required</div>
       ${d.immediate_attention.map(i => `<div class="_cmd-card" style="margin-bottom:8px;border-left:3px solid var(--red)">
+        <div style="font-weight:700;font-size:13px;color:var(--ink)">${esc(i.title)}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(i.impact || i.why || '')}</div>
+      </div>`).join('')}
+    </div>` : ''}
+    ${(d.unaddressed_opportunities || []).length ? `<div style="margin-top:14px">
+      <div style="font-weight:700;font-size:14px;color:var(--ink);margin-bottom:4px">🟡 Opportunities Not Being Acted Upon</div>
+      <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Flagged items with no email/task/escalation logged against them yet.</div>
+      ${d.unaddressed_opportunities.map(i => `<div class="_cmd-card" style="margin-bottom:8px;border-left:3px solid var(--gold-d,#d97706)">
         <div style="font-weight:700;font-size:13px;color:var(--ink)">${esc(i.title)}</div>
         <div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(i.impact || i.why || '')}</div>
       </div>`).join('')}
@@ -4525,35 +4850,6 @@ function _nexusRisks(st) {
     ${sup.length ? sup.map(_nexusAgCard).join('') : `<div class="card pad" style="text-align:center;color:var(--muted);padding:18px">No agencies at zero supply.</div>`}`;
 }
 
-function _nexusTourDay(day) {
-  return `<div style="background:var(--bg);border-radius:10px;padding:11px 13px;margin-bottom:8px">
-    <div style="font-weight:700;font-size:12.5px;color:var(--ink);margin-bottom:6px">Day ${day.day} — ${esc(day.date)}</div>
-    ${day.agencies.map(a => `<div style="padding:5px 0;border-bottom:1px dashed var(--brd);font-size:12.5px">
-      <b style="color:var(--ink)">${esc(a.ag_name)}</b> ${_nexusTagChips(a.tags)}<br>
-      <span style="color:var(--muted)">${a.city_name ? esc(a.city_name) + ' · ' : ''}${a.outstanding ? _cmdFmtC(a.outstanding) + ' outstanding · ' : ''}${a.opportunity_copies ? '+' + VZ.full(a.opportunity_copies) + ' copies · ' : ''}last visit ${a.last_visit ? esc(a.last_visit) : 'never'}</span>
-    </div>`).join('')}
-    ${day.suggested_addons && day.suggested_addons.length ? `<div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--brd)">
-      <div style="font-size:10.5px;font-weight:700;color:var(--acc);letter-spacing:.04em;margin-bottom:4px">✚ NEARBY — ADD TO ROUTE</div>
-      ${day.suggested_addons.map(x => `<div style="font-size:11.5px;color:var(--ink-2);padding:2px 0">${esc(x.ag_name)} — ${x.distance_km} km, ${esc(x.reason || '')}${x.opportunity_copies ? `, +${x.opportunity_copies} copies` : ''}${x.outstanding ? `, ${_cmdFmtC(x.outstanding)}` : ''}</div>`).join('')}
-    </div>` : ''}
-  </div>`;
-}
-
-function _nexusTour(st) {
-  _nexusLoadTour();
-  const d = st.tour;
-  if (st._tourErr) return `<div class="card pad" style="color:var(--red)">Failed to load tour plan. <a href="#" onclick="nexusRefresh();return false" style="color:var(--acc)">Retry</a></div>`;
-  if (!d) return _cmdSkel() + _cmdSkel();
-  const execs = d.executives || [];
-  return `<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">📅 AI-generated next ${d.days || 7}-day plan per executive, prioritized by outstanding, supply decline and visit recency. ${esc(d.note || '')}</div>
-    ${execs.length ? execs.map(ex => `<div class="_cmd-card" style="margin-bottom:12px">
-      <div style="font-weight:700;font-size:14px;color:var(--ink);margin-bottom:2px">${esc(ex.exec_name)}</div>
-      <div style="font-size:11.5px;color:var(--muted);margin-bottom:10px">${esc(ex.unit_name || '')}</div>
-      ${ex.plan.map(_nexusTourDay).join('')}
-    </div>`).join('')
-      : `<div class="card pad" style="text-align:center;color:var(--muted);padding:28px">No flagged agencies to plan a tour around in this scope.</div>`}`;
-}
-
 function _nexusNearby(st) {
   _nexusLoadNearby();
   const d = st.nearby;
@@ -4563,8 +4859,8 @@ function _nexusNearby(st) {
   return `<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">📍 High-priority agencies within ${d.radius_km || 5} km of each other — combine into a single trip instead of separate visits.</div>
     ${clusters.length ? clusters.map(c => `<div class="_cmd-card" style="margin-bottom:10px">
       <div style="font-weight:700;font-size:13px;color:var(--ink);margin-bottom:8px">${esc(c.unit_name)} · ${c.agencies.length} agencies within ${d.radius_km || 5} km</div>
-      ${c.agencies.map(a => `<div style="padding:4px 0;border-bottom:1px dashed var(--brd);font-size:12.5px">
-        <b style="color:var(--ink)">${esc(a.ag_name)}</b> ${_nexusTagChips(a.tags)}
+      ${c.agencies.map(a => `<div role="button" style="padding:4px 0;border-bottom:1px dashed var(--brd);font-size:12.5px;cursor:pointer" onclick="nexusOpenAgency('${esc(String(c.unit_code||''))}','${esc(String(a.agcd||''))}','${esc((a.ag_name||'').replace(/'/g,"\\'"))}')" title="Click for full agency detail">
+        <b style="color:var(--ink)">${esc(a.ag_name)} <span style="color:var(--acc);font-size:11px">›</span></b> ${_nexusTagChips(a.tags)}
         <div style="color:var(--muted);font-size:11.5px">${a.exec_name ? 'Exec: ' + esc(a.exec_name) + ' · ' : ''}${a.outstanding ? _cmdFmtC(a.outstanding) + ' outstanding · ' : ''}${a.opportunity_copies ? '+' + a.opportunity_copies + ' copies · ' : ''}${a.days_since_visit != null ? a.days_since_visit + 'd since visit' : 'never visited'}</div>
       </div>`).join('')}
     </div>`).join('')
@@ -4582,10 +4878,109 @@ function _nexusCompetitor(st) {
   </div>`;
 }
 
+/* ── Drill-down: open any AI Nexus agency in the full Agency Rating detail page ── */
+window.nexusOpenAgency = (unitCode, agcd, agName) => {
+  const st = arState();
+  st.drillAgency = { unit_code: unitCode, ag_code: agcd, ag_name: agName };
+  st.detail = null; st._returnScreen = 'ai_nexus';
+  arLoadDetail(unitCode, agcd);
+  go('agency_rating');
+};
+
+/* ── Email / Telegram — Hindi drafts, reusing /api/insights/send-email + /api/telegram/send ── */
+function _findNexusAgency(unitCode, agcd) {
+  const b = _nexusState().briefing; if (!b) return null;
+  const pools = [...(b.opportunities || []), ...(b.collection_opportunities || []), ...(b.supply_risks || [])];
+  return pools.find(a => String(a.unit_code) === unitCode && String(a.agcd) === agcd) || null;
+}
+
+function _nexusEmailModal(d) {
+  const recs = d.recipients || [];
+  const emails = [], seen = new Set();
+  recs.forEach(r => { const e = (r.email || '').trim(); if (e && !seen.has(e.toLowerCase())) { seen.add(e.toLowerCase()); emails.push(e); } });
+  const m = modal(`
+    <h3>✉ Send Email (Hindi) — Review &amp; Edit</h3>
+    ${recs.length ? '' : `<p class="mint" style="color:var(--gold)">No emails configured for this unit — add them in AI Insights → Email Config, or type addresses below.</p>`}
+    <div class="fld"><label>To (comma-separated)</label><input data-k="to" value="${esc(emails.join(', '))}" placeholder="name@in.patrika.com"></div>
+    <div class="fld"><label>Subject</label><input data-k="subject" value="${esc(d.subject)}"></div>
+    <div class="fld"><label>Message (editable, Hindi)</label><textarea data-k="body" rows="14" style="min-height:260px;font-size:13px">${esc(d.body)}</textarea></div>
+    <div style="display:flex;gap:9px;margin-top:14px">
+      <button class="btn pri block" data-send>Send Email</button>
+      <button class="btn" data-cancel>Cancel</button>
+    </div>`);
+  m.querySelector('[data-cancel]').onclick = () => m.remove();
+  m.querySelector('[data-send]').onclick = async () => {
+    const to = m.querySelector('[data-k=to]').value.split(',').map(s => s.trim()).filter(Boolean);
+    const subject = m.querySelector('[data-k=subject]').value.trim();
+    const body = m.querySelector('[data-k=body]').value;
+    if (!to.length) { toast('Enter at least one email address'); return; }
+    const btn = m.querySelector('[data-send]'); btn.disabled = true; btn.textContent = 'Sending…';
+    const r = await api.post('/api/insights/send-email', { to, subject, body, module: 'ai_nexus', created_by: S.user?.name || '' });
+    if (r && r.ok) { m.remove(); toast('✓ Email sent to ' + r.sent_to.length + ' recipient' + (r.sent_to.length > 1 ? 's' : '')); }
+    else { btn.disabled = false; btn.textContent = 'Send Email'; toast((r && r.detail) || 'Send failed'); }
+  };
+}
+
+function _nexusTelegramModal(d, empCode) {
+  const m = modal(`
+    <h3>✈️ Send Telegram (Hindi)</h3>
+    <p style="font-size:12px;color:var(--ink-2)">${d.mobile ? 'Mobile found from executive records — link status is checked on send.' : 'No mobile on record — enter one manually.'}</p>
+    <input id="nxTgMob" type="tel" maxlength="10" value="${esc(d.mobile || '')}" placeholder="10-digit mobile" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;margin-bottom:8px;background:var(--bg);color:var(--ink)">
+    <textarea id="nxTgText" rows="12" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;font-size:12px;background:var(--bg);color:var(--ink)">${esc(d.subject + '\n\n' + d.body)}</textarea>
+    <div id="nxTgErr" style="color:var(--red);font-size:12px;margin-top:6px"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn pri block" onclick="_nexusTgSend('${esc(empCode || '')}')">Send</button>
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+  return m;
+}
+
+window._nexusTgSend = async (empCode) => {
+  const mob = document.getElementById('nxTgMob')?.value?.replace(/\D/g, '').slice(-10);
+  const text = document.getElementById('nxTgText')?.value || '';
+  const errEl = document.getElementById('nxTgErr');
+  if (!mob || mob.length !== 10) { errEl.textContent = 'Enter a valid 10-digit mobile'; return; }
+  errEl.textContent = 'Sending…';
+  try {
+    const r = await fetch(api.base + '/api/telegram/send', {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mobile: mob, text, emp_code: empCode || '' }),
+    });
+    const d = await r.json();
+    if (r.status === 404 && d.detail === 'not_linked') {
+      errEl.innerHTML = `This number is not linked yet.<br><b>Ask them to:</b> open Telegram → search <b>@${esc(d.bot_username || 'the bot')}</b> → press <b>Start</b> → tap <b>📱 Share my number</b>. Then send again.`;
+      return;
+    }
+    if (!r.ok) { errEl.textContent = d.detail || 'Send failed'; return; }
+    closeModals();
+    toast('✈️ Sent on Telegram ✓');
+  } catch (e) { errEl.textContent = 'Send failed: ' + e.message; }
+};
+
+window.nexusDraftAgency = async (unitCode, agcd, channel) => {
+  const a = _findNexusAgency(unitCode, agcd);
+  if (!a) { toast('Agency not found — refresh and try again'); return; }
+  toast('Generating ' + channel + ' draft (Hindi)…');
+  const d = await api.post('/api/ai-nexus/draft', { channel, kind: 'agency', agency: a });
+  if (!d) { toast('Draft failed — is the API running?'); return; }
+  if (channel === 'email') _nexusEmailModal(d);
+  else _nexusTelegramModal(d, a.exec_code);
+};
+
+window.nexusDraftBriefing = async (channel) => {
+  const st = _nexusState();
+  if (!st.briefing) { toast('Briefing not loaded yet'); return; }
+  toast('Generating ' + channel + ' draft (Hindi)…');
+  const d = await api.post('/api/ai-nexus/draft', { channel, kind: 'briefing', briefing: st.briefing });
+  if (!d) { toast('Draft failed — is the API running?'); return; }
+  if (channel === 'email') _nexusEmailModal(d);
+  else _nexusTelegramModal(d, null);
+};
+
 VIEWS.ai_nexus = () => {
   const st = _nexusState();
   const tabs = [['overview', '🤖 Overview'], ['opportunities', '🚀 Opportunities'], ['risks', '⚠️ Risks'],
-                ['tour', '📅 7-Day Tour Plan'], ['nearby', '📍 Nearby Alerts'], ['competitor', '📊 Competitor Intel']];
+                ['nearby', '📍 Nearby Alerts'], ['competitor', '📊 Competitor Intel']];
   const tabBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
     ${tabs.map(([k, l]) => `<button class="btn ${st.tab === k ? 'pri' : ''}" onclick="nexusTab('${k}')">${l}</button>`).join('')}
     <button class="btn" style="margin-left:auto" onclick="nexusRefresh()">↻ Refresh</button>
@@ -4594,12 +4989,11 @@ VIEWS.ai_nexus = () => {
   let body;
   if (st.tab === 'opportunities') body = _nexusOpportunities(st);
   else if (st.tab === 'risks') body = _nexusRisks(st);
-  else if (st.tab === 'tour') body = _nexusTour(st);
   else if (st.tab === 'nearby') body = _nexusNearby(st);
   else if (st.tab === 'competitor') body = _nexusCompetitor(st);
   else body = _nexusOverview(st);
 
-  return pagehead('Strategic AI Nexus', 'Your AI Circulation Boss — opportunities, risks, tour plans and nearby-agency alerts, computed from live data') + `
+  return pagehead('Strategic AI Nexus', 'Your AI Circulation Boss — opportunities, risks and nearby-agency alerts, computed from live data. 7-Day Tour Plan now lives in Field Visit Intelligence.') + `
     <style>@keyframes _cmdPulse{0%,100%{opacity:1}50%{opacity:.45}}
     ._cmd-card{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:16px 18px}
     ._cmd-strip-item{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px}</style>
@@ -9452,7 +9846,9 @@ window.arDrillAgency = function(unitCode, agCode, agName) {
 window.arBackToList = function() {
   const st = arState();
   st.drillAgency = null; st.detail = null;
-  render();
+  const back = st._returnScreen; st._returnScreen = null;
+  if (back && back !== 'agency_rating') go(back);
+  else render();
 };
 window.arFilterGrade = function(g) {
   const st = arState();
@@ -9711,7 +10107,8 @@ function arDetailView() {
   const drill = st.drillAgency || {};
   const d     = st.detail;
 
-  const back = `<button onclick="arBackToList()" style="background:none;border:none;color:var(--navy);cursor:pointer;font-size:13px;padding:0 0 12px;display:flex;align-items:center;gap:5px">← Agency Ratings</button>`;
+  const backLabel = st._returnScreen === 'ai_nexus' ? '← Strategic AI Nexus' : '← Agency Ratings';
+  const back = `<button onclick="arBackToList()" style="background:none;border:none;color:var(--navy);cursor:pointer;font-size:13px;padding:0 0 12px;display:flex;align-items:center;gap:5px">${backLabel}</button>`;
 
   if (st._loading.detail) return back + `<div class="card" style="text-align:center;padding:40px;color:var(--muted)">Loading agency detail…</div>`;
   if (st._error.detail)   return back + `<div class="card" style="text-align:center;padding:32px;color:var(--red)">Failed to load detail. <button onclick="arLoadDetail('${drill.unit_code}','${drill.ag_code}')">Retry</button></div>`;
