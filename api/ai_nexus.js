@@ -65,18 +65,28 @@ module.exports = function registerAiNexus(ctx) {
   detectOllama();
   setInterval(detectOllama, 5 * 60 * 1000);
 
-  async function ollamaChat(system, userMsg, maxTokens) {
-    const r = await fetch(OLLAMA_URL + '/api/chat', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: OLLAMA_MODEL, stream: false, format: 'json',
-        options: { temperature: 0, num_predict: maxTokens || 1500 },
-        messages: [{ role: 'system', content: system }, { role: 'user', content: userMsg }],
-      }),
-    });
-    if (!r.ok) throw new Error('Ollama HTTP ' + r.status);
-    const d = await r.json();
-    return d.message?.content || '';
+  async function ollamaChat(system, userMsg, maxTokens, timeoutMs = 20000) {
+    // Bounded wait: the briefing/draft endpoints must respond quickly even when
+    // Ollama is slow or already busy with another request (e.g. a Field Visit
+    // Intelligence tour-plan generation) — fall through to the deterministic
+    // template rather than hang the whole request.
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(OLLAMA_URL + '/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+        body: JSON.stringify({
+          model: OLLAMA_MODEL, stream: false, format: 'json',
+          options: { temperature: 0, num_predict: maxTokens || 1500 },
+          messages: [{ role: 'system', content: system }, { role: 'user', content: userMsg }],
+        }),
+      });
+      if (!r.ok) throw new Error('Ollama HTTP ' + r.status);
+      const d = await r.json();
+      return d.message?.content || '';
+    } finally {
+      clearTimeout(t);
+    }
   }
 
   let anthropic = null;

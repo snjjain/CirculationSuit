@@ -5,7 +5,6 @@
 const DASH_MENU = [
   ["command",       "Command Centre",          "📊"],
   ["ai_nexus",      "Strategic AI Nexus",      "🧭"],
-  ["ai_insights",   "AI Insights & Actions",   "🤖"],
   ["supply_dash",   "Supply Dashboard",        "📦"],
   ["collections",   "Collections",             "₹"],
   ["outstanding",   "Agency Outstanding",      "💰"],
@@ -4226,7 +4225,7 @@ const _AI_DRILL = { outstanding:'outstanding', collection:'collections', short_p
                     taxi:'transport', app_usage:'transport', survey:'survey_dash', digital:'collections',
                     supply:'supply_dash', field_visit:'dcr_analytics' };
 
-function _aiState() { return S.live.ins || (S.live.ins = { tab: 'insights' }); }
+function _aiState() { return S.live.ins || (S.live.ins = {}); }
 
 function _aiLoad(force) {
   const st = _aiState();
@@ -4234,8 +4233,8 @@ function _aiLoad(force) {
   st._loading = true; if (force) st.data = null;
   fetch(api.base + '/api/insights' + (force ? '?refresh=1' : ''), { headers: api.h() })
     .then(r => r.json())
-    .then(d => { st.data = d; st._loading = false; st._err = false; if (S.screen === 'ai_insights') render(); })
-    .catch(() => { st._loading = false; st._err = true; if (S.screen === 'ai_insights') render(); });
+    .then(d => { st.data = d; st._loading = false; st._err = false; if (S.screen === 'ai_nexus') render(); })
+    .catch(() => { st._loading = false; st._err = true; if (S.screen === 'ai_nexus') render(); });
 }
 function _aiLoadActions(force) {
   const st = _aiState();
@@ -4243,8 +4242,8 @@ function _aiLoadActions(force) {
   st._actLoading = true; if (force) st.actions = null;
   fetch(api.base + '/api/actions?limit=100', { headers: api.h() })
     .then(r => r.json())
-    .then(d => { st.actions = d.actions || []; st._actLoading = false; if (S.screen === 'ai_insights') render(); })
-    .catch(() => { st._actLoading = false; st.actions = []; if (S.screen === 'ai_insights') render(); });
+    .then(d => { st.actions = d.actions || []; st._actLoading = false; if (S.screen === 'ai_nexus') render(); })
+    .catch(() => { st._actLoading = false; st.actions = []; if (S.screen === 'ai_nexus') render(); });
 }
 function _aiLoadCfg(force) {
   const st = _aiState();
@@ -4252,11 +4251,10 @@ function _aiLoadCfg(force) {
   st._cfgLoading = true; if (force) st.cfg = null;
   fetch(api.base + '/api/email-config', { headers: api.h() })
     .then(r => r.json())
-    .then(d => { st.cfg = d; st._cfgLoading = false; if (S.screen === 'ai_insights') render(); })
-    .catch(() => { st._cfgLoading = false; st.cfg = { units: [], contacts: [] }; if (S.screen === 'ai_insights') render(); });
+    .then(d => { st.cfg = d; st._cfgLoading = false; if (S.screen === 'ai_nexus') render(); })
+    .catch(() => { st._cfgLoading = false; st.cfg = { units: [], contacts: [] }; if (S.screen === 'ai_nexus') render(); });
 }
 
-window.aiTab = t => { _aiState().tab = t; render(); };
 window.aiFilterModule = v => { _aiState().fltModule = v || ''; render(); };
 window.aiFilterPri = v => { _aiState().fltPriority = v || ''; render(); };
 window.aiRefresh = () => { _aiLoad(true); render(); };
@@ -4664,64 +4662,52 @@ function _aiCfgTab(st) {
       : `<div class="card pad" style="text-align:center;color:var(--muted);padding:30px">No contacts configured yet — click "＋ Add Contact" to add the first Zonal Head.</div>`}`;
 }
 
-VIEWS.ai_insights = () => {
+// Full P1/P2/P3 insights report (priority strip + module filter + action cards) —
+// merged into Strategic AI Nexus's Overview tab; used to live in its own
+// "AI Insights & Actions" screen, now folded in here.
+function _aiInsightsReportBody() {
   const st = _aiState();
-  if (st.tab === 'insights') _aiLoad();
+  _aiLoad();
   const d = st.data;
-  const tabs = [['insights', '🤖 Insights'], ['ask', '💬 Ask AI'], ['actions', '⚡ Action Center'], ['email', '✉ Email Config']];
-  const tabBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-    ${tabs.map(([k, l]) => `<button class="btn ${st.tab === k ? 'pri' : ''}" onclick="aiTab('${k}')">${l}</button>`).join('')}
-    ${st.tab === 'insights' ? `<button class="btn" style="margin-left:auto" onclick="aiRefresh()">↻ Refresh</button>` : ''}
+  if (st._err) return `<div class="card pad" style="color:var(--red)">Failed to load insights. <a href="#" onclick="aiRefresh();return false" style="color:var(--acc)">Retry</a></div>`;
+  if (!d) return _cmdSkel() + _cmdSkel() + _cmdSkel();
+
+  const all = d.insights || [];
+  const counts = { P1: 0, P2: 0, P3: 0 };
+  all.forEach(i => counts[i.priority] = (counts[i.priority] || 0) + 1);
+  const fMod = st.fltModule || '', fPri = st.fltPriority || '';
+  const MOD_LABEL = { outstanding: 'Outstanding', collection: 'Collections', short_payment: 'Short Payment', taxi: 'Taxi', app_usage: 'App Usage', survey: 'Survey', digital: 'Digital' };
+  const modules = [...new Set(all.map(i => i.module).filter(Boolean))].sort();
+  const priRank = { P1: 0, P2: 1, P3: 2 };
+  const list = all.filter(i => (!fMod || i.module === fMod) && (!fPri || i.priority === fPri))
+    .sort((a, b) => (priRank[a.priority] ?? 9) - (priRank[b.priority] ?? 9));
+  // Priority strip — click a tile to filter to that priority (click again to clear)
+  const strip = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
+    ${['P1', 'P2', 'P3'].map(p => `<div class="_cmd-strip-item" role="button" onclick="aiFilterPri('${fPri === p ? '' : p}')" style="cursor:pointer;border-left:4px solid ${_AI_PRI[p][0]}${fPri === p ? ';box-shadow:0 0 0 2px ' + _AI_PRI[p][0] : ''}">
+      <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600">${_AI_PRI[p][1]}</span>
+      <div style="font-size:24px;font-weight:800;color:${_AI_PRI[p][0]}">${counts[p] || 0}</div>
+    </div>`).join('')}
   </div>`;
-
-  let body;
-  if (st.tab === 'ask') body = _aiAskTab(_askState());
-  else if (st.tab === 'actions') body = _aiActionsTab(st);
-  else if (st.tab === 'email') body = _aiCfgTab(st);
-  else if (st._err) body = `<div class="card pad" style="color:var(--red)">Failed to load insights. <a href="#" onclick="aiRefresh();return false" style="color:var(--acc)">Retry</a></div>`;
-  else if (!d) body = _cmdSkel() + _cmdSkel() + _cmdSkel();
-  else {
-    const all = d.insights || [];
-    const counts = { P1: 0, P2: 0, P3: 0 };
-    all.forEach(i => counts[i.priority] = (counts[i.priority] || 0) + 1);
-    const fMod = st.fltModule || '', fPri = st.fltPriority || '';
-    const MOD_LABEL = { outstanding: 'Outstanding', collection: 'Collections', short_payment: 'Short Payment', taxi: 'Taxi', app_usage: 'App Usage', survey: 'Survey', digital: 'Digital' };
-    const modules = [...new Set(all.map(i => i.module).filter(Boolean))].sort();
-    const priRank = { P1: 0, P2: 1, P3: 2 };
-    const list = all.filter(i => (!fMod || i.module === fMod) && (!fPri || i.priority === fPri))
-      .sort((a, b) => (priRank[a.priority] ?? 9) - (priRank[b.priority] ?? 9));
-    // Priority strip — click a tile to filter to that priority (click again to clear)
-    const strip = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
-      ${['P1', 'P2', 'P3'].map(p => `<div class="_cmd-strip-item" role="button" onclick="aiFilterPri('${fPri === p ? '' : p}')" style="cursor:pointer;border-left:4px solid ${_AI_PRI[p][0]}${fPri === p ? ';box-shadow:0 0 0 2px ' + _AI_PRI[p][0] : ''}">
-        <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600">${_AI_PRI[p][1]}</span>
-        <div style="font-size:24px;font-weight:800;color:${_AI_PRI[p][0]}">${counts[p] || 0}</div>
-      </div>`).join('')}
-    </div>`;
-    const selSty = 'background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:7px 10px;font-size:12px;color:var(--fg)';
-    const filterBar = `<div class="filters" style="margin-bottom:12px;align-items:center">
-      <span class="lbl" style="align-self:center">Module</span>
-      <select onchange="aiFilterModule(this.value)" style="${selSty}">
-        <option value="">All modules</option>
-        ${modules.map(m => `<option value="${m}" ${fMod === m ? 'selected' : ''}>${MOD_LABEL[m] || m}</option>`).join('')}
-      </select>
-      ${fPri ? `<span class="chip" style="background:${_AI_PRI[fPri][0]}22;color:${_AI_PRI[fPri][0]}">${_AI_PRI[fPri][1]}</span>` : ''}
-      ${(fMod || fPri) ? `<button class="btn sm" onclick="aiFilterModule('');aiFilterPri('')">✕ Clear</button>` : ''}
-      <span class="lbl" style="align-self:center;color:var(--muted);margin-left:auto">${list.length} of ${all.length} · sorted by priority</span>
-    </div>`;
-    body = strip + filterBar + (list.length
-      ? list.map(i => _aiCard(i, all.indexOf(i))).join('')
-      : (all.length
-        ? `<div class="card pad" style="text-align:center;color:var(--muted);padding:28px">No insights match this filter. <a href="#" onclick="aiFilterModule('');aiFilterPri('');return false" style="color:var(--acc)">Clear</a></div>`
-        : `<div class="card pad" style="text-align:center;color:var(--grn);padding:34px">✓ Nothing needs your attention right now — all monitored KPIs look normal for your scope.</div>`))
-      + (d.generated_at ? `<div style="font-size:11px;color:var(--muted);text-align:center;margin-top:6px">Generated ${esc(String(d.generated_at).slice(0, 16).replace('T', ' '))} UTC${d.cached ? ' · cached (max 10 min old)' : ''} · computed from live database values</div>` : '');
-  }
-
-  return pagehead('AI Insights & Actions', 'What needs attention · why it happened · what to do next') + `
-    <style>@keyframes _cmdPulse{0%,100%{opacity:1}50%{opacity:.45}}
-    ._cmd-card{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:16px 18px}
-    ._cmd-strip-item{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px}</style>
-    ${tabBar}${body}`;
-};
+  const selSty = 'background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:7px 10px;font-size:12px;color:var(--fg)';
+  const filterBar = `<div class="filters" style="margin-bottom:12px;align-items:center">
+    <span class="lbl" style="align-self:center">Module</span>
+    <select onchange="aiFilterModule(this.value)" style="${selSty}">
+      <option value="">All modules</option>
+      ${modules.map(m => `<option value="${m}" ${fMod === m ? 'selected' : ''}>${MOD_LABEL[m] || m}</option>`).join('')}
+    </select>
+    ${fPri ? `<span class="chip" style="background:${_AI_PRI[fPri][0]}22;color:${_AI_PRI[fPri][0]}">${_AI_PRI[fPri][1]}</span>` : ''}
+    ${(fMod || fPri) ? `<button class="btn sm" onclick="aiFilterModule('');aiFilterPri('')">✕ Clear</button>` : ''}
+    <span class="lbl" style="align-self:center;color:var(--muted);margin-left:auto">${list.length} of ${all.length} · sorted by priority</span>
+    <button class="btn sm" onclick="aiRefresh()">↻ Refresh</button>
+  </div>`;
+  const cards = list.length
+    ? list.map(i => _aiCard(i, all.indexOf(i))).join('')
+    : (all.length
+      ? `<div class="card pad" style="text-align:center;color:var(--muted);padding:28px">No insights match this filter. <a href="#" onclick="aiFilterModule('');aiFilterPri('');return false" style="color:var(--acc)">Clear</a></div>`
+      : `<div class="card pad" style="text-align:center;color:var(--grn);padding:34px">✓ Nothing needs your attention right now — all monitored KPIs look normal for your scope.</div>`);
+  const footer = d.generated_at ? `<div style="font-size:11px;color:var(--muted);text-align:center;margin-top:6px">Generated ${esc(String(d.generated_at).slice(0, 16).replace('T', ' '))} UTC${d.cached ? ' · cached (max 10 min old)' : ''} · computed from live database values</div>` : '';
+  return strip + filterBar + cards + footer;
+}
 
 /* ═══════════ Strategic AI Nexus — proactive "AI Circulation Boss" briefing ═══════════ */
 const _NEXUS_TAG = {
@@ -4769,6 +4755,9 @@ window.nexusRefresh = () => {
   const st = _nexusState();
   if (st.tab === 'nearby') _nexusLoadNearby(true);
   else if (st.tab === 'competitor') _nexusLoadCompetitor(true);
+  else if (st.tab === 'actions') _aiLoadActions(true);
+  else if (st.tab === 'email') _aiLoadCfg(true);
+  else if (st.tab === 'overview') { _nexusLoadBriefing(true); _aiLoad(true); }
   else _nexusLoadBriefing(true);
   render();
 };
@@ -4832,13 +4821,6 @@ function _nexusOverview(st) {
         ? `<ol style="margin:0;padding-left:20px;display:grid;gap:8px">${(d.recommendations || []).map(r => `<li style="font-size:13px;line-height:1.5;color:var(--ink-2)">${esc(r)}</li>`).join('')}</ol>`
         : `<div style="color:var(--muted);font-size:13px">No specific recommendations right now — scope looks healthy.</div>`}
     </div>
-    ${(d.immediate_attention || []).length ? `<div style="margin-top:14px">
-      <div style="font-weight:700;font-size:14px;color:var(--ink);margin-bottom:10px">🔴 Immediate Attention Required</div>
-      ${d.immediate_attention.map(i => `<div class="_cmd-card" style="margin-bottom:8px;border-left:3px solid var(--red)">
-        <div style="font-weight:700;font-size:13px;color:var(--ink)">${esc(i.title)}</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(i.impact || i.why || '')}</div>
-      </div>`).join('')}
-    </div>` : ''}
     ${(d.unaddressed_opportunities || []).length ? `<div style="margin-top:14px">
       <div style="font-weight:700;font-size:14px;color:var(--ink);margin-bottom:4px">🟡 Opportunities Not Being Acted Upon</div>
       <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Flagged items with no email/task/escalation logged against them yet.</div>
@@ -4847,7 +4829,11 @@ function _nexusOverview(st) {
         <div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(i.impact || i.why || '')}</div>
       </div>`).join('')}
     </div>` : ''}
-    <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:10px">Generated ${esc(String(d.generated_at || '').slice(0, 16).replace('T', ' '))} UTC${d.cached ? ' · cached (max 10 min old)' : ''}</div>`;
+    <div style="font-size:11px;color:var(--muted);text-align:center;margin:10px 0">Generated ${esc(String(d.generated_at || '').slice(0, 16).replace('T', ' '))} UTC${d.cached ? ' · cached (max 10 min old)' : ''}</div>
+    <div style="margin-top:18px;padding-top:16px;border-top:2px solid var(--brd)">
+      <div style="font-weight:700;font-size:15px;color:var(--ink);margin-bottom:12px">🤖 Full Insights Report</div>
+      ${_aiInsightsReportBody()}
+    </div>`;
 }
 
 function _nexusOpportunities(st) {
@@ -5006,10 +4992,12 @@ window.nexusDraftBriefing = async (channel) => {
 VIEWS.ai_nexus = () => {
   const st = _nexusState();
   const tabs = [['overview', '🤖 Overview'], ['opportunities', '🚀 Opportunities'], ['risks', '⚠️ Risks'],
-                ['nearby', '📍 Nearby Alerts'], ['competitor', '📊 Competitor Intel']];
+                ['nearby', '📍 Nearby Alerts'], ['competitor', '📊 Competitor Intel'],
+                ['ask', '💬 Ask AI'], ['actions', '⚡ Action Center'], ['email', '✉ Email Config']];
+  const showRefresh = !['ask'].includes(st.tab);
   const tabBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
     ${tabs.map(([k, l]) => `<button class="btn ${st.tab === k ? 'pri' : ''}" onclick="nexusTab('${k}')">${l}</button>`).join('')}
-    <button class="btn" style="margin-left:auto" onclick="nexusRefresh()">↻ Refresh</button>
+    ${showRefresh ? `<button class="btn" style="margin-left:auto" onclick="nexusRefresh()">↻ Refresh</button>` : ''}
   </div>`;
 
   let body;
@@ -5017,9 +5005,12 @@ VIEWS.ai_nexus = () => {
   else if (st.tab === 'risks') body = _nexusRisks(st);
   else if (st.tab === 'nearby') body = _nexusNearby(st);
   else if (st.tab === 'competitor') body = _nexusCompetitor(st);
+  else if (st.tab === 'ask') body = _aiAskTab(_askState());
+  else if (st.tab === 'actions') body = _aiActionsTab(_aiState());
+  else if (st.tab === 'email') body = _aiCfgTab(_aiState());
   else body = _nexusOverview(st);
 
-  return pagehead('Strategic AI Nexus', 'Your AI Circulation Boss — opportunities, risks and nearby-agency alerts, computed from live data. 7-Day Tour Plan now lives in Field Visit Intelligence.') + `
+  return pagehead('Strategic AI Nexus', 'Your AI Circulation Boss — insights, opportunities, risks, nearby-agency alerts and actions, computed from live data. 7-Day Tour Plan now lives in Field Visit Intelligence.') + `
     <style>@keyframes _cmdPulse{0%,100%{opacity:1}50%{opacity:.45}}
     ._cmd-card{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:16px 18px}
     ._cmd-strip-item{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px}</style>
@@ -12958,7 +12949,7 @@ function navGroups() {
   if (u.dashboard) {
     const fieldIds = ["routes", "collections", "complaints", "partners"];
     // mgmtIds are always shown to hl≤4 regardless of saved navScreens (handles screens added after a user's navScreens was last saved)
-    const mgmtIds  = ["command", "ai_insights", "supply_dash", "exec_perf", "exec_targets", "agency_rating"];
+    const mgmtIds  = ["command", "ai_nexus", "supply_dash", "exec_perf", "exec_targets", "agency_rating"];
     const items = DASH_MENU
       .filter(([id]) => (hl <= 4 && mgmtIds.includes(id)) || (u.navScreens ? u.navScreens.includes(id) : (hl <= 4 || fieldIds.includes(id))))
       .filter(([id]) => permAllows(id, 'view') !== false)   // explicit rights-matrix deny hides the screen
