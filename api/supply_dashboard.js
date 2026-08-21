@@ -384,17 +384,19 @@ module.exports = function registerSupplyDash(ctx) {
 
       const group = req.query.group === 'unit' ? 'unit' : 'state';
       const inner = group === 'unit'
-        ? `SELECT unit_code gkey, MAX(unit_name) glabel, agcd,
-                  SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) cur,
-                  SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) prv
-             FROM supply_data WHERE supply_date IN (?, ?)${S}
-             GROUP BY unit_code, agcd`
-        : `SELECT COALESCE(NULLIF(state_name,''),'OTHER') gkey,
-                  COALESCE(NULLIF(state_name,''),'OTHER') glabel, agcd,
-                  SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) cur,
-                  SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) prv
-             FROM supply_data WHERE supply_date IN (?, ?)${S}
-             GROUP BY gkey, agcd`;
+        ? `SELECT s.unit_code gkey, MAX(s.unit_name) glabel, s.agcd,
+                  SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
+                  SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
+             FROM supply_data s ${AGENT_JOIN}
+             WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${on(sc2, 's.unit_code')}
+             GROUP BY s.unit_code, s.agcd`
+        : `SELECT COALESCE(NULLIF(s.state_name,''),'OTHER') gkey,
+                  COALESCE(NULLIF(s.state_name,''),'OTHER') glabel, s.agcd,
+                  SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
+                  SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
+             FROM supply_data s ${AGENT_JOIN}
+             WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${on(sc2, 's.unit_code')}
+             GROUP BY gkey, s.agcd`;
       const { rows } = await q(
         `SELECT gkey, MAX(glabel) glabel,
                 SUM(cur) cur, SUM(prv) prv,
