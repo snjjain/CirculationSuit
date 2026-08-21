@@ -1906,7 +1906,8 @@ window.dcrAGenPlan = async () => {
   if (!code) return;
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0,10);
   const planDate = _dcrA.planDate || tomorrow;
-  _dcrA._loadingPlan = true; _dcrA.plan = null; render();
+  _dcrA._loadingPlan = true; _dcrA.plan = null; _dcrA._planGenStart = Date.now(); render();
+  const ticker = setInterval(() => { if (S.screen === 'dcr_analytics') render(); }, 1000);
   try {
     const r = await fetch('/api/dcr-analytics/next-day-plan', {
       method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
@@ -1915,6 +1916,7 @@ window.dcrAGenPlan = async () => {
     const d = await r.json();
     _dcrA.plan = d;
   } catch (_) { _dcrA.plan = { _err: true }; }
+  clearInterval(ticker);
   _dcrA._loadingPlan = false;
   if (S.screen === 'dcr_analytics') render();
 };
@@ -2288,9 +2290,9 @@ function _dcrANextPlanTab() {
     <select id="planExecSel" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink);max-width:280px">${execOpts}</select>
     <input type="date" id="planDateIn" value="${_dcrA.planDate || tomorrow}" min="${tomorrow}" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink)">
     <button class="btn sm pri" style="background:#7c3aed;color:#fff;border:none" onclick="_dcrA.planEmpCode=document.getElementById('planExecSel').value;_dcrA.planDate=document.getElementById('planDateIn').value;dcrAGenPlan()" ${_dcrA._loadingPlan?'disabled':''}>
-      ${_dcrA._loadingPlan ? '⏳ Generating…' : '🤖 Generate AI Plan'}
+      ${_dcrA._loadingPlan ? `⏱ ${_dcrAElapsed(_dcrA._planGenStart)}` : '🤖 Generate AI Plan'}
     </button>
-    ${_dcrA._loadingPlan ? '<span style="font-size:12px;color:#7c3aed">AI is analyzing agency data — local model can take 2–3 minutes…</span>' : ''}
+    ${_dcrA._loadingPlan ? '<span style="font-size:12px;color:#7c3aed">AI is analyzing agency data — usually well under a minute…</span>' : ''}
   </div>`;
 
   if (!_dcrA.plan && !_dcrA._loadingPlan) {
@@ -2300,7 +2302,10 @@ function _dcrANextPlanTab() {
       <div style="font-size:11px;margin-top:6px">AI considers outstanding balance, pending followups, last visit dates, and past remarks to prioritize agencies</div>
     </div>`;
   }
-  if (_dcrA._loadingPlan) return controls + `<div style="color:var(--ink-2);padding:40px 0;text-align:center">⏳ Generating smart visit plan…</div>`;
+  if (_dcrA._loadingPlan) return controls + `<div style="color:var(--ink-2);padding:40px 0;text-align:center">
+      <div style="font-size:28px;margin-bottom:8px">⏱ ${_dcrAElapsed(_dcrA._planGenStart)}</div>
+      <div>Generating smart visit plan…</div>
+    </div>`;
   if (_dcrA.plan?._err) return controls + `<div style="color:var(--red);padding:20px 0">Failed to generate plan.</div>`;
 
   const p = _dcrA.plan?.plan || {};
@@ -2577,7 +2582,8 @@ window.dcrAGenWeekPlan = async () => {
   if (!code) return;
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0,10);
   const startDate = _dcrA.weekStartDate || tomorrow;
-  _dcrA._loadingWeek = true; _dcrA.weekPlan = null; render();
+  _dcrA._loadingWeek = true; _dcrA.weekPlan = null; _dcrA._weekGenStart = Date.now(); render();
+  const ticker = setInterval(() => { if (S.screen === 'dcr_analytics') render(); }, 1000);
   try {
     const r = await fetch(`${location.origin.replace(':8123', ':8001')}/api/dcr-analytics/week-plan`, {
       method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
@@ -2586,9 +2592,25 @@ window.dcrAGenWeekPlan = async () => {
     const d = await r.json();
     _dcrA.weekPlan = d;
   } catch (_) { _dcrA.weekPlan = { _err: true }; }
+  clearInterval(ticker);
   _dcrA._loadingWeek = false;
   if (S.screen === 'dcr_analytics') render();
 };
+
+function _dcrAElapsed(startTs) {
+  const secs = Math.max(0, Math.floor((Date.now() - (startTs || Date.now())) / 1000));
+  const m = Math.floor(secs / 60), s = secs % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function _dcrADateRange(fromIso, toIso) {
+  if (!fromIso) return '';
+  const opts = { day: 'numeric', month: 'short' };
+  const from = new Date(fromIso).toLocaleDateString('en-IN', opts);
+  if (!toIso || toIso === fromIso) return new Date(fromIso).toLocaleDateString('en-IN', { ...opts, year: 'numeric' });
+  const to = new Date(toIso).toLocaleDateString('en-IN', { ...opts, year: 'numeric' });
+  return `${from} – ${to}`;
+}
 
 function _dcrAWeekPlanTab() {
   _dcrALoadPlanExecs();
@@ -2603,9 +2625,9 @@ function _dcrAWeekPlanTab() {
     <select id="weekExecSel" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink);max-width:280px">${execOpts}</select>
     <input type="date" id="weekStartIn" value="${_dcrA.weekStartDate || tomorrow}" min="${tomorrow}" style="font-size:12px;padding:5px 8px;border:1px solid var(--brd2);border-radius:6px;background:var(--bg);color:var(--ink)">
     <button class="btn sm pri" style="background:#7c3aed;color:#fff;border:none" onclick="_dcrA.weekEmpCode=document.getElementById('weekExecSel').value;_dcrA.weekStartDate=document.getElementById('weekStartIn').value;dcrAGenWeekPlan()" ${_dcrA._loadingWeek?'disabled':''}>
-      ${_dcrA._loadingWeek ? '⏳ Generating…' : '🤖 Generate 7-Day Plan'}
+      ${_dcrA._loadingWeek ? `⏱ ${_dcrAElapsed(_dcrA._weekGenStart)}` : '🤖 Generate 7-Day Plan'}
     </button>
-    ${_dcrA._loadingWeek ? '<span style="font-size:12px;color:#7c3aed">AI is planning a full week — local model can take a few minutes…</span>' : ''}
+    ${_dcrA._loadingWeek ? '<span style="font-size:12px;color:#7c3aed">AI is planning a full week — local model can take a minute or two; falls back to the instant rule engine if it\'s slow…</span>' : ''}
   </div>`;
 
   if (!_dcrA.weekPlan && !_dcrA._loadingWeek) {
@@ -2615,7 +2637,10 @@ function _dcrAWeekPlanTab() {
       <div style="font-size:11px;margin-top:6px">Same prioritization as Next Day Plan — outstanding, followups, visit recency — spread across the week</div>
     </div>` + _dcrAWeekTeamPlanSection();
   }
-  if (_dcrA._loadingWeek) return controls + `<div style="color:var(--ink-2);padding:40px 0;text-align:center">⏳ पूरे हफ़्ते की योजना बन रही है…</div>`;
+  if (_dcrA._loadingWeek) return controls + `<div style="color:var(--ink-2);padding:40px 0;text-align:center">
+      <div style="font-size:28px;margin-bottom:8px">⏱ ${_dcrAElapsed(_dcrA._weekGenStart)}</div>
+      <div>पूरे हफ़्ते की योजना बन रही है…</div>
+    </div>`;
   if (_dcrA.weekPlan?._err) return controls + `<div style="color:var(--red);padding:20px 0">Failed to generate plan.</div>`;
 
   const p = _dcrA.weekPlan?.plan || {};
@@ -2624,10 +2649,11 @@ function _dcrAWeekPlanTab() {
   const weekTotal = daysArr.reduce((s, d) => s + (d.total_target || 0), 0);
   const weekVisits = daysArr.reduce((s, d) => s + (d.visits || []).length, 0);
 
+  const rangeLabel = _dcrADateRange(p.start_date, daysArr.length ? daysArr[daysArr.length - 1].date : null);
   const planCard = `
     <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;border-radius:12px;padding:16px 18px;margin-bottom:16px">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;opacity:.8">AI 7-Day Tour Plan for ${esc(p.exec||'')} · ${esc(p.unit||'')}</div>
-      <div style="font-size:18px;font-weight:700;margin:6px 0">${esc(p.start_date||'')} onward</div>
+      <div style="font-size:18px;font-weight:700;margin:6px 0">${esc(rangeLabel)}</div>
       <div style="display:flex;gap:20px;margin-top:12px">
         <div><div style="font-size:10px;opacity:.7">PLANNED VISITS</div><div style="font-size:22px;font-weight:800">${weekVisits}</div></div>
         <div><div style="font-size:10px;opacity:.7">WEEK TARGET</div><div style="font-size:22px;font-weight:800">₹${weekTotal.toLocaleString('en-IN')}</div></div>

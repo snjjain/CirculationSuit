@@ -1561,7 +1561,11 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       }
 
       if (process.env.OLLAMA_URL) {
-        const o = await ollamaChat(weekPrompt, 300000);
+        // Shorter timeout than next-day-plan: a 7-day/21-visit JSON response takes the
+        // local model much longer to generate than a single day's 8 visits — cap the
+        // wait so a slow model falls through to the instant rule engine below instead
+        // of leaving the user staring at a spinner for minutes.
+        const o = await ollamaChat(weekPrompt, 60000);
         if (o) {
           try {
             const jm = o.text.match(/\{[\s\S]*\}/);

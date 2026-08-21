@@ -4324,6 +4324,9 @@ require('./agency_rating')({ app, q, getScopeUnitCodes });
 // ── Strategic AI Nexus — proactive circulation-boss briefing & tour planning ──
 require('./ai_nexus')({ app, q, getScopeUnitCodes, getOuScopeFilter, computeInsights: insightsApi.computeInsights });
 
+// ── Tour Plan Validation — AI audit of submitted tour plans vs recommendation ──
+require('./tour_plan_validate')({ app, q });
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 if (require.main === module) {
   app.listen(API_PORT, '0.0.0.0', () => {

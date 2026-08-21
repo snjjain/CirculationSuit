@@ -22,6 +22,8 @@
 #   07:30 daily   oracle_survey_sync.js --from-last   CRM survey incremental
 #   07:45 daily   oracle_exec_hierarchy_sync.js  PLI exec hierarchy
 #   09:30 daily   taxi_sync_daily.js             taxi (auto-backfills missed days)
+#   10:00-12:00 every 30min   oracle_tour_plan_sync.js -> tour_plan_daily_notify.js
+#                             submitted tour plans + AI audit pushed to Circulation Incharges
 #   02:00 Sunday  agency_master_sync.js --full   weekly full agency refresh
 #
 # Requirements on the server:
@@ -83,6 +85,15 @@ weekly_entry() {  # weekly_entry "next Sunday HH:MM" "jobname" "script.js [args]
   echo "$M $H * * $W cd '$API_DIR' && flock -n /tmp/patrika_${name}.lock $NODE $cmd >> '$LOG_DIR/cron_${name}.log' 2>&1"
 }
 
+chained_entry() {  # chained_entry "HH:MM-IST" "jobname" "script1.js [args]" "script2.js [args]"
+  # Runs script1 then script2 in sequence (&&) under one lock+log — used when
+  # the second script needs data the first one just synced.
+  local t="$1" name="$2" cmd1="$3" cmd2="$4"
+  local H M
+  H="$(ist "$t" %H)"; M="$(ist "$t" %M)"
+  echo "$M $H * * * cd '$API_DIR' && flock -n /tmp/patrika_${name}.lock bash -c '$NODE $cmd1 && $NODE $cmd2' >> '$LOG_DIR/cron_${name}.log' 2>&1"
+}
+
 BLOCK="$MARK_BEGIN
 SHELL=/bin/bash
 $(entry "04:30" "emp_mobile"     "oracle_emp_mobile_sync.js")
@@ -95,6 +106,11 @@ $(entry "07:00" "dcr"            "oracle_dcr_sync.js")
 $(entry "07:30" "survey"         "oracle_survey_sync.js --from-last")
 $(entry "07:45" "exec_hierarchy" "oracle_exec_hierarchy_sync.js")
 $(entry "09:30" "taxi"           "taxi_sync_daily.js")
+$(chained_entry "10:00" "tour_plan_1000" "oracle_tour_plan_sync.js" "tour_plan_daily_notify.js")
+$(chained_entry "10:30" "tour_plan_1030" "oracle_tour_plan_sync.js" "tour_plan_daily_notify.js")
+$(chained_entry "11:00" "tour_plan_1100" "oracle_tour_plan_sync.js" "tour_plan_daily_notify.js")
+$(chained_entry "11:30" "tour_plan_1130" "oracle_tour_plan_sync.js" "tour_plan_daily_notify.js")
+$(chained_entry "12:00" "tour_plan_1200" "oracle_tour_plan_sync.js" "tour_plan_daily_notify.js")
 $(weekly_entry "next Sunday 02:00" "agency_full" "agency_master_sync.js --full")
 $MARK_END"
 
