@@ -1161,10 +1161,15 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
   // ── FREE Hinglish remark analyzer (no API key needed) ─────────────────────
   // Extracts payment/commitment/growth/issue/status from Hindi-English-Hinglish
   // field notes with keyword + amount pattern rules. Zero cost, instant, offline.
+  // Keywords sourced from AI Keywords.docx (Hindi + Hinglish + English variations).
   function analyzeRemarkFree(remarkRaw, visitDate) {
     const raw = String(remarkRaw || '');
     const t = ' ' + raw.toLowerCase().replace(/[.,;:!()\-]/g, ' ').replace(/\s+/g, ' ') + ' ';
-    const has = (...words) => words.some(w => t.includes(' ' + w) || t.includes(w + ' ') || t.includes(w));
+    // has() checks both the lowercased ASCII text AND the original (for Hindi script)
+    const has = (...words) => words.some(w => {
+      const wl = w.toLowerCase();
+      return t.includes(' ' + wl) || t.includes(wl + ' ') || t.includes(wl) || raw.includes(w);
+    });
 
     // ── amounts with positions: "5000", "rs 5000", "₹5,000", "5 hazar", "2k", "1 lakh" ──
     const low = raw.toLowerCase();
@@ -1180,18 +1185,106 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
     }
     const maxAmt = amounts.length ? Math.max(...amounts.map(a => a.n)) : 0;
 
-    // ── signals ──
-    const gotPayment = has('mil gay', 'mile', ' mila', ' mili', 'de diya', 'de diye', 'diya h', 'diye h',
-      'received', 'recieved', 'jama karva', 'jama kiya', 'jama ki ', 'cash liya', 'le liya', 'collect kiya',
-      'collect ki ', 'vasuli hui', 'vasuli ki', 'vasool', 'payment aaya', 'payment mila', 'prapt', 'deposit kiya', 'neft aaya', 'upi aaya', 'cheque mila', 'check mila');
-    const willPay = has('dega', 'degi', 'denge', 'de dega', 'de denge', 'bhejega', 'bhej dega', 'kar dega',
-      'karega', 'karegi', 'karenge', 'jama karega', 'jama kar dega', 'promise', 'commitment', 'commit',
-      'tak de', 'tak kar', 'btayege', 'batayege', 'bta dega', 'bata dega', 'pay karega', 'payment karega', 'payment kre', 'kal tak', 'parso tak', 'jaldi de');
-    const growthTalk = has('growth', 'gorwth', 'grwth', 'badha', 'badhay', 'badhane', 'badh jaye', 'increase',
-      'copy badh', 'copies badh', 'prati badh', 'new copy', 'nayi copy', 'scheme', 'circulation badh');
+    // ── AMOUNT RECEIVED signal ──
+    const gotPayment = has(
+      // Hinglish
+      'mil gay', 'mile', ' mila', ' mili', 'de diya', 'de diye', 'diya h', 'diye h',
+      'jama karva', 'jama kiya', 'jama ki ', 'cash liya', 'le liya', 'collect kiya',
+      'collect ki ', 'vasuli hui', 'vasuli ki', 'vasool', 'payment aaya', 'payment mila',
+      'prapt', 'deposit kiya', 'neft aaya', 'upi aaya', 'cheque mila', 'check mila',
+      'nagad prapt', 'prapt kiye', 'app se jama', 'jama kar diya', 'cash prapt',
+      'payment aa gaya', 'paisa aa gaya', 'paise aa gaye', 'paise mile', 'paise mili',
+      // English
+      'received', 'recieved', 'collected', 'cash received', 'cheque received',
+      'neft received', 'upi received', 'payment received', 'payment collected',
+      'amount received', 'payment done', 'payment cleared', 'amount deposited',
+      // Hindi script
+      'जमा', 'प्राप्त', 'भुगतान मिला', 'पेमेंट मिला', 'नगद प्राप्त', 'वसूली हुई',
+      'पेमेंट मिल गया', 'पैसा मिला', 'पैसे मिले', 'कलेक्शन हो गया',
+    );
+
+    // ── AMOUNT COMMITTED / PROMISE signal ──
+    const willPay = has(
+      // Hinglish
+      'dega', 'degi', 'denge', 'de dega', 'de denge', 'bhejega', 'bhej dega', 'kar dega',
+      'karega', 'karegi', 'karenge', 'jama karega', 'jama kar dega',
+      'kal tak', 'parso tak', 'jaldi de', 'btayege', 'batayege', 'bta dega', 'bata dega',
+      'pay karega', 'payment karega', 'payment kre', 'payment karunga', 'payment karenge',
+      'paise dega', 'paise denge', 'paisa dega', 'kal payment', 'payment arrange',
+      'payment jaldi', 'payment clear karega', 'payment bhejega', 'tak de', 'tak kar',
+      'baki dega', 'baaki dega', 'wada kiya', 'kal dega', 'kal bhejega',
+      // English
+      'promise', 'commitment', 'commit', 'will pay', 'will transfer', 'will deposit',
+      'will clear', 'payment by', 'agreed to pay', 'assured to pay', 'payment due',
+      'promised', 'payment promised', 'will arrange', 'will send',
+      // Hindi script
+      'पेमेंट करेगा', 'पेमेंट करेंगे', 'भुगतान करेगा', 'भुगतान करने का वादा',
+      'पेमेंट कमिट', 'अमाउंट कमिट', 'भुगतान का आश्वासन', 'रकम देने का वादा',
+    );
+
+    // ── COPY GROWTH signal ──
+    const growthTalk = has(
+      // Hinglish
+      'growth', 'gorwth', 'grwth', 'badha', 'badhay', 'badhane', 'badh jaye', 'increase',
+      'copy badh', 'copies badh', 'prati badh', 'new copy', 'nayi copy', 'scheme', 'circulation badh',
+      'copy badhayega', 'copies badhayega', 'supply badhayega', 'copies increase karega',
+      'growth denge', 'extra copies lega', 'aur copies lega', 'additional copies lega',
+      'extra supply lega', 'copy badhane', 'copies badhane',
+      // Hindi script
+      'कॉपी बढ़ाएगा', 'कॉपियां बढ़ाएगा', 'सप्लाई बढ़ाएगा', 'ग्रोथ देगा',
+      'अतिरिक्त कॉपियां', 'और कॉपियां', 'कॉपी बढ़ाने',
+    );
     let growthNum = 0;
     const gm = raw.match(/(\d{1,4})\s*(?:copy|copies|prati|paper|pepar)/i);
     if (growthTalk && gm) growthNum = +gm[1];
+
+    // ── UNSOLD / EXCESS COPIES signal ──
+    const unsoldCopies = has(
+      'bach rahi', 'bach rahe', 'bachti hai', 'unsold', 'bik nahi', 'nahi bik',
+      'nhi bik', 'wapas ja rahi', 'wapas aa rahi', 'wapas aayi', 'extra copy aa',
+      'jyada copy', 'jyada supply', 'copy bac', 'copies bac',
+      // Hindi script
+      'कॉपी बच', 'कॉपियां बच', 'अनसोल्ड', 'वापस जा', 'सप्लाई ज्यादा',
+      'बिक नहीं', 'एक्स्ट्रा कॉपी',
+    );
+
+    // ── LATE SUPPLY / DELIVERY signal ──
+    const lateSupply = has(
+      'supply late', 'late supply', 'paper late', 'copy late', 'der se supply',
+      'der se aata', 'der se milta', 'der se milti', 'late milti', 'late milta',
+      'late aata', 'late aati', 'taxi late', 'gaadi late', 'gadi late',
+      'delivery late', 'late delivery', 'supply mein deri', 'supply me deri',
+      // Hindi script
+      'सप्लाई लेट', 'लेट सप्लाई', 'टैक्सी लेट', 'गाड़ी लेट', 'डिलीवरी लेट',
+      'देर से सप्लाई', 'सप्लाई में देरी',
+    );
+
+    // ── PHONE NOT ANSWERING signal ──
+    const phoneNoAnswer = has(
+      'phone nahi utha', 'phone nhi utha', 'call nahi utha', 'call nhi utha',
+      'mobile band', 'phone band', 'number nahi lag', 'number nhi lag',
+      'sampark nahi', 'jawab nahi', 'koi response nahi', 'call back nahi',
+      'not answering', 'no response', 'phone switched off', 'unreachable',
+      // Hindi script
+      'फोन नहीं उठा', 'मोबाइल बंद', 'संपर्क नहीं', 'जवाब नहीं',
+    );
+
+    // ── OUT OF STATION signal ──
+    const outOfStation = has(
+      'out of station', 'bahar gaye', 'bahar he', 'bahar hai', 'shehar se bahar',
+      'tour par', 'yatra par', 'gaon gaye', 'village gaye', 'chhuti par', 'leave par',
+      // Hindi script
+      'बाहर गए', 'शहर से बाहर', 'टूर पर', 'यात्रा पर', 'छुट्टी पर', 'गांव गए',
+    );
+
+    // ── HEALTH / UNWELL signal ──
+    const agentUnwell = has(
+      'bimar', 'bimaar', 'bimari', 'aspataal', 'hospital', 'admit', 'tabiyat',
+      'ilaaj', 'aaram kar', 'bachcha bimaar', 'bache ki tabiyat', 'family mein koi bimaar',
+      // Hindi script
+      'बीमार', 'तबीयत', 'अस्पताल', 'हॉस्पिटल', 'इलाज', 'आराम कर',
+      'बच्चा बीमार', 'बच्चे की तबीयत',
+    );
 
     // ── commitment date ──
     let cDate = null;
@@ -1208,20 +1301,38 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
     // ── issues (most specific first) ──
     let issue = null;
-    if      (has('death', ' deth ', 'mrityu', 'swargvas', 'dehant'))                    issue = 'Death in agent family / agent expired';
-    else if (has('band ho', 'band kar', 'close ho', 'band krna', 'bnd ho'))             issue = 'Agency closing / wants to stop';
-    else if (has('bimar', 'bimaar', 'hospital', 'admit', 'tabiyat'))                    issue = 'Agent unwell / hospitalised';
-    else if (has('naraz', 'naraaz', 'complaint', 'shikayat', 'dispute', 'jhagda'))      issue = 'Agent upset / complaint pending';
-    else if (has('ghar nahi', 'nahi mile', 'nahi mila', 'nhi mile', 'nhi mila', 'band mila', 'bahar gaye', 'bahar he', 'bahar hai', 'out of station', 'shop band')) issue = 'Agent not available at visit';
-    else if (has('paisa nahi', 'paise nahi', 'payment problem', 'market kharab', 'mandi', 'udhari'))  issue = 'Payment difficulty / market slow';
-    else if (has('bill', 'billing') && has('galat', 'problem', 'issue', 'thik nahi'))   issue = 'Billing issue reported';
-    else if (has('supply', 'paper', 'pepar') && has('late', 'der se', 'problem', 'nahi aa')) issue = 'Supply / delivery problem';
+    if      (has('death', ' deth ', 'mrityu', 'swargvas', 'dehant'))
+                                                                    issue = 'Death in agent family / agent expired';
+    else if (has('band ho', 'band kar', 'close ho', 'band krna', 'bnd ho', 'supply band karne', 'copy band karne'))
+                                                                    issue = 'Agency closing / wants to stop';
+    else if (unsoldCopies)                                          issue = 'Unsold/excess copies — supply too high';
+    else if (lateSupply)                                            issue = 'Late supply/delivery reported';
+    else if (agentUnwell)                                           issue = 'Agent unwell / hospitalised';
+    else if (has('naraz', 'naraaz', 'complaint', 'shikayat', 'dispute', 'jhagda'))
+                                                                    issue = 'Agent upset / complaint pending';
+    else if (outOfStation)                                          issue = 'Agent out of station';
+    else if (has('ghar nahi', 'ghar par nahi', 'nahi mile', 'nahi mila', 'nhi mile', 'nhi mila',
+                 'band mila', 'shop band', 'dukaan band', 'agency band', 'office nahi mile',
+                 'milne nahi mila', 'visit unsuccessful'))          issue = 'Agent not available at visit';
+    else if (phoneNoAnswer)                                         issue = 'No phone response';
+    else if (has('paisa nahi', 'paise nahi', 'payment problem', 'market kharab', 'mandi', 'udhari'))
+                                                                    issue = 'Payment difficulty / market slow';
+    else if (has('bill', 'billing') && has('galat', 'problem', 'issue', 'thik nahi'))
+                                                                    issue = 'Billing issue reported';
+    else if (has('supply', 'paper', 'pepar') && has('problem', 'nahi aa', 'nahi mili', 'nhi aa'))
+                                                                    issue = 'Supply / delivery problem';
 
     // ── amounts → buckets by proximity to their signal keywords ──
-    const RECV_WORDS = ['mil gay', 'mile', 'mila', 'mili', 'de diya', 'de diye', 'diya', 'diye', 'received',
-      'jama karva', 'jama kiya', 'cash liya', 'le liya', 'collect', 'vasuli hui', 'vasool', 'prapt', 'aaya'];
-    const PAY_WORDS = ['dega', 'degi', 'denge', 'bhejega', 'karega', 'karenge', 'jama karega', 'promise',
-      'commitment', 'tak de', 'btayege', 'batayege', 'kal tak', 'kla tak', 'parso tak', 'baki', 'baaki'];
+    const RECV_WORDS = [
+      'mil gay', 'mile', 'mila', 'mili', 'de diya', 'de diye', 'diya', 'diye',
+      'jama karva', 'jama kiya', 'cash liya', 'le liya', 'collect', 'vasuli hui', 'vasool',
+      'prapt', 'aaya', 'received', 'collected', 'payment mila', 'payment aa',
+    ];
+    const PAY_WORDS = [
+      'dega', 'degi', 'denge', 'bhejega', 'karega', 'karenge', 'jama karega',
+      'promise', 'commitment', 'tak de', 'btayege', 'batayege', 'kal tak', 'kla tak',
+      'parso tak', 'baki', 'baaki', 'will pay', 'will transfer', 'agreed to pay',
+    ];
     const allPos = words => { const ps = []; for (const w of words) { let i = -1; while ((i = low.indexOf(w, i + 1)) >= 0) ps.push(i); } return ps; };
     const recvPos = gotPayment ? allPos(RECV_WORDS) : [];
     const payPos  = willPay    ? allPos(PAY_WORDS)  : [];
@@ -1238,12 +1349,17 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
     // ── status ──
     let status;
-    if (paymentReceived > 0)                       status = 'productive';
-    else if (gotPayment)                           status = 'productive';
-    else if (issue === 'Agent not available at visit') status = 'no-response';
-    else if (willPay || (growthTalk && growthNum)) status = 'follow-up';
-    else if (growthTalk || has('bat hui', 'bat ki', 'baat hui', 'baat ki', 'discuss', 'samjhaya', 'mila ', 'mile ')) status = 'partial';
-    else                                           status = 'info-only';
+    const unavailable = issue === 'Agent not available at visit' ||
+                        issue === 'Agent out of station' ||
+                        issue === 'No phone response';
+    if (paymentReceived > 0)                        status = 'productive';
+    else if (gotPayment)                            status = 'productive';
+    else if (unavailable)                           status = 'no-response';
+    else if (willPay || (growthTalk && growthNum))  status = 'follow-up';
+    else if (growthTalk || unsoldCopies || lateSupply ||
+             has('bat hui', 'bat ki', 'baat hui', 'baat ki', 'discuss', 'samjhaya', 'mila ', 'mile '))
+                                                    status = 'partial';
+    else                                            status = 'info-only';
 
     return {
       payment_received: paymentReceived,
@@ -1296,7 +1412,33 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
           const resp = await client.messages.create({
             model: 'claude-haiku-4-5-20251001',
             max_tokens: 3500,
-            messages: [{ role: 'user', content: `Analyze field visit notes from newspaper circulation executives. Remarks may be Hindi, English, or mixed language.\n\nFor each numbered visit, extract:\n- payment_received: cash received NOW during this visit (number, 0 if none)\n- commitment_amount: agent promised to pay (number, 0 if none)\n- commitment_date: promised payment date (YYYY-MM-DD or "soon" or null)\n- growth_commitment: newspaper copies increase committed (number, 0)\n- issue: main problem in 5-8 words in English (null if none)\n- status: exactly one of: "productive" | "partial" | "follow-up" | "no-response" | "info-only"\n\nReturn ONLY a valid JSON array, no prose:\n[{"idx":1,"payment_received":0,"commitment_amount":0,"commitment_date":null,"growth_commitment":0,"issue":null,"status":"info-only"},...]\n\nVisits:\n${visitList}` }]
+            messages: [{ role: 'user', content: `Analyze field visit notes from newspaper circulation executives. Remarks are in Hindi, English, or Hinglish (mixed).
+
+KEY RULES:
+- "₹50,000 mila / received / prapt / jama karva / vasool" → payment_received=50000
+- "kal dega / karega / denge / promise / commitment / wada kiya" → commitment_amount (future)
+- "50 copy badhayega / growth / increase / badha" → growth_commitment=50
+- "copy bach rahi / unsold / bik nahi / extra copy" → issue=unsold copies
+- "supply late / taxi late / der se supply / delivery late" → issue=late supply
+- "bimaar / tabiyat / aspataal / hospital" → issue=agent unwell
+- "bahar gaye / out of station / tour par / chhuti par" → issue=out of station
+- "ghar nahi / nahi mile / dukaan band / agency band" → issue=not available
+- "phone nahi utha / mobile band / sampark nahi" → issue=no phone response
+- Judge by FULL SENTENCE CONTEXT, not keywords alone.
+
+For each numbered visit extract:
+- payment_received: amount received NOW (number, 0 if none)
+- commitment_amount: amount promised for future payment (number, 0 if none)
+- commitment_date: "YYYY-MM-DD" or "soon" or null
+- growth_commitment: copies increase committed (number, 0)
+- issue: main problem in 5-8 English words (null if none)
+- status: one of "productive"|"partial"|"follow-up"|"no-response"|"info-only"
+
+Return ONLY a valid JSON array, no prose:
+[{"idx":1,"payment_received":0,"commitment_amount":0,"commitment_date":null,"growth_commitment":0,"issue":null,"status":"info-only"},...]
+
+Visits:
+${visitList}` }]
           });
           const text = resp.content[0]?.text || '[]';
           const jm = text.match(/\[[\s\S]*\]/);
