@@ -11131,15 +11131,20 @@ window.cmpApplyFilter = () => {
 window.cmpDownloadTemplate = async () => {
   const st = _cmpState();
   try {
-    toast('Preparing template…');
-    const r = await fetch(`${api.base}/api/competitor/template?type=${st.tab}`, { headers: api.h() });
+    toast('Preparing template — fetching master data…');
+    const qs = new URLSearchParams({ type: st.tab });
+    if (st.period) qs.set('period', st.period);
+    if (st.unit)   qs.set('unit',   st.unit);
+    const r = await fetch(`${api.base}/api/competitor/template?${qs}`, { headers: api.h() });
     if (!r.ok) { toast('Template error: ' + r.status); return; }
     const blob = await r.blob();
     const url  = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `competitor_${st.tab}_template.xlsx`;
+    const period = st.period || new Date().toISOString().slice(0, 7);
+    a.href = url; a.download = `competitor_${st.tab}_${period}${st.unit ? '_' + st.unit : ''}.xlsx`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 5000);
+    toast('Template downloaded');
   } catch (e) { toast('Download failed: ' + e.message); }
 };
 

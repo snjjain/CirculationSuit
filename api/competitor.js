@@ -2,9 +2,9 @@
 const express = require('express');
 const XLSX    = require('xlsx');
 
-const TEMPLATE_COLS = [
+const AGENCY_COLS = [
   'Period (YYYY-MM)', 'State', 'Unit Code', 'Unit Name',
-  'Agent Code', 'Agent Name', 'Our Copies (Patrika)',
+  'Agent Code', 'Agent Name',
   'Competitor 1 Name', 'Competitor 1 Copies',
   'Competitor 2 Name', 'Competitor 2 Copies',
   'Competitor 3 Name', 'Competitor 3 Copies',
@@ -13,35 +13,100 @@ const TEMPLATE_COLS = [
   'Remarks',
 ];
 
-function buildTemplate(compType) {
-  const sample = compType === 'hawker'
-    ? ['2026-08', 'Rajasthan', 'JA0', 'Jaipur City', 'HW001', 'Sample Hawker', 80,
-       'Dainik Bhaskar', 60, 'Navbharat Times', 10, '', 0, '', 0, '', 0, '']
-    : ['2026-08', 'Rajasthan', 'JA0', 'Jaipur', 'AG001', 'Sample Agency', 150,
-       'Dainik Bhaskar', 120, 'Navbharat Times', 30, '', 0, '', 0, '', 0, ''];
+const HAWKER_COLS = [
+  'Period (YYYY-MM)', 'State', 'Unit Code', 'Unit Name',
+  'Hawker Code', 'Hawker Name',
+  'Competitor 1 Name', 'Competitor 1 Copies',
+  'Competitor 2 Name', 'Competitor 2 Copies',
+  'Competitor 3 Name', 'Competitor 3 Copies',
+  'Competitor 4 Name', 'Competitor 4 Copies',
+  'Competitor 5 Name', 'Competitor 5 Copies',
+  'Remarks',
+];
 
-  const ws = XLSX.utils.aoa_to_sheet([TEMPLATE_COLS, sample]);
-  ws['!cols'] = [14,12,12,20,12,25,14,20,12,20,12,20,12,20,12,20,12,18].map(wch => ({ wch }));
+const BLANK_COMP_CELLS = ['', 0, '', 0, '', 0, '', 0, '', 0, ''];
+const COL_WIDTHS = [14, 14, 12, 22, 14, 28, 22, 10, 22, 10, 22, 10, 22, 10, 22, 10, 18];
 
+async function buildMasterTemplate(compType, period, unitFilter, q) {
+  const isHawker = compType === 'hawker';
+  const cols = isHawker ? HAWKER_COLS : AGENCY_COLS;
+
+  let dataRows = [];
+
+  if (isHawker) {
+    const where  = unitFilter ? 'WHERE unit_code = ?' : '';
+    const params = unitFilter ? [unitFilter] : [];
+    const { rows: hawkers } = await q(
+      `SELECT hawker_id, hawker_name, unit_code, unit_name
+       FROM hawker_master ${where}
+       ORDER BY unit_code, hawker_name`, params);
+
+    // Build unit→state map via agency_master (same utf8mb4_unicode_ci collation — safe JOIN)
+    const stateMap = {};
+    if (hawkers.length) {
+      const unitCodes = [...new Set(hawkers.map(h => h.unit_code).filter(Boolean))];
+      if (unitCodes.length) {
+        const ph = unitCodes.map(() => '?').join(',');
+        const { rows: us } = await q(
+          `SELECT DISTINCT unit, state_name FROM agency_master
+           WHERE unit IN (${ph}) AND state_name IS NOT NULL AND state_name != ''`, unitCodes);
+        us.forEach(r => { stateMap[r.unit] = r.state_name; });
+      }
+    }
+
+    dataRows = hawkers.map(h => [
+      period,
+      stateMap[h.unit_code] || '',
+      h.unit_code  || '',
+      h.unit_name  || '',
+      h.hawker_id  || '',
+      h.hawker_name || '',
+      ...BLANK_COMP_CELLS,
+    ]);
+  } else {
+    const whereBase = "(supply_stop_flag IS NULL OR supply_stop_flag != 'Y')";
+    const where  = unitFilter ? `WHERE ${whereBase} AND unit = ?` : `WHERE ${whereBase}`;
+    const params = unitFilter ? [unitFilter] : [];
+    const { rows: agencies } = await q(
+      `SELECT agcd, ag_name, unit, unit_name, state_name
+       FROM agency_master ${where}
+       ORDER BY state_name, unit, agcd`, params);
+
+    dataRows = agencies.map(a => [
+      period,
+      a.state_name || '',
+      a.unit       || '',
+      a.unit_name  || '',
+      a.agcd       || '',
+      a.ag_name    || '',
+      ...BLANK_COMP_CELLS,
+    ]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet([cols, ...dataRows]);
+  ws['!cols'] = COL_WIDTHS.map(wch => ({ wch }));
+
+  const agentLabel = isHawker ? 'Hawker Code' : 'Agent Code';
+  const nameLabel  = isHawker ? 'Hawker Name' : 'Agent Name';
   const instrRows = [
-    ['Competitor Data Upload — Instructions'],
+    [`Competitor Data Upload — ${isHawker ? 'Hawker' : 'Agency'} Template`],
+    [`Period: ${period}${unitFilter ? `  |  Unit: ${unitFilter}` : '  |  All Units'}`],
     [],
-    ['Column', 'Description', 'Required'],
-    ['Period (YYYY-MM)', 'Month-year e.g. 2026-08', 'Yes'],
-    ['State', 'State name e.g. Rajasthan', 'No'],
-    ['Unit Code', 'Unit code from system e.g. JA0', 'Yes'],
-    ['Unit Name', 'Label only — auto-filled by system', 'No'],
-    ['Agent Code', 'Agency/hawker code. Leave blank for unit-level entry.', 'No'],
-    ['Agent Name', 'Label only — auto-filled by system', 'No'],
-    ['Our Copies (Patrika)', 'Patrika copies for that agency/unit', 'Yes'],
-    ['Competitor N Name', 'Competitor newspaper name e.g. Dainik Bhaskar', 'No'],
-    ['Competitor N Copies', 'Competitor copies count', 'No'],
+    ['Column', 'Description', 'Action'],
+    ['Period (YYYY-MM)', 'Pre-filled from download parameters', 'DO NOT EDIT'],
+    ['State', 'Pre-filled from master', 'DO NOT EDIT'],
+    ['Unit Code', 'Pre-filled from master', 'DO NOT EDIT'],
+    ['Unit Name', 'Pre-filled from master', 'DO NOT EDIT'],
+    [agentLabel, 'Pre-filled from master', 'DO NOT EDIT'],
+    [nameLabel, 'Pre-filled from master', 'DO NOT EDIT'],
+    ['Competitor N Name', 'Competitor newspaper name e.g. Dainik Bhaskar', 'FILL IN'],
+    ['Competitor N Copies', 'Competitor copies count', 'FILL IN'],
     [],
     ['Notes:'],
-    ['• Delete the sample data row before uploading.'],
-    ['• Save as .xlsx format (not .csv or .xls).'],
+    ['• Fill ONLY the Competitor Name and Competitor Copies columns.'],
+    ['• Do NOT edit pre-filled columns — unit/agent codes are used as keys on upload.'],
+    ['• Save as .xlsx format before uploading.'],
     ['• Up to 5 competitors per row. Leave unused columns blank.'],
-    ['• Rows with missing Period or Unit Code are skipped.'],
     ['• Uploading again for the same period+unit+agent will update the existing record.'],
     [],
     ['Common Competitor Names (use consistently):'],
@@ -52,10 +117,10 @@ function buildTemplate(compType) {
     ['  Patrika (Jaipur sub-edition)'],
   ];
   const instrWs = XLSX.utils.aoa_to_sheet(instrRows);
-  instrWs['!cols'] = [{ wch: 25 }, { wch: 50 }, { wch: 10 }];
+  instrWs['!cols'] = [{ wch: 22 }, { wch: 48 }, { wch: 12 }];
 
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, compType === 'hawker' ? 'Hawker Data' : 'Agency Data');
+  XLSX.utils.book_append_sheet(wb, ws, isHawker ? 'Hawker Data' : 'Agency Data');
   XLSX.utils.book_append_sheet(wb, instrWs, 'Instructions');
   return XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
 }
@@ -64,15 +129,18 @@ const N = v => { const x = parseInt(v, 10); return isNaN(x) ? 0 : x; };
 const Str = v => String(v || '').trim();
 
 function rowToRecord(row, compType, enteredBy) {
+  // Hawker template uses "Hawker Code"/"Hawker Name"; agency uses "Agent Code"/"Agent Name"
+  const agentCode = Str(row['Hawker Code'] || row['Agent Code']);
+  const agentName = Str(row['Hawker Name'] || row['Agent Name']);
   return {
     comp_type:    compType,
     state_name:   Str(row['State']),
     unit_code:    Str(row['Unit Code']),
     unit_name:    Str(row['Unit Name']),
-    agent_code:   Str(row['Agent Code']),
-    agent_name:   Str(row['Agent Name']),
+    agent_code:   agentCode,
+    agent_name:   agentName,
     period:       Str(row['Period (YYYY-MM)']),
-    our_supply:   N(row['Our Copies (Patrika)']),
+    our_supply:   0,  // not collected in template; fetched from supply_data at query time
     comp1_name:   Str(row['Competitor 1 Name']),
     comp1_supply: N(row['Competitor 1 Copies']),
     comp2_name:   Str(row['Competitor 2 Name']),
@@ -147,12 +215,21 @@ module.exports = function registerCompetitor({ app, q }) {
   }
 
   // ════ GET /api/competitor/template ════
-  app.get('/api/competitor/template', (req, res) => {
-    const compType = req.query.type === 'hawker' ? 'hawker' : 'agency';
-    const buf = buildTemplate(compType);
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="competitor_${compType}_template.xlsx"`);
-    res.send(buf);
+  // ?type=agency|hawker  &period=YYYY-MM (default: current month)  &unit=JA0 (optional filter)
+  app.get('/api/competitor/template', async (req, res) => {
+    try {
+      const compType   = req.query.type === 'hawker' ? 'hawker' : 'agency';
+      const period     = /^\d{4}-\d{2}$/.test(req.query.period || '')
+        ? req.query.period
+        : new Date().toISOString().slice(0, 7);
+      const unitFilter = Str(req.query.unit);
+
+      const buf = await buildMasterTemplate(compType, period, unitFilter, q);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition',
+        `attachment; filename="competitor_${compType}_${period}${unitFilter ? '_' + unitFilter : ''}.xlsx"`);
+      res.send(buf);
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
   // ════ POST /api/competitor/upload ════
