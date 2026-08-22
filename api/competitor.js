@@ -34,53 +34,65 @@ async function buildMasterTemplate(compType, period, unitFilter, q) {
   let dataRows = [];
 
   if (isHawker) {
-    const where  = unitFilter ? 'WHERE unit_code = ?' : '';
-    const params = unitFilter ? [unitFilter] : [];
-    const { rows: hawkers } = await q(
-      `SELECT hawker_id, hawker_name, unit_code, unit_name
-       FROM hawker_master ${where}
-       ORDER BY unit_code, hawker_name`, params);
+    try {
+      const where  = unitFilter ? 'WHERE unit_code = ?' : '';
+      const params = unitFilter ? [unitFilter] : [];
+      const { rows: hawkers } = await q(
+        `SELECT hawker_id, hawker_name, unit_code, unit_name
+         FROM hawker_master ${where}
+         ORDER BY unit_code, hawker_name`, params);
 
-    // Build unit→state map via agency_master (same utf8mb4_unicode_ci collation — safe JOIN)
-    const stateMap = {};
-    if (hawkers.length) {
-      const unitCodes = [...new Set(hawkers.map(h => h.unit_code).filter(Boolean))];
-      if (unitCodes.length) {
-        const ph = unitCodes.map(() => '?').join(',');
-        const { rows: us } = await q(
-          `SELECT DISTINCT unit, state_name FROM agency_master
-           WHERE unit IN (${ph}) AND state_name IS NOT NULL AND state_name != ''`, unitCodes);
-        us.forEach(r => { stateMap[r.unit] = r.state_name; });
+      // Build unit→state map via agency_master (same utf8mb4_unicode_ci collation — safe)
+      const stateMap = {};
+      if (hawkers.length) {
+        const unitCodes = [...new Set(hawkers.map(h => h.unit_code).filter(Boolean))];
+        if (unitCodes.length) {
+          try {
+            const ph = unitCodes.map(() => '?').join(',');
+            const { rows: us } = await q(
+              `SELECT DISTINCT unit, state_name FROM agency_master
+               WHERE unit IN (${ph}) AND state_name IS NOT NULL AND state_name != ''`, unitCodes);
+            us.forEach(r => { stateMap[r.unit] = r.state_name; });
+          } catch (_) {}
+        }
       }
+
+      dataRows = hawkers.map(h => [
+        period,
+        stateMap[h.unit_code] || '',
+        h.unit_code   || '',
+        h.unit_name   || '',
+        h.hawker_id   || '',
+        h.hawker_name || '',
+        ...BLANK_COMP_CELLS,
+      ]);
+    } catch (e) {
+      // hawker_master not synced yet — return header-only template
+      console.warn('[competitor template] hawker_master query failed:', e.message);
     }
-
-    dataRows = hawkers.map(h => [
-      period,
-      stateMap[h.unit_code] || '',
-      h.unit_code  || '',
-      h.unit_name  || '',
-      h.hawker_id  || '',
-      h.hawker_name || '',
-      ...BLANK_COMP_CELLS,
-    ]);
   } else {
-    const whereBase = "(supply_stop_flag IS NULL OR supply_stop_flag != 'Y')";
-    const where  = unitFilter ? `WHERE ${whereBase} AND unit = ?` : `WHERE ${whereBase}`;
-    const params = unitFilter ? [unitFilter] : [];
-    const { rows: agencies } = await q(
-      `SELECT agcd, ag_name, unit, unit_name, state_name
-       FROM agency_master ${where}
-       ORDER BY state_name, unit, agcd`, params);
+    try {
+      const whereBase = "(supply_stop_flag IS NULL OR supply_stop_flag != 'Y')";
+      const where  = unitFilter ? `WHERE ${whereBase} AND unit = ?` : `WHERE ${whereBase}`;
+      const params = unitFilter ? [unitFilter] : [];
+      const { rows: agencies } = await q(
+        `SELECT agcd, ag_name, unit, unit_name, state_name
+         FROM agency_master ${where}
+         ORDER BY state_name, unit, agcd`, params);
 
-    dataRows = agencies.map(a => [
-      period,
-      a.state_name || '',
-      a.unit       || '',
-      a.unit_name  || '',
-      a.agcd       || '',
-      a.ag_name    || '',
-      ...BLANK_COMP_CELLS,
-    ]);
+      dataRows = agencies.map(a => [
+        period,
+        a.state_name || '',
+        a.unit       || '',
+        a.unit_name  || '',
+        a.agcd       || '',
+        a.ag_name    || '',
+        ...BLANK_COMP_CELLS,
+      ]);
+    } catch (e) {
+      // agency_master not synced yet — return header-only template
+      console.warn('[competitor template] agency_master query failed:', e.message);
+    }
   }
 
   const ws = XLSX.utils.aoa_to_sheet([cols, ...dataRows]);
