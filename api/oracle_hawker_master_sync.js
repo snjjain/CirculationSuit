@@ -47,7 +47,7 @@ const MYSQL_CONFIG = {
 const LOG_FILE = path.resolve(__dirname, '../logs/oracle_hawker_master_sync.log');
 const SEP   = '\x1c';   // ASCII 28 — field separator, never appears in data
 const D     = 'CHR(28)';
-const NCOLS = 13;       // must match cols array in buildSqlScript (13 fields, 12 separators)
+const NCOLS = 12;       // must match cols array in buildSqlScript (12 fields, 11 separators)
 
 // ── Logger ────────────────────────────────────────────────────────────────────
 function log(msg) {
@@ -79,12 +79,11 @@ function buildSqlScript(spoolFile) {
     S('(SELECT CENT_NAME FROM CRM_CENTER_MASTER WHERE CENT_ID=H.CENT_ID AND LOC_ID=H.LOC_ID)'), //  4 hawker_center_name
     S('H.HAWKER_ID'),                                                         //  5 hawker_id
     S('H.HAWKER_NAME'),                                                       //  6 hawker_name
-    S('H.MOBILE_NO'),                                                         //  7 mobile_no
-    S('H.FIELD_OFFICER'),                                                     //  8 field_officer_code
-    S('CIR_GET_EXECUTIVE(H.COMPCODE,H.FIELD_OFFICER)'),                       //  9 field_officer_name
-    S('H.CENTER_INCHARGE'),                                                   // 10 center_incharge_code
-    S('CIR_GET_EXECUTIVE(H.COMPCODE,H.CENTER_INCHARGE)'),                     // 11 center_incharge_name
-    S('H.CATAGORY'),                                                          // 12 catagory (note: Oracle spelling)
+    S('H.FIELD_OFFICER'),                                                     //  7 field_officer_code
+    S('CIR_GET_EXECUTIVE(H.COMPCODE,H.FIELD_OFFICER)'),                       //  8 field_officer_name
+    S('H.CENTER_INCHARGE'),                                                   //  9 center_incharge_code
+    S('CIR_GET_EXECUTIVE(H.COMPCODE,H.CENTER_INCHARGE)'),                     // 10 center_incharge_name
+    S('H.CATAGORY'),                                                          // 11 catagory (note: Oracle spelling)
   ].join(`\n  || ${D} ||\n  `);
 
   return `SET PAGESIZE 0
@@ -153,18 +152,17 @@ function lineToParams(f) {
     str(f[4]),   // hawker_center_name
     str(f[5]),   // hawker_id
     str(f[6]),   // hawker_name
-    str(f[7]),   // mobile_no
-    str(f[8]),   // field_officer_code
-    str(f[9]),   // field_officer_name
-    str(f[10]),  // center_incharge_code
-    str(f[11]),  // center_incharge_name
-    str(f[12]),  // catagory
+    str(f[7]),   // field_officer_code
+    str(f[8]),   // field_officer_name
+    str(f[9]),   // center_incharge_code
+    str(f[10]),  // center_incharge_name
+    str(f[11]),  // catagory
   ];
 }
 
 const COL_LIST = `compcode, unit_code, unit_name,
      hawker_center_code, hawker_center_name,
-     hawker_id, hawker_name, mobile_no,
+     hawker_id, hawker_name,
      field_officer_code, field_officer_name,
      center_incharge_code, center_incharge_name,
      catagory`;
@@ -246,7 +244,7 @@ async function sync() {
     let inserted = 0;
     for (let i = 0; i < rows.length; i += BATCH) {
       const chunk = rows.slice(i, i + BATCH);
-      const ph    = chunk.map(() => `(${',?'.repeat(13).slice(1)})`).join(',');
+      const ph    = chunk.map(() => `(${',?'.repeat(12).slice(1)})`).join(',');
       const vals  = chunk.flatMap(f => lineToParams(f));
       await conn.execute(
         `INSERT INTO hawker_master (${COL_LIST}) VALUES ${ph}`, vals);
