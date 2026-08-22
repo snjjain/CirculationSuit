@@ -65,6 +65,76 @@ module.exports = function registerInsights(ctx) {
   }
   const fmtPct = p => (p == null ? '—' : `${p >= 0 ? '+' : ''}${p.toFixed(1)}%`);
 
+  // ── Hindi translation via Ollama (same free-tier convention as ask_ai.js /
+  //    ai_nexus.js) — messages to Circulation Incharges/Zonal Heads read in
+  //    Hindi. Translated ONCE per draft request (not per branch/unit), and
+  //    covers insight.what/why/impact/next plus every top[] line in one call
+  //    so a multi-branch insight never triggers more than one Ollama round-trip.
+  //    Falls back to the English content wrapped in Hindi scaffolding/labels
+  //    when Ollama isn't reachable or the response doesn't parse cleanly. ────
+  const OLLAMA_URL = (process.env.OLLAMA_URL || 'http://localhost:11434').replace(/\/$/, '');
+  const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
+  let ollamaOk = false;
+  async function detectOllama() {
+    try {
+      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 1500);
+      const r = await fetch(OLLAMA_URL + '/api/tags', { signal: ctrl.signal });
+      clearTimeout(t);
+      if (!r.ok) { ollamaOk = false; return; }
+      const d = await r.json();
+      const names = (d.models || []).map(m => m.name || m.model || '');
+      ollamaOk = names.some(n => n === OLLAMA_MODEL || n.split(':')[0] === OLLAMA_MODEL.split(':')[0]);
+    } catch (_) { ollamaOk = false; }
+  }
+  detectOllama();
+  setInterval(detectOllama, 5 * 60 * 1000);
+
+  async function ollamaChat(system, userMsg, maxTokens, timeoutMs = 20000) {
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(OLLAMA_URL + '/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+        body: JSON.stringify({
+          model: OLLAMA_MODEL, stream: false, format: 'json',
+          options: { temperature: 0, num_predict: maxTokens || 1200 },
+          messages: [{ role: 'system', content: system }, { role: 'user', content: userMsg }],
+        }),
+      });
+      if (!r.ok) throw new Error('Ollama HTTP ' + r.status);
+      const d = await r.json();
+      return d.message?.content || '';
+    } finally { clearTimeout(t); }
+  }
+
+  async function hindiTranslateInsight(insight) {
+    if (!ollamaOk) return null;
+    try {
+      const items = (insight.top || []).map(t => t.text || t.label || '');
+      const sys = 'आप एक व्यावसायिक अनुवादक हैं। दिए गए अंग्रेज़ी परिसंचरण व्यवसाय सूचना को हिंदी में अनुवाद ' +
+        'करें। सभी संख्याएँ, ₹ राशि, एजेंसी/यूनिट/व्यक्ति के नाम और तारीखें बिल्कुल वैसी ही रखें, केवल वाक्य ' +
+        'हिंदी में लिखें। "items" सूची में उतनी ही प्रविष्टियाँ रखें जितनी दी गई हैं, उसी क्रम में। केवल इस JSON ' +
+        'प्रारूप में उत्तर दें: {"what":"...","why":"...","impact":"...","next":"...","items":["..."]}';
+      const payload = JSON.stringify({ what: insight.what, why: insight.why, impact: insight.impact, next: insight.next, items });
+      // Longer bound than the default 20s: translating 4 sentences + item list
+      // in one call genuinely takes longer on a modest LAN model than a quick
+      // classification does. Still bounded — falls back to Hinglish (Hindi
+      // scaffolding, original English content) if the model doesn't make it.
+      const text = await ollamaChat(sys, payload, 1400, 35000);
+      const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+      const raw = fence ? fence[1] : text;
+      const start = raw.indexOf('{');
+      if (start === -1) return null;
+      const parsed = JSON.parse(raw.slice(start, raw.lastIndexOf('}') + 1));
+      if (!parsed || !parsed.what) return null;
+      // Some local models don't reliably preserve array length — pad/truncate
+      // to match rather than discarding an otherwise-good translation.
+      if (!Array.isArray(parsed.items)) parsed.items = [];
+      while (parsed.items.length < items.length) parsed.items.push(items[parsed.items.length]);
+      parsed.items = parsed.items.slice(0, items.length);
+      return parsed;
+    } catch (_) { return null; }
+  }
+
   // ── Insight cache (per scope, 10 min) ───────────────────────────────────────
   const cache = new Map();
   const CACHE_MS = 10 * 60 * 1000;
@@ -674,35 +744,49 @@ module.exports = function registerInsights(ctx) {
   });
 
   // ── Message drafting ────────────────────────────────────────────────────────
+  // Looks up the Hindi translation of one top[] item by its position in the
+  // ORIGINAL (unfiltered) insight.top array — lets a per-unit item subset
+  // reuse the single whole-insight translation instead of re-translating.
+  function _hindiItemText(insight, hindi, item) {
+    if (!hindi || !hindi.items) return item.text || item.label || '';
+    const idx = (insight.top || []).indexOf(item);
+    return idx >= 0 && hindi.items[idx] ? hindi.items[idx] : (item.text || item.label || '');
+  }
+
   function draftMessage(insight, channel, opts = {}) {
     const fromName = process.env.SMTP_FROM_NAME || 'Patrika Circulation MIS';
+    const hindi = opts.hindi || null;
     const toName = opts.to_name || (insight.targets && insight.targets[0] && insight.targets[0].unit_name
-      ? `Zonal Head — ${insight.targets.map(t => t.unit_name).filter(Boolean).slice(0, 3).join(', ')}`
-      : 'Team');
-    const topLines = (insight.top || []).slice(0, 10).map((t, i) => `${i + 1}. ${t.text || t.label}`);
+      ? `ज़ोनल हेड — ${insight.targets.map(t => t.unit_name).filter(Boolean).slice(0, 3).join(', ')}`
+      : 'टीम');
+    const what = hindi ? hindi.what : insight.what;
+    const why = hindi ? hindi.why : insight.why;
+    const impact = hindi ? hindi.impact : insight.impact;
+    const next = hindi ? hindi.next : insight.next;
+    const topLines = (insight.top || []).slice(0, 10).map((t, i) => `${i + 1}. ${_hindiItemText(insight, hindi, t)}`);
 
     if (channel === 'email') {
-      const subject = `[${insight.priority}] ${insight.title} — Action Required`;
+      const subject = `[${insight.priority}] ${insight.title} — कार्रवाई आवश्यक`;
       const body = [
-        `Dear ${toName},`,
+        `प्रिय ${toName},`,
         ``,
-        insight.what,
+        what,
         ``,
-        `Why it matters:`,
-        insight.why,
+        `यह महत्वपूर्ण क्यों है:`,
+        why,
         ``,
-        `Impact:`,
-        insight.impact,
-        ...(topLines.length ? [``, `Items requiring attention:`, ...topLines] : []),
+        `प्रभाव:`,
+        impact,
+        ...(topLines.length ? [``, `ध्यान देने योग्य विषय:`, ...topLines] : []),
         ``,
-        `Recommended action:`,
-        insight.next,
+        `सुझाई गई कार्रवाई:`,
+        next,
         ``,
-        `Please review and take corrective action within 48 hours, and reply with the current status.`,
+        `कृपया 48 घंटे के भीतर समीक्षा कर उचित कार्रवाई करें और वर्तमान स्थिति की सूचना दें।`,
         ``,
-        `Regards,`,
+        `धन्यवाद,`,
         fromName,
-        `(Generated by Patrika AI Decision Support from live circulation data)`,
+        `(यह सूचना Patrika AI Decision Support द्वारा लाइव परिसंचरण डेटा से स्वचालित रूप से तैयार की गई है)`,
       ].join('\n');
       return { subject, body };
     }
@@ -710,38 +794,111 @@ module.exports = function registerInsights(ctx) {
       const body = [
         `*${insight.title}*`,
         ``,
-        insight.what,
-        `*Why:* ${insight.why}`,
-        ...(topLines.length ? [``, `Top items:`, ...topLines.slice(0, 5)] : []),
+        what,
+        `*क्यों:* ${why}`,
+        ...(topLines.length ? [``, `मुख्य विषय:`, ...topLines.slice(0, 5)] : []),
         ``,
-        `*Action:* ${insight.next}`,
+        `*कार्रवाई:* ${next}`,
         `— ${fromName}`,
       ].join('\n');
       return { subject: insight.title, body };
     }
     // sms — keep it short
-    const body = `${insight.title}. ${insight.next} — ${fromName}`.slice(0, 300);
+    const body = `${insight.title}. ${next} — ${fromName}`.slice(0, 300);
     return { subject: insight.title, body };
   }
 
+  // Same email body shape as draftMessage(), but scoped to one unit's own top
+  // items and addressed to that unit's actual recipient(s) — never the whole
+  // multi-branch list. Used by the per-unit /api/insights/draft response.
+  function draftMessageForUnit(insight, toName, topItemsForUnit, hindi) {
+    const fromName = process.env.SMTP_FROM_NAME || 'Patrika Circulation MIS';
+    const what = hindi ? hindi.what : insight.what;
+    const why = hindi ? hindi.why : insight.why;
+    const impact = hindi ? hindi.impact : insight.impact;
+    const next = hindi ? hindi.next : insight.next;
+    const topLines = (topItemsForUnit || []).slice(0, 10).map((t, i) => `${i + 1}. ${_hindiItemText(insight, hindi, t)}`);
+    const subject = `[${insight.priority}] ${insight.title} — कार्रवाई आवश्यक`;
+    const body = [
+      `प्रिय ${toName},`,
+      ``,
+      what,
+      ``,
+      `यह महत्वपूर्ण क्यों है:`,
+      why,
+      ``,
+      `प्रभाव:`,
+      impact,
+      ...(topLines.length ? [``, `ध्यान देने योग्य विषय:`, ...topLines] : []),
+      ``,
+      `सुझाई गई कार्रवाई:`,
+      next,
+      ``,
+      `कृपया 48 घंटे के भीतर समीक्षा कर उचित कार्रवाई करें और वर्तमान स्थिति की सूचना दें।`,
+      ``,
+      `धन्यवाद,`,
+      fromName,
+      `(यह सूचना Patrika AI Decision Support द्वारा लाइव परिसंचरण डेटा से स्वचालित रूप से तैयार की गई है)`,
+    ].join('\n');
+    return { subject, body };
+  }
+
   // POST /api/insights/draft  { insight, channel, to_name? }
+  // Email is drafted PER UNIT — never merged across branches. Within each unit,
+  // To = Circulation Incharge, Cc = Zonal Head (any other configured role falls
+  // back into Cc so nothing configured is silently dropped). WhatsApp/SMS are
+  // already single-recipient, user-picked flows, so they keep the old shape.
   app.post('/api/insights/draft', async (req, res) => {
     try {
       const { insight, channel = 'email', to_name } = req.body || {};
       if (!insight || !insight.title) return res.status(400).json({ detail: 'insight object required' });
-      const draft = draftMessage(insight, channel, { to_name });
 
-      // Recipients: configured emails for the insight's target units
-      let recipients = [];
-      const unitCodes = [...new Set((insight.targets || []).map(t => t.unit_code).filter(Boolean))];
-      if (unitCodes.length) {
-        const ph = unitCodes.map(() => '?').join(',');
-        const r = await q(`SELECT unit_code, unit_name, role_label, person_name, email, mobile
-                           FROM unit_email_config WHERE unit_code IN (${ph}) AND is_active = 1`, unitCodes);
-        recipients = r.rows;
+      // Translated once for the whole request — every branch's email reuses it.
+      const hindi = await hindiTranslateInsight(insight);
+
+      if (channel !== 'email') {
+        const draft = draftMessage(insight, channel, { to_name, hindi });
+        const mobiles = (insight.top || []).map(t => t.mobile).filter(Boolean);
+        return res.json({ ...draft, channel, mobiles: [...new Set(mobiles)] });
       }
-      const mobiles = (insight.top || []).map(t => t.mobile).filter(Boolean);
-      res.json({ ...draft, channel, recipients, mobiles: [...new Set(mobiles)] });
+
+      const unitCodes = [...new Set((insight.targets || []).map(t => t.unit_code).filter(Boolean))];
+      if (!unitCodes.length) {
+        // No unit-specific targeting on this insight — nothing to split by branch.
+        const draft = draftMessage(insight, 'email', { to_name, hindi });
+        return res.json({ channel: 'email', per_unit: [], fallback: { ...draft, to: [], cc: [] } });
+      }
+
+      const unitNames = Object.fromEntries((insight.targets || []).map(t => [t.unit_code, t.unit_name]));
+      const ph = unitCodes.map(() => '?').join(',');
+      const { rows: configRows } = await q(
+        `SELECT unit_code, unit_name, role_label, person_name, email, mobile
+         FROM unit_email_config WHERE unit_code IN (${ph}) AND is_active = 1`, unitCodes);
+      const byUnit = new Map();
+      configRows.forEach(r => { if (!byUnit.has(r.unit_code)) byUnit.set(r.unit_code, []); byUnit.get(r.unit_code).push(r); });
+
+      const per_unit = unitCodes.map(uc => {
+        const rows = byUnit.get(uc) || [];
+        const incharge = rows.filter(r => /circ(ulation)?\s*incharge/i.test(r.role_label || ''));
+        const zonal    = rows.filter(r => /zonal\s*head/i.test(r.role_label || ''));
+        const to = incharge.length ? incharge : (zonal.length ? zonal : rows);
+        const cc = rows.filter(r => !to.includes(r));
+        const unitName = unitNames[uc] || rows[0]?.unit_name || uc;
+        const toNames = [...new Set(to.map(r => r.person_name || r.role_label).filter(Boolean))];
+        const topForUnit = (insight.top || []).filter(t => t.unit_code === uc);
+        const { subject, body } = draftMessageForUnit(insight,
+          toNames.length ? toNames.join(', ') : `टीम — ${unitName}`,
+          topForUnit.length ? topForUnit : (insight.top || []), hindi);
+        return {
+          unit_code: uc, unit_name: unitName,
+          to: [...new Set(to.map(r => r.email))], to_names: toNames,
+          cc: [...new Set(cc.map(r => r.email))], cc_names: [...new Set(cc.map(r => r.person_name || r.role_label).filter(Boolean))],
+          has_incharge: incharge.length > 0, has_any_contact: rows.length > 0,
+          subject, body,
+        };
+      });
+
+      res.json({ channel: 'email', per_unit });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 

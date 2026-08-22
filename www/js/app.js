@@ -4418,6 +4418,122 @@ function _aiLogAction(body) {
   return api.post('/api/actions', { created_by: S.user?.name || '', ...body });
 }
 
+function _aiSplitEmails(raw) {
+  const seen = new Set();
+  return String(raw || '').split(',').map(s => s.trim()).filter(Boolean)
+    .filter(e => { const k = e.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+// Per-branch email modal: never merges recipients across units. Each row is
+// addressed to that unit's own Circulation Incharge (Cc: Zonal Head), with
+// its message scoped to just that unit's items — matches how /api/insights/draft
+// now splits the response instead of returning one flat multi-branch draft.
+function _aiEmailModal(ins, d) {
+  const units = d.per_unit || [];
+
+  if (!units.length) {
+    // Org-wide insight, not tied to a specific branch — manual entry.
+    const fb = d.fallback || { to: [], cc: [], subject: '', body: '' };
+    const m = modal(`
+      <h3>✉ Send Email — Review &amp; Edit</h3>
+      <p class="mint" style="color:var(--gold)">This insight isn't tied to a specific branch — enter recipients manually.</p>
+      <div class="fld"><label>To (comma-separated)</label><input data-k="to" value="${esc((fb.to || []).join(', '))}" placeholder="name@in.patrika.com"></div>
+      <div class="fld"><label>Cc (comma-separated)</label><input data-k="cc" value="${esc((fb.cc || []).join(', '))}" placeholder="optional"></div>
+      <div class="fld"><label>Subject</label><input data-k="subject" value="${esc(fb.subject || '')}"></div>
+      <div class="fld"><label>Message (editable)</label><textarea data-k="body" rows="12" style="min-height:220px;font-size:13px">${esc(fb.body || '')}</textarea></div>
+      <div style="display:flex;gap:9px;margin-top:14px">
+        <button class="btn pri block" data-send>Send Email</button>
+        <button class="btn" data-cancel>Cancel</button>
+      </div>`);
+    m.querySelector('[data-cancel]').onclick = () => m.remove();
+    m.querySelector('[data-send]').onclick = async () => {
+      const to = _aiSplitEmails(m.querySelector('[data-k=to]').value);
+      const cc = _aiSplitEmails(m.querySelector('[data-k=cc]').value);
+      const subject = m.querySelector('[data-k=subject]').value.trim();
+      const body = m.querySelector('[data-k=body]').value;
+      if (!to.length) { toast('Enter at least one email address'); return; }
+      const btn = m.querySelector('[data-send]'); btn.disabled = true; btn.textContent = 'Sending…';
+      const r = await api.post('/api/insights/send-email', {
+        to, cc: cc.length ? cc : undefined, subject, body,
+        insight_key: ins.id, module: ins.module, priority: ins.priority, created_by: S.user?.name || '' });
+      if (r && r.ok) { m.remove(); toast('✓ Email sent'); _aiState().actions = null; }
+      else { btn.disabled = false; btn.textContent = 'Send Email'; toast((r && r.detail) || 'Send failed'); }
+    };
+    return;
+  }
+
+  const rows = units.map((u, i) => {
+    const statusBadge = !u.has_any_contact
+      ? chip('crit', '⚠ No contact configured')
+      : u.has_incharge
+        ? chip('good', '✓ Circulation Incharge')
+        : chip('warn', '⚠ No Incharge — using Zonal Head');
+    return `<div class="_cmd-card" data-unit-row="${i}" style="margin-bottom:10px;padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <b style="font-size:13px">${esc(u.unit_name)}</b>
+        ${statusBadge}
+      </div>
+      ${u.has_any_contact ? `
+        <div class="fld" style="margin-bottom:6px"><label style="font-size:10.5px">To</label><input data-k="to" value="${esc((u.to || []).join(', '))}" style="font-size:12.5px"></div>
+        <div class="fld" style="margin-bottom:6px"><label style="font-size:10.5px">Cc</label><input data-k="cc" value="${esc((u.cc || []).join(', '))}" style="font-size:12.5px" placeholder="optional"></div>
+        <details style="margin-bottom:8px"><summary style="font-size:11.5px;color:var(--acc);cursor:pointer">✎ Edit subject &amp; message</summary>
+          <div class="fld" style="margin-top:6px"><input data-k="subject" value="${esc(u.subject)}" style="font-size:12.5px"></div>
+          <textarea data-k="body" rows="9" style="width:100%;font-size:12px;margin-top:6px">${esc(u.body)}</textarea>
+        </details>
+        <button class="btn sm pri" data-send-unit>Send</button>
+        <span data-send-status style="font-size:11.5px;margin-left:8px;color:var(--muted)"></span>
+      ` : `<div style="font-size:12px;color:var(--red)">No email configured for ${esc(u.unit_name)} — add one in Administration → Email Config.</div>`}
+    </div>`;
+  }).join('');
+
+  const sendableCount = units.filter(u => u.has_any_contact).length;
+  const m = modal(`
+    <h3>✉ Send Email — Per Branch</h3>
+    <p class="mint">${units.length} branch${units.length > 1 ? 'es' : ''} affected — each gets its own email addressed to that branch's Circulation Incharge (Cc: Zonal Head). Nothing is merged across branches.</p>
+    <div style="display:flex;gap:9px;margin-bottom:12px">
+      <button class="btn pri" data-send-all ${sendableCount ? '' : 'disabled'}>✈ Send All (${sendableCount})</button>
+      <button class="btn" data-cancel>Close</button>
+    </div>
+    <div style="max-height:60vh;overflow-y:auto;padding-right:4px">${rows}</div>`);
+
+  m.querySelector('[data-cancel]').onclick = () => m.remove();
+
+  async function sendRow(rowEl) {
+    const to = _aiSplitEmails(rowEl.querySelector('[data-k=to]').value);
+    const cc = _aiSplitEmails(rowEl.querySelector('[data-k=cc]').value);
+    const subject = rowEl.querySelector('[data-k=subject]').value.trim();
+    const body = rowEl.querySelector('[data-k=body]').value;
+    const btn = rowEl.querySelector('[data-send-unit]');
+    const status = rowEl.querySelector('[data-send-status]');
+    if (!to.length) { status.textContent = 'Enter a To address'; status.style.color = 'var(--red)'; return false; }
+    btn.disabled = true; btn.textContent = 'Sending…';
+    const r = await api.post('/api/insights/send-email', {
+      to, cc: cc.length ? cc : undefined, subject, body,
+      insight_key: ins.id, module: ins.module, priority: ins.priority, created_by: S.user?.name || '' });
+    if (r && r.ok) { btn.textContent = '✓ Sent'; status.textContent = ''; _aiState().actions = null; return true; }
+    btn.disabled = false; btn.textContent = 'Send'; status.textContent = (r && r.detail) || 'Send failed'; status.style.color = 'var(--red)';
+    return false;
+  }
+
+  m.querySelectorAll('[data-unit-row]').forEach(rowEl => {
+    const btn = rowEl.querySelector('[data-send-unit]');
+    if (btn) btn.onclick = () => sendRow(rowEl);
+  });
+
+  m.querySelector('[data-send-all]').onclick = async () => {
+    const allBtn = m.querySelector('[data-send-all]');
+    allBtn.disabled = true;
+    let sent = 0;
+    for (const rowEl of m.querySelectorAll('[data-unit-row]')) {
+      const sendBtn = rowEl.querySelector('[data-send-unit]');
+      if (!sendBtn || sendBtn.disabled) continue; // no contact configured, or already sent
+      if (await sendRow(rowEl)) sent++;
+    }
+    allBtn.textContent = `✓ Sent ${sent}`;
+    toast(`✓ Sent ${sent} of ${sendableCount} branch emails`);
+  };
+}
+
 /* — message drafting + send — */
 window.aiDraft = async (idx, channel) => {
   const ins = _aiIns(idx); if (!ins) return;
@@ -4425,48 +4541,7 @@ window.aiDraft = async (idx, channel) => {
   const d = await api.post('/api/insights/draft', { insight: ins, channel });
   if (!d) { toast('Draft failed — is the API running?'); return; }
 
-  if (channel === 'email') {
-    // One email per person: dedupe recipient addresses, and group each person's branches
-    // (a user with rights over several branches gets a single mail listing all of them).
-    const recs = d.recipients || [];
-    const emails = [], seenEmail = new Set();
-    recs.forEach(r => { const e = (r.email || '').trim(); if (e && !seenEmail.has(e.toLowerCase())) { seenEmail.add(e.toLowerCase()); emails.push(e); } });
-    const toPre = emails.join(', ');
-    const byPerson = {};
-    recs.forEach(r => {
-      const key = (r.email || r.person_name || r.role_label || '').toLowerCase();
-      const p = byPerson[key] = byPerson[key] || { name: r.person_name || r.role_label || r.email || 'Recipient', units: [] };
-      const u = r.unit_name || r.unit_code;
-      if (u && !p.units.includes(u)) p.units.push(u);
-    });
-    const who = Object.values(byPerson).map(p => `${p.name}${p.units.length ? ' (' + p.units.join(', ') + ')' : ''}`).join('; ');
-    const m = modal(`
-      <h3>✉ Send Email — Review &amp; Edit</h3>
-      <p class="mint">${who ? 'Configured recipients: ' + esc(who) : '<span style="color:var(--gold)">No emails configured for the target units — add them in the Email Config tab, or type addresses below.</span>'}</p>
-      <div class="fld"><label>To (comma-separated)</label><input data-k="to" value="${esc(toPre)}" placeholder="name@in.patrika.com"></div>
-      <div class="fld"><label>Subject</label><input data-k="subject" value="${esc(d.subject)}"></div>
-      <div class="fld"><label>Message (editable)</label><textarea data-k="body" rows="12" style="min-height:220px;font-size:13px">${esc(d.body)}</textarea></div>
-      <div style="display:flex;gap:9px;margin-top:14px">
-        <button class="btn pri block" data-send>Send Email</button>
-        <button class="btn" data-cancel>Cancel</button>
-      </div>`);
-    m.querySelector('[data-cancel]').onclick = () => m.remove();
-    m.querySelector('[data-send]').onclick = async () => {
-      const _rawTo = m.querySelector('[data-k=to]').value.split(',').map(s => s.trim()).filter(Boolean);
-      const _seenT = new Set();
-      const to = _rawTo.filter(e => { const k = e.toLowerCase(); if (_seenT.has(k)) return false; _seenT.add(k); return true; });
-      const subject = m.querySelector('[data-k=subject]').value.trim();
-      const body = m.querySelector('[data-k=body]').value;
-      if (!to.length) { toast('Enter at least one email address'); return; }
-      const btn = m.querySelector('[data-send]'); btn.disabled = true; btn.textContent = 'Sending…';
-      const r = await api.post('/api/insights/send-email', {
-        to, subject, body, insight_key: ins.id, module: ins.module, priority: ins.priority,
-        created_by: S.user?.name || '' });
-      if (r && r.ok) { m.remove(); toast('✓ Email sent to ' + r.sent_to.length + ' recipient' + (r.sent_to.length > 1 ? 's' : '')); _aiState().actions = null; }
-      else { btn.disabled = false; btn.textContent = 'Send Email'; toast((r && r.detail) || 'Send failed'); }
-    };
-    return;
-  }
+  if (channel === 'email') { _aiEmailModal(ins, d); return; }
 
   /* whatsapp / sms — preview, copy, open app, log */
   const mobiles = (d.mobiles || []).slice(0, 6);
