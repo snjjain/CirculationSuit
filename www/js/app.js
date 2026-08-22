@@ -10331,7 +10331,7 @@ function arDetailView() {
       <td style="font-weight:600">${monthLabel(h.period_label)}</td>
       <td class="r num">${arInrLakh(h.bill_amt)}</td>
       <td class="r num" style="color:var(--grn,#22c55e)">${arInrLakh(h.rec_amt)}</td>
-      <td class="r num" style="color:${N(h.cl_amt) > 0 ? 'var(--red)' : 'var(--grn,#22c55e)'}">${arInrLakh(h.cl_amt)}</td>
+      <td class="r num" style="color:${Number(h.cl_amt) > 0 ? 'var(--red)' : 'var(--grn,#22c55e)'}">${arInrLakh(h.cl_amt)}</td>
       <td class="r num" style="color:var(--muted)">${h.supply_days || '—'}</td>
     </tr>`).join('');
 
