@@ -2001,11 +2001,7 @@ VIEWS.dcr_analytics = () => {
         <div style="display:flex;align-items:center;gap:6px;font-size:12px">
           <label style="color:var(--ink-2)">State</label>
           <select id="dcrA-state" onchange="_dcrAStateChange()" style="${sel()}">
-            <option value="">All States</option>
-            <option value="Rajasthan" ${_dcrA.state==='Rajasthan'?'selected':''}>Rajasthan</option>
-            <option value="Madhya Pradesh" ${_dcrA.state==='Madhya Pradesh'?'selected':''}>Madhya Pradesh</option>
-            <option value="Chhattisgarh" ${_dcrA.state==='Chhattisgarh'?'selected':''}>Chhattisgarh</option>
-            <option value="National" ${_dcrA.state==='National'?'selected':''}>National</option>
+            ${(() => { const ss=[...new Set(allUnits.map(u=>u.state))].sort(); return (ss.length>1?'<option value="">All States</option>':'')+ss.map(s=>`<option value="${esc(s)}" ${_dcrA.state===s?'selected':''}>${esc(s)}</option>`).join(''); })()}
           </select>
           <label style="color:var(--ink-2)">Unit</label>
           <select id="dcrA-unit" style="${sel()};max-width:180px">${unitOpts}</select>

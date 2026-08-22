@@ -113,11 +113,26 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
   }
 
   // ── GET /api/dcr-analytics/units ────────────────────────────────────────────
-  // Full unit list with state classification — used by frontend filter dropdown
+  // Unit list scoped to the logged-in user — used by frontend filter dropdown
   app.get('/api/dcr-analytics/units', async (req, res) => {
     try {
       if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
-      const { rows } = await q('SELECT unit_code, unit_name FROM pub_unit_master ORDER BY unit_name');
+
+      // Scope: only units this user is allowed to see
+      const scopedCodes = await getScopeUnitCodes(req.auth.personCode, req.auth.hierarchyLevel);
+      let rows;
+      if (scopedCodes === null) {
+        // L1 admin — all units
+        ({ rows } = await q('SELECT unit_code, unit_name FROM pub_unit_master ORDER BY unit_name'));
+      } else if (!scopedCodes.length) {
+        rows = [];
+      } else {
+        const ph = scopedCodes.map(() => '?').join(',');
+        ({ rows } = await q(
+          `SELECT unit_code, unit_name FROM pub_unit_master WHERE unit_code IN (${ph}) ORDER BY unit_name`,
+          scopedCodes));
+      }
+
       const CG  = ['BHILAI','BILASPUR','JAGDALPUR','RAIPUR'];
       const MP  = ['BHOPAL','CHHINDWARA','GWALIOR','INDORE','JABALPUR','KHANDWA','MANDSAUR','RATLAM','SAGAR','SATNA','UJJAIN'];
       const NAT = ['AHMEDABAD','BANGLORE','BANGALORE','CHENNAI','COIMBATORE','DELHI','HUBLI','KOLKATA','MUMBAI','SURAT'];
