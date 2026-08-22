@@ -3,18 +3,19 @@
 
 /* ---------- navigation model (menus & submenus from both references) ---------- */
 const DASH_MENU = [
-  ["command",       "Command Centre",          "📊"],
-  ["ai_nexus",      "Strategic AI Nexus",      "🧭"],
-  ["supply_dash",   "Supply Dashboard",        "📦"],
-  ["collections",   "Collections",             "₹"],
-  ["outstanding",   "Agency Outstanding",      "💰"],
-  ["exec_perf",     "Executive Performance",   "👤"],
-  ["exec_targets",  "Monthly Targets",         "🎯"],
-  ["agency_rating", "Agency Rating Engine",    "⭐"],
-  ["short_payment", "Short Payment",           "📋"],
-  ["transport",     "Taxi Dashboard",          "🚕"],
-  ["survey_dash",   "Survey Intelligence",     "📊"],
-  ["dcr_analytics", "Field Visit Intelligence","📍"],
+  ["command",          "Command Centre",          "📊"],
+  ["ai_nexus",         "Strategic AI Nexus",      "🧭"],
+  ["supply_dash",      "Supply Dashboard",        "📦"],
+  ["collections",      "Collections",             "₹"],
+  ["outstanding",      "Agency Outstanding",      "💰"],
+  ["exec_perf",        "Executive Performance",   "👤"],
+  ["exec_targets",     "Monthly Targets",         "🎯"],
+  ["agency_rating",    "Agency Rating Engine",    "⭐"],
+  ["short_payment",    "Short Payment",           "📋"],
+  ["transport",        "Taxi Dashboard",          "🚕"],
+  ["survey_dash",      "Survey Intelligence",     "📊"],
+  ["dcr_analytics",    "Field Visit Intelligence","📍"],
+  ["competitor_data",  "Competitor Data",         "📊"],
 ];
 
 const APP_MENU = {
@@ -4957,11 +4958,67 @@ function _nexusCompetitor(st) {
   _nexusLoadCompetitor();
   const d = st.competitor;
   if (!d) return _cmdSkel();
-  return `<div class="card pad" style="text-align:center;color:var(--muted);padding:34px">
+  if (!d.available) return `<div class="card pad" style="text-align:center;color:var(--muted);padding:34px">
     <div style="font-size:30px;margin-bottom:10px">📊</div>
-    <div style="font-size:14px;color:var(--ink);font-weight:700;margin-bottom:6px">Competitor Intelligence — Awaiting Data</div>
-    <div style="font-size:13px;max-width:480px;margin:0 auto">${esc(d.message || 'Competitor cash-sale and credit-sale data has not been uploaded yet.')}</div>
+    <div style="font-size:14px;color:var(--ink);font-weight:700;margin-bottom:6px">Competitor Intelligence — No Data Yet</div>
+    <div style="font-size:13px;max-width:480px;margin:0 auto;margin-bottom:16px">${esc(d.message || 'No competitor data uploaded.')}</div>
+    <button class="btn pri" onclick="go('competitor_data')">Upload Competitor Data →</button>
   </div>`;
+
+  const N = v => (Number(v)||0).toLocaleString('en-IN');
+  const pct = d.our_share_pct || 0;
+  const pctColor = pct >= 60 ? 'var(--grn)' : pct >= 40 ? 'var(--gold)' : 'var(--red)';
+
+  const kpis = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+    <div class="card pad" style="flex:1;min-width:130px">
+      <div style="font-size:28px;font-weight:800;color:${pctColor}">${pct}%</div>
+      <div style="font-size:11px;color:var(--ink-2);text-transform:uppercase;letter-spacing:.04em">Our Market Share</div>
+      <div style="font-size:11px;color:var(--ink-2)">Period: ${esc(d.period)}</div>
+    </div>
+    <div class="card pad" style="flex:1;min-width:130px">
+      <div style="font-size:22px;font-weight:700;color:var(--primary)">${N(d.total_ours)}</div>
+      <div style="font-size:11px;color:var(--ink-2);text-transform:uppercase;letter-spacing:.04em">Our Copies (Patrika)</div>
+    </div>
+    <div class="card pad" style="flex:1;min-width:130px">
+      <div style="font-size:22px;font-weight:700;color:var(--ink)">${N(d.total_market)}</div>
+      <div style="font-size:11px;color:var(--ink-2);text-transform:uppercase;letter-spacing:.04em">Total Market</div>
+      <div style="font-size:11px;color:var(--ink-2)">${d.unit_count} unit(s)</div>
+    </div>
+  </div>`;
+
+  const compRows = (d.competitors || []).map(c => {
+    const share = d.total_market > 0 ? Math.round(c.total / d.total_market * 100) : 0;
+    const bar = `<div style="background:var(--red);height:6px;border-radius:3px;width:${share}%;min-width:2px;max-width:100%"></div>`;
+    return `<tr><td>${esc(c.name)}</td><td class="r num">${N(c.total)}</td>
+      <td class="r num" style="color:var(--red)">${share}%</td>
+      <td style="width:80px;padding-left:8px">${bar}</td></tr>`;
+  }).join('');
+  const compTable = `<div class="card" style="margin-bottom:14px">
+    <div class="cardhead"><h3>Competitor Breakdown</h3></div>
+    <div class="tablewrap"><table><thead><tr><th>Newspaper</th><th class="r">Copies</th><th class="r">Share</th><th></th></tr></thead>
+    <tbody>${compRows || '<tr><td colspan="4" style="color:var(--muted)">No competitor data</td></tr>'}</tbody></table></div>
+  </div>`;
+
+  let losingHtml = '';
+  if ((d.losing_units||[]).length) {
+    const rows = d.losing_units.map(u =>
+      `<tr style="background:var(--red-l)"><td>${esc(u.unit_name||u.unit_code)}</td>
+        <td class="r num">${N(u.our_supply)}</td>
+        <td class="r num">${N(u.total_market)}</td>
+        <td class="r num" style="color:var(--red);font-weight:700">${u.share_pct}%</td></tr>`
+    ).join('');
+    losingHtml = `<div class="card" style="margin-bottom:14px;border-left:3px solid var(--red)">
+      <div class="cardhead"><h3 style="color:var(--red)">⚠ Units Where We're Losing (share below 50%)</h3></div>
+      <div class="tablewrap"><table><thead><tr><th>Unit</th><th class="r">Our Copies</th><th class="r">Total Market</th><th class="r">Share</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    </div>`;
+  }
+
+  const actions = `<div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:14px">
+    <button class="btn sm" onclick="go('competitor_data')">Manage Competitor Data</button>
+  </div>`;
+
+  return actions + kpis + compTable + losingHtml;
 }
 
 /* ── Drill-down: open any AI Nexus agency in the full Agency Rating detail page ── */
@@ -11025,6 +11082,239 @@ VIEWS.audit_log = () => {
      <div class="card" style="padding:0;overflow:hidden">${body}</div>`;
 };
 
+/* ════════════════════════════════════════════════════════════════════
+   COMPETITOR DATA — State/Unit/Agency market-share management
+   ════════════════════════════════════════════════════════════════════ */
+
+let _cmp = { tab:'agency', unit:'', state:'', period:'', rows:undefined, total:0, loading:false,
+             periods:undefined, _pLoading:false };
+
+function _cmpState() { return _cmp; }
+
+function _cmpLoad(force) {
+  const st = _cmpState();
+  if (st.loading || (st.rows !== undefined && !force)) return;
+  st.loading = true; st.rows = undefined;
+  const qs = new URLSearchParams({ type: st.tab });
+  if (st.unit)   qs.set('unit',   st.unit);
+  if (st.period) qs.set('period', st.period);
+  if (st.state)  qs.set('state',  st.state);
+  fetch(`${api.base}/api/competitor?${qs}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.rows = d.rows || []; st.total = d.total || 0; st.loading = false; if (S.screen === 'competitor_data') render(); })
+    .catch(() => { st.rows = []; st.loading = false; if (S.screen === 'competitor_data') render(); });
+}
+
+function _cmpLoadPeriods(force) {
+  const st = _cmpState();
+  if (st._pLoading || (st.periods !== undefined && !force)) return;
+  st._pLoading = true;
+  fetch(`${api.base}/api/competitor/periods?type=${st.tab}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.periods = Array.isArray(d) ? d : []; st._pLoading = false; if (S.screen === 'competitor_data') render(); })
+    .catch(() => { st.periods = []; st._pLoading = false; });
+}
+
+window.cmpTab = t => {
+  const st = _cmpState();
+  st.tab = t; st.rows = undefined; st.periods = undefined; st.period = ''; st.unit = ''; st.state = '';
+  _cmpLoad(); _cmpLoadPeriods(); render();
+};
+
+window.cmpApplyFilter = () => {
+  const st = _cmpState();
+  st.unit   = (document.getElementById('cmpUnit')   || {}).value || '';
+  st.period = (document.getElementById('cmpPeriod') || {}).value || '';
+  st.state  = (document.getElementById('cmpState')  || {}).value || '';
+  st.rows = undefined; _cmpLoad();
+};
+
+window.cmpDownloadTemplate = () => {
+  const st = _cmpState();
+  const url = `${api.base}/api/competitor/template?type=${st.tab}`;
+  const a = document.createElement('a'); a.href = url; a.download = `competitor_${st.tab}_template.xlsx`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+};
+
+window.cmpUploadModal = () => {
+  const st = _cmpState();
+  modal(`<h3>Upload Competitor Data (${st.tab === 'hawker' ? 'Hawker' : 'Agency'})</h3>
+    <p style="font-size:12px;color:var(--ink-2)">Download the template first, fill in the data, then upload the filled Excel here. Existing records for the same period+unit+agent will be updated.</p>
+    <input type="file" id="cmpFile" accept=".xlsx,.xls" style="margin:10px 0;display:block">
+    <div id="cmpUpErr" style="color:var(--red);font-size:12px"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn pri block" onclick="cmpDoUpload()">Upload &amp; Save</button>
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+};
+
+window.cmpDoUpload = async () => {
+  const st = _cmpState();
+  const file = document.getElementById('cmpFile')?.files?.[0];
+  const errEl = document.getElementById('cmpUpErr');
+  if (!file) { errEl.textContent = 'Please select an Excel file'; return; }
+  errEl.textContent = 'Uploading…';
+  try {
+    const buf = await file.arrayBuffer();
+    const u = S.user;
+    const enteredBy = encodeURIComponent((u && u.name) || (u && u.person_code) || '');
+    const r = await fetch(`${api.base}/api/competitor/upload?type=${st.tab}&entered_by=${enteredBy}`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/octet-stream' }, body: buf,
+    });
+    const d = await r.json();
+    if (!r.ok) { errEl.textContent = d.detail || 'Upload failed'; return; }
+    closeModals();
+    toast(`✓ ${d.inserted} records saved (${d.skipped} skipped)`);
+    st.rows = undefined; st.periods = undefined; _cmpLoad(); _cmpLoadPeriods();
+  } catch (e) { errEl.textContent = 'Error: ' + e.message; }
+};
+
+window.cmpAddModal = () => {
+  const st = _cmpState();
+  const label = st.tab === 'hawker' ? 'Hawker' : 'Agency';
+  modal(`<h3>Add Competitor Data (${label})</h3>
+    <div class="fld"><label>Period (YYYY-MM) *</label><input id="cmpFPeriod" placeholder="2026-08" value="${todayISO().slice(0,7)}"></div>
+    <div class="fld"><label>Unit Code *</label><input id="cmpFUnit" placeholder="JA0" value="${esc(st.unit)}"></div>
+    <div class="fld"><label>State</label><input id="cmpFState" placeholder="Rajasthan" value="${esc(st.state)}"></div>
+    <div class="fld"><label>${label} Code</label><input id="cmpFAgent" placeholder="AG001"></div>
+    <div class="fld"><label>${label} Name</label><input id="cmpFAgName" placeholder="Optional"></div>
+    <div class="fld"><label>Our Copies (Patrika) *</label><input id="cmpFOurs" type="number" inputmode="numeric" placeholder="0"></div>
+    <div style="font-size:11.5px;color:var(--ink-2);font-weight:700;margin:10px 0 4px">Competitors</div>
+    ${[1,2,3,4,5].map(i=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+      <input id="cmpFC${i}Name" placeholder="Competitor ${i} name" style="flex:3">
+      <input id="cmpFC${i}Copies" type="number" inputmode="numeric" placeholder="Copies" style="flex:1;min-width:60px">
+    </div>`).join('')}
+    <div class="fld"><label>Remarks</label><input id="cmpFRemarks" placeholder="Notes…"></div>
+    <div id="cmpSaveErr" style="color:var(--red);font-size:12px"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn pri block" onclick="cmpSaveEntry()">Save</button>
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+};
+
+window.cmpSaveEntry = async () => {
+  const st = _cmpState();
+  const gv = id => (document.getElementById(id)||{}).value || '';
+  const errEl = document.getElementById('cmpSaveErr');
+  const body = {
+    comp_type:  st.tab,
+    period:     gv('cmpFPeriod').trim(),
+    unit_code:  gv('cmpFUnit').trim(),
+    state_name: gv('cmpFState').trim(),
+    agent_code: gv('cmpFAgent').trim(),
+    agent_name: gv('cmpFAgName').trim(),
+    our_supply: parseInt(gv('cmpFOurs')||'0',10)||0,
+    comp1_name: gv('cmpFC1Name'), comp1_supply: parseInt(gv('cmpFC1Copies')||'0',10)||0,
+    comp2_name: gv('cmpFC2Name'), comp2_supply: parseInt(gv('cmpFC2Copies')||'0',10)||0,
+    comp3_name: gv('cmpFC3Name'), comp3_supply: parseInt(gv('cmpFC3Copies')||'0',10)||0,
+    comp4_name: gv('cmpFC4Name'), comp4_supply: parseInt(gv('cmpFC4Copies')||'0',10)||0,
+    comp5_name: gv('cmpFC5Name'), comp5_supply: parseInt(gv('cmpFC5Copies')||'0',10)||0,
+    remarks:    gv('cmpFRemarks'),
+    entered_by: (S.user && S.user.name) || (S.user && S.user.person_code) || '',
+  };
+  if (!body.period.match(/^\d{4}-\d{2}$/) || !body.unit_code) {
+    errEl.textContent = 'Period (YYYY-MM) and Unit Code are required'; return;
+  }
+  try {
+    const r = await api.post('/api/competitor', body);
+    if (r && r.ok) { closeModals(); toast('✓ Saved'); st.rows = undefined; _cmpLoad(); }
+    else errEl.textContent = (r && r.detail) || 'Save failed';
+  } catch (e) { errEl.textContent = e.message; }
+};
+
+window.cmpDelete = async (id) => {
+  if (!confirm('Delete this record?')) return;
+  try {
+    const r = await fetch(`${api.base}/api/competitor/${id}`, { method: 'DELETE', headers: api.h() });
+    const d = await r.json();
+    if (d.ok) { toast('Deleted'); const st = _cmpState(); st.rows = undefined; _cmpLoad(); }
+    else toast('Delete failed');
+  } catch (e) { toast('Error: ' + e.message); }
+};
+
+VIEWS.competitor_data = () => {
+  _cmpLoad(); _cmpLoadPeriods();
+  const st = _cmpState();
+  const isHawker = st.tab === 'hawker';
+  const label    = isHawker ? 'Hawker' : 'Agency';
+
+  const tabBar = `<div style="display:flex;gap:8px;margin-bottom:14px">
+    ${['agency','hawker'].map(t => `<button class="btn${st.tab===t?' pri':''} sm" onclick="cmpTab('${t}')">${t==='hawker'?'🛵 Hawker':'🏢 Agency'}</button>`).join('')}
+  </div>`;
+
+  const periodOpts = (st.periods||[]).map(p => `<option value="${esc(p)}"${st.period===p?' selected':''}>${esc(p)}</option>`).join('');
+
+  const filters = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">
+    <div class="fld" style="flex:1;min-width:120px;margin:0">
+      <label style="font-size:11px">Period</label>
+      <select id="cmpPeriod" style="width:100%">
+        <option value="">All Periods</option>${periodOpts}
+      </select>
+    </div>
+    <div class="fld" style="flex:1;min-width:110px;margin:0">
+      <label style="font-size:11px">Unit Code</label>
+      <input id="cmpUnit" placeholder="e.g. JA0" value="${esc(st.unit)}" style="width:100%">
+    </div>
+    <div class="fld" style="flex:1;min-width:110px;margin:0">
+      <label style="font-size:11px">State</label>
+      <input id="cmpState" placeholder="Rajasthan" value="${esc(st.state)}" style="width:100%">
+    </div>
+    <button class="btn sm pri" onclick="cmpApplyFilter()">Filter</button>
+    <button class="btn sm" onclick="const s=_cmpState();s.unit='';s.state='';s.period='';s.rows=undefined;_cmpLoad();render()">Clear</button>
+  </div>`;
+
+  const actions = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+    <button class="btn sm" onclick="cmpDownloadTemplate()">⬇ Download Template</button>
+    <button class="btn sm" onclick="cmpUploadModal()">⬆ Upload Excel</button>
+    <button class="btn sm pri" onclick="cmpAddModal()">+ Add Entry</button>
+  </div>`;
+
+  let tableHtml = '';
+  if (st.loading || st.rows === undefined) {
+    tableHtml = `<div class="card pad" style="text-align:center;color:var(--muted);padding:28px">Loading…</div>`;
+  } else if (!st.rows.length) {
+    tableHtml = `<div class="card pad" style="text-align:center;padding:32px">
+      <div style="font-size:28px;margin-bottom:10px">📊</div>
+      <div style="font-weight:700;margin-bottom:6px">No data yet</div>
+      <div style="font-size:13px;color:var(--ink-2);margin-bottom:16px">Download the Excel template, fill in competitor data, then upload it. Or use "+ Add Entry" to enter data manually.</div>
+      <div style="display:flex;gap:8px;justify-content:center">
+        <button class="btn pri" onclick="cmpDownloadTemplate()">⬇ Download Template</button>
+        <button class="btn" onclick="cmpAddModal()">+ Add Entry</button>
+      </div>
+    </div>`;
+  } else {
+    const compCols = [1,2,3,4,5];
+    const rows = st.rows.map(r => {
+      const totalComp = compCols.reduce((s,i) => s + (Number(r[`comp${i}_supply`])||0), 0);
+      const totalMkt  = (Number(r.our_supply)||0) + totalComp;
+      const share     = totalMkt > 0 ? Math.round((Number(r.our_supply)||0) / totalMkt * 100) : 0;
+      const shareColor = share >= 60 ? 'var(--grn)' : share >= 40 ? 'var(--gold)' : 'var(--red)';
+      const comps = compCols.map(i => r[`comp${i}_name`] ? `${esc(r[`comp${i}_name`])} (${(Number(r[`comp${i}_supply`])||0).toLocaleString('en-IN')})` : '').filter(Boolean).join(', ');
+      return `<tr>
+        <td>${esc(r.period)}</td>
+        <td>${esc(r.unit_name||r.unit_code)}</td>
+        <td>${esc(r.agent_code||'—')}</td>
+        <td>${esc(r.agent_name||'—')}</td>
+        <td class="r num">${(Number(r.our_supply)||0).toLocaleString('en-IN')}</td>
+        <td style="font-size:11px;max-width:200px">${comps||'—'}</td>
+        <td class="r num" style="color:${shareColor};font-weight:700">${share}%</td>
+        <td><button class="btn sm" style="color:var(--red);padding:2px 8px" onclick="cmpDelete(${r.id})">✕</button></td>
+      </tr>`;
+    }).join('');
+    tableHtml = `<div class="tablewrap"><table>
+      <thead><tr>
+        <th>Period</th><th>Unit</th><th>${label} Code</th><th>${label} Name</th>
+        <th class="r">Our Copies</th><th>Competitors</th><th class="r">Share</th><th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div style="font-size:12px;color:var(--ink-2);margin-top:8px">${st.total} total records${st.total>st.rows.length?` — showing ${st.rows.length}`:''}.</div>`;
+  }
+
+  return pagehead('Competitor Data', `Market share tracking — ${label}-wise competitor circulation data`) +
+    tabBar + filters + actions + `<div class="card" style="padding:16px">${tableHtml}</div>`;
+};
+
 /* ---- Email Config (moved out of Strategic AI Nexus into Administration) ---- */
 VIEWS.email_config = () => {
   return pagehead('Email Config', 'Unit-wise recipients for AI Insights one-click alerts') +
@@ -13031,7 +13321,7 @@ function navGroups() {
   if (u.dashboard) {
     const fieldIds = ["routes", "collections", "complaints", "partners"];
     // mgmtIds are always shown to hl≤4 regardless of saved navScreens (handles screens added after a user's navScreens was last saved)
-    const mgmtIds  = ["command", "ai_nexus", "supply_dash", "exec_perf", "exec_targets", "agency_rating"];
+    const mgmtIds  = ["command", "ai_nexus", "supply_dash", "exec_perf", "exec_targets", "agency_rating", "competitor_data"];
     const items = DASH_MENU
       .filter(([id]) => (hl <= 4 && mgmtIds.includes(id)) || (u.navScreens ? u.navScreens.includes(id) : (hl <= 4 || fieldIds.includes(id))))
       .filter(([id]) => permAllows(id, 'view') !== false)   // explicit rights-matrix deny hides the screen
@@ -13046,10 +13336,14 @@ function navGroups() {
   const apps = u.modules.filter(k => permAllows(k, 'view') !== false).map(k => ({ key: k, ...APP_MENU[k] }));
   if (apps.length) groups.push({ label: "Field Apps", apps });
   if (hl === 1) groups.push({ label: "Administration", items: [
-    { id: "user_mgmt",     label: "User Management", icon: "👥" },
-    { id: "manage_rights", label: "Manage Rights",   icon: "🔐" },
-    { id: "audit_log",     label: "Audit Trail",     icon: "📜" },
-    { id: "email_config",  label: "Email Config",    icon: "✉" },
+    { id: "user_mgmt",       label: "User Management",  icon: "👥" },
+    { id: "manage_rights",   label: "Manage Rights",    icon: "🔐" },
+    { id: "audit_log",       label: "Audit Trail",      icon: "📜" },
+    { id: "email_config",    label: "Email Config",     icon: "✉" },
+    { id: "competitor_data", label: "Competitor Data",  icon: "📊" },
+  ]});
+  if (hl > 1 && hl <= 3) groups.push({ label: "Data Entry", items: [
+    { id: "competitor_data", label: "Competitor Data",  icon: "📊" },
   ]});
   return groups;
 }

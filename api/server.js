@@ -4327,6 +4327,9 @@ require('./ai_nexus')({ app, q, getScopeUnitCodes, getOuScopeFilter, computeInsi
 // ── Tour Plan Validation — AI audit of submitted tour plans vs recommendation ──
 require('./tour_plan_validate')({ app, q });
 
+// ── Competitor Data — agency/hawker market-share entry, Excel upload/download ──
+require('./competitor')({ app, q });
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 if (require.main === module) {
   app.listen(API_PORT, '0.0.0.0', () => {

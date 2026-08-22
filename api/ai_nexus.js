@@ -427,13 +427,56 @@ module.exports = function registerAiNexus(ctx) {
   });
 
   // ════ GET /api/ai-nexus/competitor ════
-  // Placeholder until competitor cash/credit-sale benchmark data is supplied.
+  // Proxies to the competitor_data table summary. Returns { available: false }
+  // when no data has been uploaded yet.
   app.get('/api/ai-nexus/competitor', async (req, res) => {
-    res.json({
-      available: false,
-      message: 'Competitor cash-sale and credit-sale data has not been uploaded yet. Once provided, this tab will ' +
-        'show per-agency and per-unit market-share comparisons against competing publications.',
-    });
+    try {
+      const type = req.query.type === 'hawker' ? 'hawker' : 'agency';
+      const { rows: lp } = await q(
+        `SELECT period FROM competitor_data WHERE comp_type = ? ORDER BY period DESC LIMIT 1`, [type]);
+      if (!lp.length) {
+        return res.json({ available: false,
+          message: 'No competitor data uploaded yet. Go to Competitor Data under your navigation to upload or enter data.' });
+      }
+      const period = lp[0].period;
+      const { rows: units } = await q(`
+        SELECT unit_code, unit_name, state_name,
+          SUM(our_supply) AS our_supply,
+          SUM(comp1_supply) AS comp1_supply, MAX(comp1_name) AS comp1_name,
+          SUM(comp2_supply) AS comp2_supply, MAX(comp2_name) AS comp2_name,
+          SUM(comp3_supply) AS comp3_supply, MAX(comp3_name) AS comp3_name,
+          SUM(comp4_supply) AS comp4_supply, MAX(comp4_name) AS comp4_name,
+          SUM(comp5_supply) AS comp5_supply, MAX(comp5_name) AS comp5_name,
+          COUNT(*) AS agents
+        FROM competitor_data WHERE comp_type = ? AND period = ?
+        GROUP BY unit_code, unit_name, state_name ORDER BY our_supply DESC`, [type, period]);
+
+      const compTotals = {};
+      for (const r of units) {
+        for (let i = 1; i <= 5; i++) {
+          const name = r[`comp${i}_name`]; const copies = Number(r[`comp${i}_supply`] || 0);
+          if (name && copies > 0) compTotals[name] = (compTotals[name] || 0) + copies;
+        }
+      }
+      const competitors = Object.entries(compTotals).sort((a, b) => b[1] - a[1])
+        .map(([name, total]) => ({ name, total }));
+      const totalOurs = units.reduce((s, r) => s + Number(r.our_supply || 0), 0);
+      const totalComp = competitors.reduce((s, c) => s + c.total, 0);
+      const totalMkt  = totalOurs + totalComp;
+      const losing = units.map(r => {
+        const ours = Number(r.our_supply||0);
+        const comp = [1,2,3,4,5].reduce((s,i)=>s+Number(r[`comp${i}_supply`]||0),0);
+        const tot  = ours + comp;
+        return { unit_code: r.unit_code, unit_name: r.unit_name, state_name: r.state_name,
+          our_supply: ours, total_market: tot, share_pct: tot>0 ? Math.round(ours/tot*100) : 100 };
+      }).filter(r => r.total_market > 0 && r.share_pct < 50)
+        .sort((a, b) => a.share_pct - b.share_pct);
+
+      res.json({ available: true, period, type,
+        total_ours: totalOurs, total_market: totalMkt,
+        our_share_pct: totalMkt > 0 ? Math.round(totalOurs/totalMkt*100) : 0,
+        competitors, unit_count: units.length, losing_units: losing, units });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
   // ════ POST /api/ai-nexus/draft — Hindi email/Telegram draft ════
