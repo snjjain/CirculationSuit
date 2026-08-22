@@ -47,7 +47,7 @@ async function runViaDriver(sqlFile) {
   const text = fs.readFileSync(sqlFile, 'utf8');
   const m = text.match(/^SPOOL[ \t]+(.+?)[ \t]*$/mi);
   if (!m) throw new Error('ora_client: no SPOOL line found in ' + sqlFile);
-  const spoolPath = m[1].trim();
+  const spoolPath = m[1].trim().replace(/^["']|["']$/g, '');
   const after  = text.slice(text.indexOf(m[0]) + m[0].length);
   const endIdx = after.search(/^SPOOL OFF/mi);
   const select = after.slice(0, endIdx === -1 ? undefined : endIdx).trim().replace(/;\s*$/, '');
