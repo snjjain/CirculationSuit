@@ -11129,11 +11129,19 @@ window.cmpApplyFilter = () => {
   st.rows = undefined; _cmpLoad();
 };
 
-window.cmpDownloadTemplate = () => {
+window.cmpDownloadTemplate = async () => {
   const st = _cmpState();
-  const url = `${api.base}/api/competitor/template?type=${st.tab}`;
-  const a = document.createElement('a'); a.href = url; a.download = `competitor_${st.tab}_template.xlsx`;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  try {
+    toast('Preparing template…');
+    const r = await fetch(`${api.base}/api/competitor/template?type=${st.tab}`, { headers: api.h() });
+    if (!r.ok) { toast('Template error: ' + r.status); return; }
+    const blob = await r.blob();
+    const url  = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `competitor_${st.tab}_template.xlsx`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) { toast('Download failed: ' + e.message); }
 };
 
 window.cmpUploadModal = () => {
