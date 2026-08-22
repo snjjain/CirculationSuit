@@ -15,7 +15,6 @@ const DASH_MENU = [
   ["transport",        "Taxi Dashboard",          "🚕"],
   ["survey_dash",      "Survey Intelligence",     "📊"],
   ["dcr_analytics",    "Field Visit Intelligence","📍"],
-  ["competitor_data",  "Competitor Data",         "📊"],
 ];
 
 const APP_MENU = {
@@ -13329,7 +13328,7 @@ function navGroups() {
   if (u.dashboard) {
     const fieldIds = ["routes", "collections", "complaints", "partners"];
     // mgmtIds are always shown to hl≤4 regardless of saved navScreens (handles screens added after a user's navScreens was last saved)
-    const mgmtIds  = ["command", "ai_nexus", "supply_dash", "exec_perf", "exec_targets", "agency_rating", "competitor_data"];
+    const mgmtIds  = ["command", "ai_nexus", "supply_dash", "exec_perf", "exec_targets", "agency_rating"];
     const items = DASH_MENU
       .filter(([id]) => (hl <= 4 && mgmtIds.includes(id)) || (u.navScreens ? u.navScreens.includes(id) : (hl <= 4 || fieldIds.includes(id))))
       .filter(([id]) => permAllows(id, 'view') !== false)   // explicit rights-matrix deny hides the screen
