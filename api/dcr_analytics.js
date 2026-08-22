@@ -1209,10 +1209,11 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       'prapt', 'deposit kiya', 'neft aaya', 'upi aaya', 'cheque mila', 'check mila',
       'nagad prapt', 'prapt kiye', 'app se jama', 'jama kar diya', 'cash prapt',
       'payment aa gaya', 'paisa aa gaya', 'paise aa gaye', 'paise mile', 'paise mili',
-      // English
-      'received', 'recieved', 'collected', 'cash received', 'cheque received',
-      'neft received', 'upi received', 'payment received', 'payment collected',
-      'amount received', 'payment done', 'payment cleared', 'amount deposited',
+      // English — "today collect", "Rs collect", "collect done" common in field notes
+      'received', 'recieved', 'collected', 'today collect', 'rs collect', 'collect done',
+      'cash received', 'cheque received', 'neft received', 'upi received',
+      'payment received', 'payment collected', 'amount received',
+      'payment done', 'payment cleared', 'amount deposited',
       // Hindi script
       'जमा', 'प्राप्त', 'भुगतान मिला', 'पेमेंट मिला', 'नगद प्राप्त', 'वसूली हुई',
       'पेमेंट मिल गया', 'पैसा मिला', 'पैसे मिले', 'कलेक्शन हो गया',
@@ -1232,6 +1233,9 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       'promise', 'commitment', 'commit', 'will pay', 'will transfer', 'will deposit',
       'will clear', 'payment by', 'agreed to pay', 'assured to pay', 'payment due',
       'promised', 'payment promised', 'will arrange', 'will send',
+      // "10k deposit till evening / deposit by today" — deposit without "will" prefix
+      'deposit till', 'deposit by', 'till today evening', 'by today evening',
+      'till evening', 'by evening', 'evening tak', 'aaj evening', 'shaam tak',
       // Hindi script
       'पेमेंट करेगा', 'पेमेंट करेंगे', 'भुगतान करेगा', 'भुगतान करने का वादा',
       'पेमेंट कमिट', 'अमाउंट कमिट', 'भुगतान का आश्वासन', 'रकम देने का वादा',
@@ -1347,6 +1351,7 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       'dega', 'degi', 'denge', 'bhejega', 'karega', 'karenge', 'jama karega',
       'promise', 'commitment', 'tak de', 'btayege', 'batayege', 'kal tak', 'kla tak',
       'parso tak', 'baki', 'baaki', 'will pay', 'will transfer', 'agreed to pay',
+      'deposit till', 'deposit by', 'till evening', 'by evening', 'evening tak', 'shaam tak',
     ];
     const allPos = words => { const ps = []; for (const w of words) { let i = -1; while ((i = low.indexOf(w, i + 1)) >= 0) ps.push(i); } return ps; };
     const recvPos = gotPayment ? allPos(RECV_WORDS) : [];
@@ -1430,8 +1435,8 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
             messages: [{ role: 'user', content: `Analyze field visit notes from newspaper circulation executives. Remarks are in Hindi, English, or Hinglish (mixed).
 
 KEY RULES:
-- "₹50,000 mila / received / prapt / jama karva / vasool" → payment_received=50000
-- "kal dega / karega / denge / promise / commitment / wada kiya" → commitment_amount (future)
+- "₹50,000 mila / received / prapt / jama karva / vasool / today collect / Rs collect" → payment_received
+- "kal dega / karega / denge / promise / commitment / wada kiya / deposit till / by evening / shaam tak" → commitment_amount (future)
 - "50 copy badhayega / growth / increase / badha" → growth_commitment=50
 - "copy bach rahi / unsold / bik nahi / extra copy" → issue=unsold copies
 - "supply late / taxi late / der se supply / delivery late" → issue=late supply
