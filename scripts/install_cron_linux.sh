@@ -97,6 +97,7 @@ chained_entry() {  # chained_entry "HH:MM-IST" "jobname" "script1.js [args]" "sc
 BLOCK="$MARK_BEGIN
 SHELL=/bin/bash
 $(entry "04:30" "emp_mobile"     "oracle_emp_mobile_sync.js")
+$(entry "04:45" "hawker_master"  "oracle_hawker_master_sync.js")
 $(entry "05:00" "supply"         "supply_sync.js")
 $(entry "05:20" "hawker"         "hawker_supply_sync.js")
 $(entry "05:40" "agency"         "agency_master_sync.js")

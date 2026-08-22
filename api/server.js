@@ -4330,6 +4330,26 @@ require('./tour_plan_validate')({ app, q });
 // ── Competitor Data — agency/hawker market-share entry, Excel upload/download ──
 require('./competitor')({ app, q });
 
+// ── Hawker Master — synced from Oracle CRM_HAWKER_MASTER ──────────────────────
+// GET /api/hawker-master?unit=JA0&center=C01&field_officer=FO1&q=name&page=1
+app.get('/api/hawker-master', async (req, res) => {
+  try {
+    const { unit, center, field_officer, q: search, page = '1', limit: lim = '200' } = req.query;
+    const where = ['1=1'], params = [];
+    if (unit)         { where.push('unit_code = ?');           params.push(unit); }
+    if (center)       { where.push('hawker_center_code = ?');  params.push(center); }
+    if (field_officer){ where.push('field_officer_code = ?');  params.push(field_officer); }
+    if (search)       { where.push('(hawker_name LIKE ? OR hawker_id LIKE ?)');
+                        params.push(`%${search}%`, `%${search}%`); }
+    const offset = (Math.max(1, Number(page)) - 1) * Number(lim);
+    const { rows } = await q(
+      `SELECT * FROM hawker_master WHERE ${where.join(' AND ')} ORDER BY unit_code, hawker_name LIMIT ? OFFSET ?`,
+      [...params, Number(lim), offset]);
+    const { rows: cnt } = await q(`SELECT COUNT(*) AS cnt FROM hawker_master WHERE ${where.join(' AND ')}`, params);
+    res.json({ total: Number(cnt[0].cnt), rows });
+  } catch (e) { res.status(500).json({ detail: String(e) }); }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 if (require.main === module) {
   app.listen(API_PORT, '0.0.0.0', () => {
