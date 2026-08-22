@@ -361,4 +361,4 @@ if (require.main === module) {
     .catch(e => { console.error(e.message); process.exit(1); });
 }
 
-module.exports = { runSync };
+module.exports = { runSync, ensureTable };

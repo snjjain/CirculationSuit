@@ -236,11 +236,11 @@ async function sync() {
   // ── MySQL load ──────────────────────────────────────────────────────────────
   const conn = await mysql.createConnection(MYSQL_CONFIG);
   try {
-    await conn.execute("SET time_zone = '+05:30'");
+    await conn.query("SET time_zone = '+05:30'");
     await ensureSchema(conn);
 
-    await conn.execute('START TRANSACTION');
-    await conn.execute('TRUNCATE TABLE hawker_master');
+    await conn.query('START TRANSACTION');
+    await conn.query('TRUNCATE TABLE hawker_master');
 
     const BATCH = 500;
     let inserted = 0;
@@ -253,11 +253,11 @@ async function sync() {
       inserted += chunk.length;
     }
 
-    await conn.execute('COMMIT');
+    await conn.query('COMMIT');
     log(`Inserted ${inserted} rows into hawker_master`);
     return { rows: inserted };
   } catch (e) {
-    try { await conn.execute('ROLLBACK'); } catch (_) {}
+    try { await conn.query('ROLLBACK'); } catch (_) {}
     throw e;
   } finally {
     await conn.end();

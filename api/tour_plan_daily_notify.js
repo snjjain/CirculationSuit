@@ -26,6 +26,7 @@ const path  = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const { computeVerdictsForDate } = require('./tour_plan_validate');
+const { ensureTable: ensureTourPlanTable } = require('./oracle_tour_plan_sync');
 
 const MYSQL_CFG = {
   host:     process.env.MYSQL_HOST     || 'localhost',
@@ -105,6 +106,7 @@ async function runNotify(opts = {}) {
   const q = async (sql, params) => { const [rows] = await conn.query(sql, params); return { rows }; };
 
   try {
+    await ensureTourPlanTable(conn);   // create table if first run
     onLog(`[tour-plan-notify] Computing verdicts for ${date}…`);
     const verdicts = await computeVerdictsForDate(q, date);
     onLog(`[tour-plan-notify] ${verdicts.length} executive(s) with a submitted plan`);
