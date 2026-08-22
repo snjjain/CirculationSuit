@@ -4847,6 +4847,10 @@ function _nexusAgCard(a) {
       <div role="button" style="min-width:0;cursor:pointer" onclick="nexusOpenAgency('${uc}','${ac}','${esc((a.ag_name||'').replace(/'/g,"\\'"))}')" title="Click for full agency detail">
         <div style="font-weight:700;font-size:14px;color:var(--ink)">${esc(a.ag_name || a.agcd)} <span style="color:var(--acc);font-size:11px">›</span></div>
         <div style="font-size:11.5px;color:var(--muted);margin-top:1px">${esc(a.unit_name || '')}${a.city_name ? ' · ' + esc(a.city_name) : ''} · Exec: ${esc(a.exec_name || '—')}</div>
+        <div style="margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          ${a.ag_status ? `<span style="font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:8px;background:${a.ag_status==='Active'?'#D1FAE520':'#FEE2E220'};color:${a.ag_status==='Active'?'var(--grn,#22c55e)':'var(--red,#ef4444)'}">● ${esc(a.ag_status)}</span>` : ''}
+          ${a.supply_start_dt ? `<span style="font-size:10.5px;color:var(--muted)">Since ${esc(a.supply_start_dt)}</span>` : ''}
+        </div>
       </div>
       <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${_nexusTagChips(a.tags)}</div>
     </div>

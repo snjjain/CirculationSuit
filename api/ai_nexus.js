@@ -119,7 +119,8 @@ module.exports = function registerAiNexus(ctx) {
     const [{ rows: active }, { rows: outR }, { rows: supR }, { rows: visitOra }, { rows: visitApp },
            { rows: gpsOra }, { rows: gpsApp }] = await Promise.all([
       q(`SELECT unit AS unit_code, agcd, ag_name, unit_name, city_name,
-                executive_code, executive_name
+                executive_code, executive_name,
+                supply_start_dt, supply_stop_flag
          FROM agency_master
          WHERE ag_class_name = 'CREDIT SALE' AND COALESCE(supply_stop_flag,'N') = 'N'
            AND (suspend_date IS NULL OR suspend_date > CURDATE())
@@ -201,9 +202,11 @@ module.exports = function registerAiNexus(ctx) {
         + (neverVisited ? (hasPotential ? 12 : 0) : Math.min(daysSinceVisit / 7, 8)) * 2
         + (declinePct != null && declinePct < 0 ? Math.min(-declinePct / 10, 10) : 0) * 2;
 
+      const ag_status = (a.supply_stop_flag && a.supply_stop_flag === 'Y') ? 'Closed' : 'Active';
       const sig = {
         unit_code: a.unit_code, agcd: a.agcd, ag_name: a.ag_name, unit_name: a.unit_name, city_name: a.city_name,
         exec_code: a.executive_code || null, exec_name: a.executive_name || '(Unassigned)',
+        ag_status, supply_start_dt: a.supply_start_dt || null,
         outstanding, last_visit: lastVisit ? fmtDate(lastVisit) : null, days_since_visit: daysSinceVisit,
         cur_supply: cur, peak30_supply: peak30, decline_pct: declinePct,
         opportunity_copies: tags.includes('WIN_BACK') ? Math.round(peak30 - cur) : 0,
