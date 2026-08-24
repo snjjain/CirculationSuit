@@ -1640,7 +1640,7 @@ function _dcrAExecsTab() {
       <thead><tr>
         <th style="text-align:left">Executive</th><th>Unit</th><th class="r">Agency Visits</th>
         <th class="r">Uniq. Agencies</th><th class="r">Working Days</th><th class="r">Avg/Day</th>
-        <th class="r">Attendance</th><th>Last Visit</th>
+        <th class="r" title="Center check-in records (dcr_center_attendance) — a separate system from field-visit Working Days, so counts need not match">Center Attendance</th><th>Last Visit</th>
       </tr></thead>
       <tbody>
       ${execs.map((e,i)=>`<tr onclick="_dcrADrillExecutive('${esc(e.emp_code)}','${esc(e.name||e.emp_code||'')}')" style="${i<3?'font-weight:600;':''}cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
@@ -1733,7 +1733,58 @@ window._dcrADrillVisitList = async (empCode, empName) => {
   } catch(e) { console.error(e); }
 };
 
-window._dcrADrillExecutive = (empCode, name) => window._dcrADrillVisitList(empCode, name);
+// Executive drill-down: agency visits AND center check-in attendance side by side —
+// these are two separate DCR data sources (see "Center Attendance" column tooltip).
+window._dcrADrillExecutive = async (empCode, empName) => {
+  modal(`<div style="color:var(--ink-2);font-size:13px;padding:24px 0;text-align:center">Loading ${esc(empName||'executive')}…</div>`);
+  try {
+    const baseQs = `from=${_dcrA.from}&to=${_dcrA.to}${_dcrA.unit_code?'&unit_code='+encodeURIComponent(_dcrA.unit_code):''}${_dcrA.state?'&state='+encodeURIComponent(_dcrA.state):''}`;
+    const [vd, cd] = await Promise.all([
+      api.get(`/api/dcr-analytics/visit-list?${baseQs}&emp_code=${encodeURIComponent(empCode)}`),
+      api.get(`/api/dcr-analytics/center-attendance-list?${baseQs}&emp_code=${encodeURIComponent(empCode)}`),
+    ]);
+    const visits = (vd && vd.visits) || [];
+    const attn = (cd && cd.records) || [];
+    const fmtDt = t => t ? String(t).slice(11,16) : '—';
+
+    const attnTable = `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin:14px 0 6px">🏢 Center Attendance — ${attn.length} check-in${attn.length===1?'':'s'}</div>
+      <div style="max-height:180px;overflow-y:auto">
+      <table class="tbl" style="font-size:12px;min-width:520px">
+        <thead><tr><th>Date</th><th>Center</th><th>Check-in</th><th>Check-out</th><th>Remarks</th><th>GPS</th></tr></thead>
+        <tbody>
+        ${attn.map(r=>`<tr>
+          <td style="white-space:nowrap">${esc(r.attn_date||'—')}</td>
+          <td>${esc(r.center_name||'—')}</td>
+          <td style="color:var(--ink-2);font-size:11px;white-space:nowrap">${fmtDt(r.check_in)}</td>
+          <td style="color:var(--ink-2);font-size:11px;white-space:nowrap">${fmtDt(r.check_out)}</td>
+          <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${remHtml(r.remarks||'')}">${remHtml((r.remarks||'').slice(0,50))||'—'}</td>
+          <td style="text-align:center">${r.lat?'📍':'—'}</td>
+        </tr>`).join('')||`<tr><td colspan="6" style="text-align:center;color:var(--ink-2)">No center check-ins this period</td></tr>`}
+        </tbody>
+      </table></div>`;
+
+    const visitTable = `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin:14px 0 6px">📍 Agency Visits — ${visits.length}</div>
+      <div style="max-height:320px;overflow-y:auto">
+      <table class="tbl" style="font-size:12px;min-width:560px">
+        <thead><tr><th>Date</th><th>Time</th><th>Agency</th><th>Remarks</th><th>GPS</th></tr></thead>
+        <tbody>
+        ${visits.map(v=>`<tr onclick="_dcrADrillAgency('${esc(v.agcd)}','${esc(v.ag_name||v.agcd||'')}','${esc(v.unit_code||'')}')" style="cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
+          <td style="white-space:nowrap">${esc(v.visit_date||'—')}</td>
+          <td style="color:var(--ink-2);font-size:11px;white-space:nowrap">${esc(v.from_time||'—')}</td>
+          <td style="color:var(--primary)"><b>${esc(v.ag_name||v.agcd||'—')}</b>${v.city?` <span style="font-size:10px;color:var(--ink-2)">${esc(v.city)}</span>`:''}</td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${remHtml(v.visit_remarks||'')}">${remHtml((v.visit_remarks||'').slice(0,60))||'—'}</td>
+          <td style="text-align:center">${v.lat?'📍':'—'}</td>
+        </tr>`).join('')||`<tr><td colspan="5" style="text-align:center;color:var(--ink-2)">No agency visits this period</td></tr>`}
+        </tbody>
+      </table></div>`;
+
+    modal(`<h3 style="margin-bottom:4px">${esc(empName||empCode)}</h3>
+      <div style="font-size:12px;color:var(--ink-2)">${vd?.period?.from||_dcrA.from} to ${vd?.period?.to||_dcrA.to}</div>
+      ${attnTable}
+      ${visitTable}
+      <div style="margin-top:12px"><button class="btn" onclick="closeModals()">Close</button></div>`);
+  } catch(e) { console.error(e); }
+};
 
 window._dcrADrillPurpose = async (purpose) => {
   modal(`<div style="color:var(--ink-2);font-size:13px;padding:24px 0;text-align:center">Loading visits…</div>`);

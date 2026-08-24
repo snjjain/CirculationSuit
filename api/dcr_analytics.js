@@ -936,6 +936,53 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: e.message }); }
   });
 
+  // ── GET /api/dcr-analytics/center-attendance-list ───────────────────────────
+  // Center check-in records (dcr_center_attendance) — a separate system from
+  // agency-visit logging, shown alongside it in the executive drill-down modal.
+  // Query params: emp_code (optional), from, to, unit_code/state (scope)
+  app.get('/api/dcr-analytics/center-attendance-list', async (req, res) => {
+    try {
+      if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
+      const from = isDate(req.query.from) ? req.query.from : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10);
+      const to   = isDate(req.query.to)   ? req.query.to   : new Date().toISOString().slice(0,10);
+      const { clause: sc, params: sp } = await resolveScope(req);
+      const { emp_code } = req.query;
+
+      const extraWhere = emp_code ? ' AND emp_code = ?' : '';
+      const extraParams = emp_code ? [emp_code] : [];
+
+      const { rows } = await q(
+        `SELECT id, attn_date, emp_code, executive_name, unit_code, unit_name, center_name,
+                created_dt, center_closed, present_rmrk, closed_rmrk,
+                CAST(latitude AS DECIMAL(10,6)) AS lat, CAST(longitude AS DECIMAL(10,6)) AS lng
+         FROM dcr_center_attendance
+         WHERE attn_date BETWEEN ? AND ?${sc}${extraWhere}
+         ORDER BY attn_date DESC, created_dt DESC
+         LIMIT 300`,
+        [from, to, ...sp, ...extraParams]
+      );
+
+      res.json({
+        period: { from, to },
+        count: rows.length,
+        records: rows.map(r => ({
+          id: r.id,
+          attn_date: r.attn_date,
+          emp_code: r.emp_code,
+          executive_name: r.executive_name,
+          unit_code: r.unit_code,
+          unit_name: r.unit_name,
+          center_name: r.center_name,
+          check_in: r.created_dt,
+          check_out: r.center_closed,
+          remarks: r.present_rmrk || r.closed_rmrk || '',
+          lat: r.lat && Number(r.lat) >= 8 && Number(r.lat) <= 38 ? Number(r.lat) : null,
+          lng: r.lng && Number(r.lng) >= 68 && Number(r.lng) <= 98 ? Number(r.lng) : null,
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
   // ── GET /api/dcr-analytics/unvisited-agencies ───────────────────────────────
   // Active agencies with no DCR visit in the given period
   app.get('/api/dcr-analytics/unvisited-agencies', async (req, res) => {
