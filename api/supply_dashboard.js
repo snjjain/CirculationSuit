@@ -792,21 +792,27 @@ module.exports = function registerSupplyDash(ctx) {
       const unit = req.params.unit;
       const sc2 = await scopeUnits(req);
       if (sc2.clause === ' AND 1=0') return res.json({ rows: [] });
-      const by = req.query.by === 'executive' ? 'executive' : req.query.by === 'agency' ? 'agency' : 'district';
+      const by = req.query.by === 'executive' ? 'executive' : req.query.by === 'agency' ? 'agency' : req.query.by === 'station' ? 'station' : 'district';
       const district = (req.query.district || '').trim();
       let rows;
       if (by === 'agency') {
-        // Level 3: agency-wise within a specific district of this unit
+        // Level 3: agency-wise within a specific district of this unit, or (from the
+        // Executives tab's drill) within a specific executive's book in this unit.
         const distCls = district ? ' AND COALESCE(s.dist_name,\'—\') = ?' : '';
         const distP = district ? [district] : [];
+        const executive = (req.query.executive || '').trim();
+        const execJoin = executive
+          ? ` JOIN (SELECT DISTINCT unit, agcd FROM agency_master WHERE executive_name = ?) em ON em.unit = s.unit_code AND em.agcd = s.agcd`
+          : '';
+        const execP = executive ? [executive] : [];
         ({ rows } = await q(`
           SELECT s.agcd, MAX(s.ag_name) ag_name,
                  SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) supply,
                  SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prev_supply
-          FROM supply_data s ${AGENT_JOIN}
+          FROM supply_data s ${AGENT_JOIN}${execJoin}
           WHERE ${AGENT_WHERE} AND s.unit_code = ? AND s.supply_date IN (?, ?)${distCls}
           GROUP BY s.agcd ORDER BY supply DESC`,
-          [w.cF, w.cT, w.pF, w.pT, unit, w.cF, w.pF, ...distP]));
+          [w.cF, w.cT, w.pF, w.pT, ...execP, unit, w.cF, w.pF, ...distP]));
         rows = rows.map(r => ({ ...r, label: r.ag_name || r.agcd, agents: 1 }));
       } else if (by === 'district') {
         ({ rows } = await q(`
@@ -818,6 +824,23 @@ module.exports = function registerSupplyDash(ctx) {
           WHERE ${AGENT_WHERE} AND s.unit_code = ? AND s.supply_date IN (?, ?)
           GROUP BY label ORDER BY supply DESC`,
           [w.cF, w.cT, w.pF, w.pT, unit, w.cF, w.pF]));
+      } else if (by === 'station') {
+        // Station / drop-point wise, optionally scoped to one district (drill-down
+        // from District Wise) — station_name comes from the Oracle drop-point lookup
+        // synced onto agency_master; falls back to the raw code if not yet resolved.
+        const distCls = district ? ' AND COALESCE(s.dist_name,\'—\') = ?' : '';
+        const distP = district ? [district] : [];
+        ({ rows } = await q(`
+          SELECT COALESCE(NULLIF(am.station_name,''), NULLIF(am.station_code,''), '(no station)') label,
+                 SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) supply,
+                 SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prev_supply,
+                 COUNT(DISTINCT s.agcd) agents
+          FROM supply_data s ${AGENT_JOIN}
+          LEFT JOIN (SELECT unit, agcd, MAX(station_code) station_code, MAX(station_name) station_name FROM agency_master GROUP BY unit, agcd) am
+            ON am.unit = s.unit_code AND am.agcd = s.agcd
+          WHERE ${AGENT_WHERE} AND s.unit_code = ? AND s.supply_date IN (?, ?)${distCls}
+          GROUP BY label ORDER BY supply DESC`,
+          [w.cF, w.cT, w.pF, w.pT, unit, w.cF, w.pF, ...distP]));
       } else {
         ({ rows } = await q(`
           SELECT COALESCE(am.executive_name,'(no executive)') label,

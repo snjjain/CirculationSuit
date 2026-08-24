@@ -69,7 +69,7 @@ function fmtDate(d) {
 }
 
 // ── Oracle SQL builder ────────────────────────────────────────────────────────
-// 38 fields separated by CHR(28). Order MUST match lineToParams() below.
+// 39 fields separated by CHR(28). Order MUST match lineToParams() below.
 // Each field on its own line — sqlplus silently ignores lines > 2499 chars.
 function buildSqlScript(spoolFile, { sinceDate } = {}) {
   const spoolEsc = spoolFile.replace(/\\/g, '/');
@@ -98,6 +98,7 @@ function buildSqlScript(spoolFile, { sinceDate } = {}) {
     S('x.state_code'),
     S('x.state_name'),
     S('x.station_code'),
+    S('x.station_name'),
     S('x.area_code'),
     S('x.mobile_no1'),
     S('x.pan_no'),
@@ -161,7 +162,9 @@ FROM (
     m.state_code,
     (select "State_Name" from state_mst
      where "Comp_Code"=m.comp_code and "State_Code"=m.state_code) state_name,
-    m.STATION_CODE, m.AREA_CODE,
+    m.STATION_CODE,
+    cir_get_drop_point_name(m.comp_code, m.unit, m.STATION_CODE, '1') station_name,
+    m.AREA_CODE,
     m.MOBILE_NO1, m.PAN_NO, m.ADHAR_NO, m.SUPPLY_START_DT,
     m.EMAIL_ID, m.FIELD_OFFICER,
     (select EXECUTIVE_DESC from cir_executive_mast
@@ -223,11 +226,13 @@ function lineToParams(f) {
     str(f[12]), str(f[13]), str(f[14]), str(f[15]),
     str(f[16]), str(f[17]), str(f[18]), str(f[19]),
     str(f[20]), str(f[21]), str(f[22]), str(f[23]),
-    str(f[24]), dateVal(f[25]),
-    str(f[26]), str(f[27]), str(f[28]), str(f[29]),
-    str(f[30]), dateVal(f[31]),
-    str(f[32]), str(f[33]), str(f[34]), str(f[35]),
-    str(f[36]), str(f[37]),
+    str(f[24]), str(f[25]),
+    dateVal(f[26]),
+    str(f[27]), str(f[28]), str(f[29]), str(f[30]),
+    str(f[31]),
+    dateVal(f[32]),
+    str(f[33]), str(f[34]), str(f[35]), str(f[36]),
+    str(f[37]), str(f[38]),
   ];
 }
 
@@ -235,7 +240,7 @@ const COL_LIST = `comp_code, unit_state_nm, unit, unit_name, executive_code, exe
      ag_type, ag_type_name, ag_class, ag_class_name,
      agcd, dpcd, ag_name, address,
      city_code, city_name, dist_code, dist_name, state_code, state_name,
-     station_code, area_code, mobile_no1, pan_no, adhar_no,
+     station_code, station_name, area_code, mobile_no1, pan_no, adhar_no,
      supply_start_dt, email_id, field_officer, field_officer_name,
      ho_coordinator, ho_coordinator_name,
      suspend_date, suspend_type, supply_stop_flag,
@@ -251,7 +256,7 @@ const UPDATE_CLAUSE = `
      address=VALUES(address), city_code=VALUES(city_code), city_name=VALUES(city_name),
      dist_code=VALUES(dist_code), dist_name=VALUES(dist_name),
      state_code=VALUES(state_code), state_name=VALUES(state_name),
-     station_code=VALUES(station_code), area_code=VALUES(area_code),
+     station_code=VALUES(station_code), station_name=VALUES(station_name), area_code=VALUES(area_code),
      mobile_no1=VALUES(mobile_no1), pan_no=VALUES(pan_no), adhar_no=VALUES(adhar_no),
      supply_start_dt=VALUES(supply_start_dt), email_id=VALUES(email_id),
      field_officer=VALUES(field_officer), field_officer_name=VALUES(field_officer_name),
@@ -286,6 +291,7 @@ async function ensureSchema(conn) {
     state_code          VARCHAR(20),
     state_name          VARCHAR(200),
     station_code        VARCHAR(20),
+    station_name        VARCHAR(200),
     area_code           VARCHAR(20),
     mobile_no1          VARCHAR(20),
     pan_no              VARCHAR(20),
@@ -310,6 +316,13 @@ async function ensureSchema(conn) {
     INDEX idx_am_state (state_code),
     INDEX idx_am_exec  (executive_code)
   ) CHARACTER SET utf8mb4`);
+
+  // Add station_name to pre-existing installs (CREATE TABLE IF NOT EXISTS above
+  // only applies to a fresh table) — idempotent, safe to run every sync.
+  try {
+    await conn.execute(`ALTER TABLE agency_master ADD COLUMN station_name VARCHAR(200) AFTER station_code`);
+    log('Added station_name column to agency_master.');
+  } catch (e) { if (e.code !== 'ER_DUP_FIELDNAME') throw e; }
 
   // Add unique key for UPSERT (idempotent — skip if already present)
   const [[ukRow]] = await conn.query(`
@@ -355,7 +368,7 @@ async function setLastSyncDate(conn, dt) {
 // ── Parse spool output ────────────────────────────────────────────────────────
 function parseSpoolFile(spoolFile) {
   const raw  = fs.readFileSync(spoolFile, 'utf8');
-  const NCOLS = 38;
+  const NCOLS = 39;
   const parsed = [], malformed = [];
   for (const line of raw.split(/\r?\n/)) {
     if (!line.includes(SEP)) continue;
@@ -373,7 +386,7 @@ async function fullSync(conn, parsed) {
   await conn.beginTransaction();
   await conn.execute('TRUNCATE TABLE agency_master');
 
-  const NCOLS  = 38;
+  const NCOLS  = 39;
   const BATCH  = 500;   // rows per INSERT statement
   const PH     = '(' + Array(NCOLS).fill('?').join(',') + ')';
 
@@ -408,7 +421,7 @@ async function incrementalSync(conn, parsed) {
   for (let i = 0; i < parsed.length; i += BATCH) {
     const chunk  = parsed.slice(i, i + BATCH);
     const values = chunk.map(lineToParams);
-    const NCOLS  = 38;
+    const NCOLS  = 39;
     const PH     = Array(NCOLS).fill('?').join(',');
     const placeholders = chunk.map(() => `(${PH})`).join(',\n');
     const flatParams   = values.flat();

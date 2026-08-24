@@ -1785,7 +1785,7 @@ VIEWS.agency_profile = () => {
       <div>
         <div style="font-size:20px;font-weight:800">${esc(id.ag_name)}</div>
         <div style="font-size:12px;color:var(--ink-2);margin-top:3px">${idLine}</div>
-        <div style="font-size:11px;color:var(--ink-3);margin-top:2px">Code ${esc(id.agcd)} · ${esc(id.unit_code)}${id.station_code ? ' · Station ' + esc(id.station_code) : ''}${id.mobile_no1 ? ' · 📞 ' + esc(id.mobile_no1) : ''}</div>
+        <div style="font-size:11px;color:var(--ink-3);margin-top:2px">Code ${esc(id.agcd)} · ${esc(id.unit_code)}${(id.station_name || id.station_code) ? ' · Station ' + esc(id.station_name || id.station_code) : ''}${id.mobile_no1 ? ' · 📞 ' + esc(id.mobile_no1) : ''}</div>
         ${id.exec_location ? `<div style="font-size:11px;color:var(--ink-3);margin-top:2px">👔 Executive base: ${esc(id.exec_location.address || (id.exec_location.lat + ', ' + id.exec_location.lng))}</div>` : ''}
       </div>
       <div style="background:${ss.bg};color:${ss.color};border-radius:10px;padding:8px 16px;font-weight:700;font-size:13px;white-space:nowrap">${ss.icon} ${esc(d.status)}</div>
@@ -4002,7 +4002,7 @@ window.supdUnit = u => {
   ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
   render();
 };
-const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'receipt', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'drillAgencies', 'execBreakdown', 'covidSummary', 'covidAgentStates', 'covidCashStates', 'covidDrillState', 'covidDrillUnit', 'covidDrillUnitName', 'covidSummaryState', 'covidAgentBranches', 'covidCashBranches', 'covidSummaryUnit', 'covidAgentBranch', 'covidCashBranch', 'brStates', 'brBranches', 'brL2'].forEach(k => { st[k] = null; });
+const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'receipt', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'drillAgencies', 'execBreakdown', 'execAgencies', 'covidSummary', 'covidAgentStates', 'covidCashStates', 'covidDrillState', 'covidDrillUnit', 'covidDrillUnitName', 'covidSummaryState', 'covidAgentBranches', 'covidCashBranches', 'covidSummaryUnit', 'covidAgentBranch', 'covidCashBranch', 'brStates', 'brBranches', 'brL2', 'brStations'].forEach(k => { st[k] = null; });
 // State dropdown: cascade the Unit list to that state (data refreshes when Apply is pressed)
 window.supdSetState = (v) => {
   const st = _supdState();
@@ -4113,19 +4113,22 @@ function _supdOverview(st) {
   return hero + mid + insights;
 }
 
-// Branches tab: State (Rajasthan / MP / CG / National) → Unit → Executive, fully drillable.
+// Branches tab: State (Rajasthan / MP / CG / National) → Unit → Executive/District/Station, fully drillable.
 window.supdBrDrill = (state, unit, unitName) => {
   const st = _supdState();
   st.brState = state || ''; st.brUnit = unit || ''; st.brUnitName = unitName || '';
   st.brStates = st.brBranches = st.brL2 = null;
+  st.brDistrict = ''; st.brStations = null;
   render();
 };
-window.supdBrBy = by => { const st = _supdState(); st.brBy = by; st.brL2 = null; render(); };
+window.supdBrBy = by => { const st = _supdState(); st.brBy = by; st.brL2 = null; st.brDistrict = ''; st.brStations = null; render(); };
+window.supdBrDistrict = district => { const st = _supdState(); st.brDistrict = district || ''; st.brStations = null; render(); };
 function _supdBrCrumb(st) {
   const link = (txt, fn, active) => `<span onclick="${fn}" style="cursor:pointer;color:${active ? 'var(--ink)' : 'var(--gold-d)'};font-weight:${active ? 700 : 500}">${txt}</span>`;
   const parts = [link('States', "supdBrDrill('')", !st.brState)];
   if (st.brState) parts.push(link(esc(st.brState), `supdBrDrill('${esc(st.brState)}')`, !st.brUnit));
-  if (st.brUnit) parts.push(link(esc(st.brUnitName || st.brUnit), '', true));
+  if (st.brUnit) parts.push(link(esc(st.brUnitName || st.brUnit), '', !st.brDistrict));
+  if (st.brDistrict) parts.push(link(esc(st.brDistrict), '', true));
   return `<div style="font-size:12.5px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${parts.join('<span style="color:var(--muted)">›</span>')}</div>`;
 }
 function _supdBranches(st) {
@@ -4141,14 +4144,25 @@ function _supdBranches(st) {
     const dd = st.brBranches; csvKey = 'brBranches';
     body = !dd ? _cmdSkel() : dd._err ? _errCard('No unit data.') : _supdDrillTable(dd, 'Unit',
       r => `<td><span onclick="supdBrDrill('${esc(st.brState)}','${esc(r.unit_code)}','${esc(r.branch).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.branch)}</span> <small style="color:var(--muted)">${_supdN(r.agents)} ag</small></td>`, 'agent', dd.total);
+  } else if (st.brBy === 'district' && st.brDistrict) {
+    // Level 3: stations/drop-points within the selected district
+    const dqs = qs ? '&' + qs.slice(1) : '';
+    _supdFetch('brStations', `/api/supply-dash/agent/branch/${encodeURIComponent(st.brUnit)}?by=station${dqs}&district=${encodeURIComponent(st.brDistrict)}`);
+    const dd = st.brStations; csvKey = 'brStations';
+    const back = `<div style="margin-bottom:8px"><span onclick="supdBrDistrict('')" style="cursor:pointer;color:var(--gold-d);font-size:12.5px">← Back to districts</span></div>`;
+    body = back + (!dd ? _cmdSkel() : dd._err ? _errCard('No data.') : _supdDrillTable(dd, 'Station / Drop-Point', r => `<td>${esc(r.label)}</td>`, 'agent', dd.total));
   } else {
     const by = st.brBy || 'executive';
-    const opts = [['executive', '👔 Executive Wise'], ['district', '📍 District Wise']];
+    const opts = [['executive', '👔 Executive Wise'], ['district', '📍 District Wise'], ['station', '🏭 Station/Drop-Point Wise']];
     const toggle = `<div class="seg" style="margin-bottom:12px">${opts.map(([k, l]) => `<button class="${by === k ? 'on' : ''}" onclick="supdBrBy('${k}')">${l}</button>`).join('')}</div>`;
     const dqs = qs ? '&' + qs.slice(1) : '';
     _supdFetch('brL2', `/api/supply-dash/agent/branch/${encodeURIComponent(st.brUnit)}?by=${by}${dqs}`);
     const dd = st.brL2; csvKey = 'brL2';
-    body = toggle + (!dd ? _cmdSkel() : dd._err ? _errCard('No data.') : _supdDrillTable(dd, by === 'district' ? 'District' : 'Executive', r => `<td>${esc(r.label)}</td>`, 'agent', dd.total));
+    const colName = by === 'district' ? 'District' : by === 'station' ? 'Station / Drop-Point' : 'Executive';
+    const cellFn = by === 'district'
+      ? r => `<td><span onclick="supdBrDistrict('${esc(r.label).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.label)}</span></td>`
+      : r => `<td>${esc(r.label)}</td>`;
+    body = toggle + (!dd ? _cmdSkel() : dd._err ? _errCard('No data.') : _supdDrillTable(dd, colName, cellFn, 'agent', dd.total));
   }
   const csv = `<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn" onclick="supdCSV('${csvKey}')">⬇ Excel/CSV</button></div>`;
   return _supdBrCrumb(st) + csv + body;
@@ -4182,21 +4196,41 @@ function _supdAgents(st) {
   return bar + table(['Agent', 'Branch', 'Executive', '>Supply', '>Prev', '>Change', '>Outstanding', '>Last Visit'], rows);
 }
 
-window.supdExecDrill = (name, state) => { const st = _supdState(); st.execDrill = name || ''; st.execState = state || ''; st.execBreakdown = null; render(); };
+window.supdExecDrill = (name, state, unit, unitName) => {
+  const st = _supdState();
+  st.execDrill = name || ''; st.execState = state || ''; st.execUnit = unit || ''; st.execUnitName = unitName || '';
+  st.execBreakdown = null; st.execAgencies = null;
+  render();
+};
 function _supdExecDrill(st) {
-  const qs = _supdQS(st), state = st.execState;
+  const qs = _supdQS(st), state = st.execState, unit = st.execUnit;
+  const link = (txt, fn, active) => `<span onclick="${fn}" style="cursor:pointer;color:${active ? 'var(--ink)' : 'var(--gold-d)'};font-weight:${active ? 700 : 500}">${txt}</span>`;
+  const en = esc(st.execDrill).replace(/'/g, "\\'");
+  const es_ = esc(state).replace(/'/g, "\\'");
+  const crumbs = [link('Executives', "supdExecDrill('')"), link(esc(st.execDrill), `supdExecDrill('${en}')`, !state)];
+  if (state) crumbs.push(link(esc(state), `supdExecDrill('${en}','${es_}')`, !unit));
+  if (unit) crumbs.push(link(esc(st.execUnitName || unit), '', true));
+  const bc = `<div style="font-size:12.5px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${crumbs.join('<span style="color:var(--muted)">›</span>')}</div>`;
+
+  if (unit) {
+    // Level 3: this executive's individual agencies within the selected branch
+    const dqs = qs ? '&' + qs.slice(1) : '';
+    _supdFetch('execAgencies', `/api/supply-dash/agent/branch/${encodeURIComponent(unit)}?by=agency&executive=${encodeURIComponent(st.execDrill)}${dqs}`);
+    const dd = st.execAgencies;
+    if (!dd) return bc + _cmdSkel();
+    if (dd._err) return bc + `<div class="card pad" style="color:var(--muted)">No data.</div>`;
+    const unitQ = esc(unit).replace(/'/g, "\\'");
+    const cellFn = r => `<td>${r.agcd ? `<span onclick="openAgencyProfile('${unitQ}','${esc(r.agcd).replace(/'/g, "\\'")}','${esc(r.label).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.label)}</span>` : esc(r.label)}</td>`;
+    return bc + _supdDrillTable(dd, 'Agency', cellFn, 'agent', dd.total);
+  }
+
   const path = `/api/supply-dash/executive/${encodeURIComponent(st.execDrill)}${qs}${state ? (qs ? '&' : '?') + 'state=' + encodeURIComponent(state) : ''}`;
   _supdFetch('execBreakdown', path);
   const d = st.execBreakdown;
-  const link = (txt, fn, active) => `<span onclick="${fn}" style="cursor:pointer;color:${active ? 'var(--ink)' : 'var(--gold-d)'};font-weight:${active ? 700 : 500}">${txt}</span>`;
-  const en = esc(st.execDrill).replace(/'/g, "\\'");
-  const crumbs = [link('Executives', "supdExecDrill('')"), link(esc(st.execDrill), `supdExecDrill('${en}')`, !state)];
-  if (state) crumbs.push(link(esc(state), '', true));
-  const bc = `<div style="font-size:12.5px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${crumbs.join('<span style="color:var(--muted)">›</span>')}</div>`;
   if (!d) return bc + _cmdSkel();
   if (d._err) return bc + `<div class="card pad" style="color:var(--muted)">No data.</div>`;
   const cellFn = state
-    ? r => `<td>${esc(r.label)}</td>`
+    ? r => `<td><span onclick="supdExecDrill('${en}','${es_}','${esc(r.code).replace(/'/g, "\\'")}','${esc(r.label).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.label)}</span></td>`
     : r => `<td><span onclick="supdExecDrill('${en}','${esc(r.code).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.label)}</span></td>`;
   return bc + _supdDrillTable(d, state ? 'Branch' : 'State', cellFn, 'agent', d.total);
 }
@@ -4341,22 +4375,27 @@ function _supdBreadcrumb(st) {
 }
 function _supdDrillTable(dd, firstCol, cellFn, mode, total) {
   const rows = dd.rows || [], max = Math.max(1, ...rows.map(r => r.supply));
+  // Agencies column: shown whenever the endpoint returns a per-row agent count
+  // (district/executive/branch breakdowns) — not meaningful at the single-agency leaf.
+  const showAgents = firstCol !== 'Agency' && rows.some(r => r.agents != null);
   const diffCell = v => `<td class="r num" style="color:${v > 0 ? 'var(--grn)' : v < 0 ? 'var(--red)' : 'var(--muted)'}">${v > 0 ? '+' : ''}${_supdN(v)}</td>`;
   const body = rows.map(r => `<tr>${cellFn(r)}
     <td style="width:90px"><div class="bar"><i style="width:${Math.round(r.supply / max * 100)}%;background:${_saleColor(mode)}"></i></div></td>
+    ${showAgents ? `<td class="r num">${_supdN(r.agents)}</td>` : ''}
     <td class="r num">${_supdN(r.supply)}</td><td class="r num" style="color:var(--muted)">${_supdN(r.prev_supply)}</td>
     ${diffCell(r.net_change != null ? r.net_change : (r.supply - r.prev_supply))}
     <td class="r num" style="color:${r.growth_pct >= 0 ? 'var(--grn)' : 'var(--red)'}">${_supdPct(r.growth_pct)}</td>
     <td class="r num">${r.contribution_pct != null ? r.contribution_pct + '%' : '—'}</td></tr>`).join('');
   const tS = rows.reduce((a, r) => a + (r.supply || 0), 0), tP = rows.reduce((a, r) => a + (r.prev_supply || 0), 0), tD = tS - tP;
+  const tA = rows.reduce((a, r) => a + (Number(r.agents) || 0), 0);
   const tG = tP ? Math.round((tD / Math.abs(tP)) * 1000) / 10 : null;
   const foot = rows.length ? `<tr style="font-weight:800;background:var(--surf2);border-top:2px solid var(--brd)">
-    <td>Total</td><td></td><td class="r num">${_supdN(tS)}</td><td class="r num">${_supdN(tP)}</td>${diffCell(tD)}
+    <td>Total</td><td></td>${showAgents ? `<td class="r num">${_supdN(tA)}</td>` : ''}<td class="r num">${_supdN(tS)}</td><td class="r num">${_supdN(tP)}</td>${diffCell(tD)}
     <td class="r num" style="color:${tG >= 0 ? 'var(--grn)' : 'var(--red)'}">${_supdPct(tG)}</td><td class="r num">100%</td></tr>` : '';
   const periodNote = dd.range ? `<div class="lbl" style="padding:8px 16px 0;color:var(--muted)">Supply = ${dd.cur_label} &nbsp;·&nbsp; Prev = ${dd.prev_label}</div>` : '';
   return `<div class="card"><div class="cardhead"><h3>Total ${_supdN(total)} copies</h3><span class="lbl" style="color:var(--muted)">${rows.length} rows</span></div>${periodNote}
-    <div class="tablewrap"><table><thead><tr><th>${firstCol}</th><th></th><th class="r">Supply</th><th class="r">Prev</th><th class="r">Diff</th><th class="r">Growth</th><th class="r">Share</th></tr></thead>
-    <tbody>${body || `<tr><td colspan="7" style="color:var(--muted)">No data</td></tr>`}${foot}</tbody></table></div></div>`;
+    <div class="tablewrap"><table><thead><tr><th>${firstCol}</th><th></th>${showAgents ? '<th class="r">Agencies</th>' : ''}<th class="r">Supply</th><th class="r">Prev</th><th class="r">Diff</th><th class="r">Growth</th><th class="r">Share</th></tr></thead>
+    <tbody>${body || `<tr><td colspan="${showAgents ? 8 : 7}" style="color:var(--muted)">No data</td></tr>`}${foot}</tbody></table></div></div>`;
 }
 function _cashMatrix(dd, unitName) {
   const eds = dd.editions || [], centers = dd.centers || [];
@@ -8484,8 +8523,15 @@ function ouAgenciesTab() {
         ${rows.map((r,i)=>{
           const risk = r.risk_status || 'Low';
           const days = Number(r.days_since_supply)||0;
-          const overdueAmt = days > 30 ? Number(r.cl_amt)||0 : 0;
-          const currAmt   = days <= 30 ? Number(r.cl_amt)||0 : 0;
+          // Overdue = balance carried forward from prior periods (op_amt); Current =
+          // net new billing since then. Matches /api/outstanding/ageing's model —
+          // NOT a last-supply-date split, which would wrongly zero out Curr. O/S for
+          // any agency whose last delivery was >30 days ago even if most of its
+          // outstanding is fresh billing.
+          const opAmt     = Number(r.op_amt)||0;
+          const clAmt     = Number(r.cl_amt)||0;
+          const overdueAmt = Math.min(opAmt, clAmt);
+          const currAmt    = Math.max(0, clAmt - opAmt);
           return `<tr style="${i%2?'background:var(--surface-2)':''}cursor:pointer" onclick="openAgencyProfile('${esc(r.unit_code||'').replace(/'/g,"\\'")}','${esc(r.ag_code).replace(/'/g,"\\'")}','${esc(r.ag_name||r.ag_code||'').replace(/'/g,"\\'")}')" title="View agency profile">
             <td style="padding:5px 8px;color:var(--muted);white-space:nowrap">${esc(r.ag_code)}</td>
             <td style="padding:5px 8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.ag_name)}">${esc(r.ag_name)}</td>
@@ -13878,7 +13924,8 @@ function navGroups() {
     ]});
   }
   const apps = u.modules.filter(k => permAllows(k, 'view') !== false).map(k => ({ key: k, ...APP_MENU[k] }));
-  if (apps.length) groups.push({ label: "Field Apps", apps });
+  const SHOW_FIELD_APPS_NAV = false; // hidden per request 2026-08-24 — not deleted, re-enable when ready to surface these
+  if (SHOW_FIELD_APPS_NAV && apps.length) groups.push({ label: "Field Apps", apps });
   if (u.isAdmin) {
     // Real Level-1 admins always see every Administration screen; a "limited admin"
     // (isAdmin granted at a lower hierarchy level) sees only what their navScreens

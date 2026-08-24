@@ -50,7 +50,7 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
     const [{ rows: active }, { rows: outR }, { rows: supR }, { rows: visitOra }, { rows: visitApp },
            { rows: gpsOra }, { rows: gpsApp }] = await Promise.all([
       q(`SELECT unit AS unit_code, agcd, ag_name, unit_name, unit_state_nm, city_name, dist_name,
-                state_name, station_code, area_code, address, mobile_no1, ag_class_name, dpcd,
+                state_name, station_code, station_name, area_code, address, mobile_no1, ag_class_name, dpcd,
                 executive_code, executive_name, field_officer_name,
                 supply_start_dt, supply_stop_flag, suspend_date
          FROM agency_master WHERE unit = ?`, [unitCode]),
@@ -122,7 +122,7 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
       const sig = {
         unit_code: a.unit_code, agcd: a.agcd, ag_name: a.ag_name, unit_name: a.unit_name,
         unit_state_nm: a.unit_state_nm, city_name: a.city_name, dist_name: a.dist_name,
-        state_name: a.state_name, station_code: a.station_code, area_code: a.area_code, address: a.address,
+        state_name: a.state_name, station_code: a.station_code, station_name: a.station_name, area_code: a.area_code, address: a.address,
         mobile_no1: a.mobile_no1, ag_class_name: a.ag_class_name, dpcd: a.dpcd,
         exec_code: a.executive_code || null, exec_name: a.executive_name || a.field_officer_name || '(Unassigned)',
         ag_status: (a.supply_stop_flag === 'Y') ? 'Stopped' : a.suspend_date ? 'Suspended' : 'Active',
@@ -292,7 +292,7 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
         identity: {
           ag_name: anchor.ag_name, agcd: anchor.agcd, unit_code: anchor.unit_code, unit_name: anchor.unit_name,
           state_name: anchor.state_name || anchor.unit_state_nm, dist_name: anchor.dist_name, city_name: anchor.city_name,
-          station_code: anchor.station_code, area_code: anchor.area_code, address: anchor.address,
+          station_code: anchor.station_code, station_name: anchor.station_name, area_code: anchor.area_code, address: anchor.address,
           mobile_no1: anchor.mobile_no1, ag_class_name: anchor.ag_class_name, ag_status: anchor.ag_status,
           supply_start_dt: anchor.supply_start_dt,
           exec_code: anchor.exec_code, exec_name: anchor.exec_name,

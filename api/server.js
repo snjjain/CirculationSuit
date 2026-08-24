@@ -2926,8 +2926,9 @@ app.get('/api/outstanding/trend', async (req, res) => {
   try {
     const { clause, params } = ouFilters(req.query);
     const sc = await getOuScopeFilter(req);
-    // Check if monthly snapshots exist
-    const labels = await q(`SELECT DISTINCT period_label FROM agency_outstanding WHERE period_label != 'CURRENT' ORDER BY period_label`);
+    // Check if monthly snapshots exist. Excludes BILL-YYYY-MM (ERP exact-match billing
+    // snapshot, not a real monthly period — sorts after real labels and breaks month math).
+    const labels = await q(`SELECT DISTINCT period_label FROM agency_outstanding WHERE period_label != 'CURRENT' AND period_label NOT LIKE 'BILL-%' ORDER BY period_label`);
     if (!labels.rows.length) {
       // Fall back: group by month from period_to on CURRENT data (not ideal but usable)
       return res.json({ months: [], note: 'Run sync with --monthly flag for trend data' });
@@ -3025,7 +3026,7 @@ app.get('/api/outstanding/exec-summary', async (req, res) => {
 // GET /api/shortpayment/months — available monthly periods
 app.get('/api/shortpayment/months', async (req, res) => {
   try {
-    const r = await q(`SELECT DISTINCT period_label FROM agency_outstanding WHERE period_label != 'CURRENT' ORDER BY period_label`);
+    const r = await q(`SELECT DISTINCT period_label FROM agency_outstanding WHERE period_label != 'CURRENT' AND period_label NOT LIKE 'BILL-%' ORDER BY period_label`);
     res.json({ months: r.rows.map(x => x.period_label) });
   } catch (e) { res.status(500).json({ detail: String(e) }); }
 });
@@ -3034,7 +3035,7 @@ app.get('/api/shortpayment/months', async (req, res) => {
 // Fast: uses telescope formula (2 periods for totals) + per-page monthly detail
 app.get('/api/shortpayment/report', async (req, res) => {
   try {
-    const availR = await q(`SELECT DISTINCT period_label FROM agency_outstanding WHERE period_label != 'CURRENT' ORDER BY period_label`);
+    const availR = await q(`SELECT DISTINCT period_label FROM agency_outstanding WHERE period_label != 'CURRENT' AND period_label NOT LIKE 'BILL-%' ORDER BY period_label`);
     const allLabels = availR.rows.map(r => r.period_label);
     if (!allLabels.length) return res.json({ error: 'no_monthly_data', months: [], agencies: [], total: 0, summary: {} });
 
