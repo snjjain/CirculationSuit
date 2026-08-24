@@ -366,7 +366,7 @@ module.exports = function registerAgencyRating({ app, q, getScopeUnitCodes }) {
   });
 
   app.post('/api/agency-rating/config', async (req, res) => {
-    if (!req.auth || req.auth.hierarchyLevel !== 1)
+    if (!req.auth || !req.auth.isAdmin)
       return res.status(403).json({ detail: 'Admin only' });
     try {
       const incoming = req.body;

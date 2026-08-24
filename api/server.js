@@ -477,7 +477,7 @@ app.get('/api/hierarchy/users', async (req, res) => {
     // Load per-person permission overrides (table may not exist yet on first run)
     let permMap = {};
     try {
-      const { rows: perms } = await q('SELECT person_code, dashboard, nav_screens, modules FROM user_permissions');
+      const { rows: perms } = await q('SELECT person_code, dashboard, nav_screens, modules, perms, is_admin FROM user_permissions');
       perms.forEach(p => { permMap[p.person_code] = p; });
     } catch (_) {}
 
@@ -486,11 +486,13 @@ app.get('/api/hierarchy/users', async (req, res) => {
       const meta = LEVEL_META[lvl] || { roleLabel: `Level ${lvl}`, role: 'user', dashboard: false, modules: [] };
       const perm = permMap[r.person_code];
       const unitLabel = lvl === 1 ? 'PAN India' : (r.unit_name || r.unit_code || '');
+      const isAdmin = perm && perm.is_admin !== null && perm.is_admin !== undefined ? Boolean(perm.is_admin) : (lvl === 1);
       return {
         id: r.id,
         person_code: r.person_code,
         name: r.person_name,
         hierarchyLevel: lvl,
+        isAdmin,
         unit_code: r.unit_code,
         scopeLabel: unitLabel,
         roleLabel: meta.roleLabel,
@@ -498,6 +500,7 @@ app.get('/api/hierarchy/users', async (req, res) => {
         dashboard:  perm && perm.dashboard !== null ? Boolean(perm.dashboard) : meta.dashboard,
         modules:    perm && perm.modules     ? JSON.parse(perm.modules)     : meta.modules,
         navScreens: perm && perm.nav_screens ? JSON.parse(perm.nav_screens) : null,
+        perms:      perm && perm.perms       ? JSON.parse(perm.perms)       : {},
         hasOverride: !!perm,
         avatar: _avatar(r.person_name),
         employee_code: r.employee_code,
@@ -523,8 +526,8 @@ app.get('/api/admin/permissions', async (req, res) => {
 // POST /api/admin/permissions  — save or reset a user's overrides (admin only)
 app.post('/api/admin/permissions', async (req, res) => {
   try {
-    if (!req.auth || req.auth.hierarchyLevel !== 1) return res.status(403).json({ detail: 'Administrator access required' });
-    const { person_code, dashboard, nav_screens, modules, perms, reset } = req.body;
+    if (!req.auth || !req.auth.isAdmin) return res.status(403).json({ detail: 'Administrator access required' });
+    const { person_code, dashboard, nav_screens, modules, perms, is_admin, reset } = req.body;
     if (!person_code) return res.status(400).json({ detail: 'person_code required' });
     if (reset) {
       await q('DELETE FROM user_permissions WHERE person_code = ?', [person_code]);
@@ -535,12 +538,21 @@ app.post('/api/admin/permissions', async (req, res) => {
     const nav  = nav_screens ? JSON.stringify(nav_screens) : null;
     const mods = modules     ? JSON.stringify(modules)     : null;
     const prm  = perms       ? JSON.stringify(perms)       : null;
+    // Granting/revoking Admin status itself is restricted to real Level-1 admins — a
+    // "limited admin" who's been handed the Manage Rights screen can still edit other
+    // users' screens/modules/perms, but can't mint new admins or escalate their own status.
+    const isAdminSet = (is_admin !== undefined && is_admin !== null);
+    const adm = isAdminSet && req.auth.hierarchyLevel === 1 ? (is_admin ? 1 : 0) : null;
+    if (isAdminSet && req.auth.hierarchyLevel !== 1) {
+      return res.status(403).json({ detail: 'Only a Level-1 administrator can grant or revoke Admin status' });
+    }
     await q(`
-      INSERT INTO user_permissions (person_code, dashboard, nav_screens, modules, perms)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO user_permissions (person_code, dashboard, nav_screens, modules, perms, is_admin)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE dashboard=VALUES(dashboard), nav_screens=VALUES(nav_screens),
-                              modules=VALUES(modules), perms=VALUES(perms), updated_at=CURRENT_TIMESTAMP
-    `, [person_code, dash, nav, mods, prm]);
+                              modules=VALUES(modules), perms=VALUES(perms),
+                              is_admin=COALESCE(VALUES(is_admin), is_admin), updated_at=CURRENT_TIMESTAMP
+    `, [person_code, dash, nav, mods, prm, adm]);
     await auth.audit('perms_update', { actor: req.auth.personCode, target: person_code, ip: auth.ipOf(req) });
     res.json({ ok: true });
   } catch (e) {
@@ -551,7 +563,7 @@ app.post('/api/admin/permissions', async (req, res) => {
 // GET /api/admin/users/:id/scope  — current effective scope + derived scope + all units
 app.get('/api/admin/users/:id/scope', async (req, res) => {
   try {
-    if (!req.auth || req.auth.hierarchyLevel !== 1) return res.status(403).json({ detail: 'Administrator access required' });
+    if (!req.auth || !req.auth.isAdmin) return res.status(403).json({ detail: 'Administrator access required' });
     const { rows: us } = await q('SELECT id, person_code, hierarchy_level FROM app_users WHERE id = ?', [req.params.id]);
     const u = us[0];
     if (!u) return res.status(404).json({ detail: 'User not found' });
@@ -608,7 +620,7 @@ app.get('/api/admin/users/:id/scope', async (req, res) => {
 // PUT /api/admin/users/:id/scope  — save or reset scope override
 app.put('/api/admin/users/:id/scope', async (req, res) => {
   try {
-    if (!req.auth || req.auth.hierarchyLevel !== 1) return res.status(403).json({ detail: 'Administrator access required' });
+    if (!req.auth || !req.auth.isAdmin) return res.status(403).json({ detail: 'Administrator access required' });
     const { rows: us } = await q('SELECT id, person_code, name FROM app_users WHERE id = ?', [req.params.id]);
     const u = us[0];
     if (!u) return res.status(404).json({ detail: 'User not found' });

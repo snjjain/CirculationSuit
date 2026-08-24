@@ -73,6 +73,11 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
     // Extend user_permissions with a per-form rights matrix (view/add/edit/delete/export)
     try { await q(`ALTER TABLE user_permissions ADD COLUMN perms TEXT DEFAULT NULL COMMENT 'JSON {form:{view,add,edit,delete,export}}'`); }
     catch (_) { /* column already exists */ }
+    // Admin status independent of hierarchy_level (data-scope tier) — lets a Level-2+
+    // user be granted admin-only screens/actions without widening their PAN-India data
+    // scope. NULL = use the level-1-is-admin default.
+    try { await q(`ALTER TABLE user_permissions ADD COLUMN is_admin TINYINT(1) DEFAULT NULL COMMENT 'NULL = default (level 1 = admin); explicit 1/0 overrides'`); }
+    catch (_) { /* column already exists */ }
   }
   ensureSchema().catch(e => console.warn('[auth] schema init:', e.message));
 
@@ -100,9 +105,9 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
     } catch (e) { console.warn('[auth] audit failed:', e.message); }
   }
 
-  function sign(u) {
+  function sign(u, isAdmin) {
     return jwt.sign(
-      { uid: u.id, pc: u.person_code, hl: u.hierarchy_level, mob: u.mobile, ut: u.user_type },
+      { uid: u.id, pc: u.person_code, hl: u.hierarchy_level, ia: isAdmin ? 1 : 0, mob: u.mobile, ut: u.user_type },
       JWT_SECRET, { expiresIn: JWT_EXPIRY }
     );
   }
@@ -125,9 +130,13 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
 
     let perm = null;
     try {
-      const { rows } = await q('SELECT dashboard, nav_screens, modules, perms FROM user_permissions WHERE person_code = ?', [u.person_code]);
+      const { rows } = await q('SELECT dashboard, nav_screens, modules, perms, is_admin FROM user_permissions WHERE person_code = ?', [u.person_code]);
       perm = rows[0];
     } catch (_) {}
+
+    // Admin status is independent of hierarchyLevel (data scope) — an explicit grant/revoke
+    // in user_permissions.is_admin wins; otherwise level 1 is admin by default.
+    const isAdmin = perm && perm.is_admin !== null && perm.is_admin !== undefined ? Boolean(perm.is_admin) : (hl === 1);
 
     const scopeLabel = hl === 1 ? 'PAN India' : (unit_name || unit_code || '');
     return {
@@ -137,6 +146,7 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
       mobile: u.mobile,
       user_type: u.user_type,
       hierarchyLevel: hl,
+      isAdmin,
       unit_code,
       scopeLabel,
       roleLabel: meta.roleLabel,
@@ -158,7 +168,7 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
     if (!tok) return res.status(401).json({ detail: 'Authentication required', code: 'no_token' });
     try {
       const p = jwt.verify(tok, JWT_SECRET);
-      req.auth = { id: p.uid, personCode: p.pc, hierarchyLevel: p.hl, mobile: p.mob, userType: p.ut };
+      req.auth = { id: p.uid, personCode: p.pc, hierarchyLevel: p.hl, isAdmin: !!p.ia, mobile: p.mob, userType: p.ut };
       // Stamp verified identity onto the legacy scoping headers so ALL existing
       // header-based data scoping (server.js, insights.js, ask_ai.js, supply_dashboard.js)
       // uses trusted token claims. Any client-supplied x-* header is overwritten here.
@@ -171,7 +181,7 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
     }
   }
   function requireAdmin(req, res, next) {
-    if (!req.auth || req.auth.hierarchyLevel !== 1) return res.status(403).json({ detail: 'Administrator access required' });
+    if (!req.auth || !req.auth.isAdmin) return res.status(403).json({ detail: 'Administrator access required' });
     next();
   }
 
@@ -219,8 +229,8 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
       }
 
       await q('UPDATE app_users SET failed_attempts = 0, locked_until = NULL, last_login_at = NOW() WHERE id = ?', [u.id]);
-      const token = sign(u);
       const user  = await buildProfile(u);
+      const token = sign(u, user.isAdmin);
       await audit('login_success', { actor: u.person_code, actorName: u.name, target: u.person_code, ip });
       res.json({ token, user, mustChangePassword: !!u.must_change_password });
     } catch (e) {

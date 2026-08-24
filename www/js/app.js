@@ -16,6 +16,18 @@ const DASH_MENU = [
   ["survey_dash",      "Survey Intelligence",         "📊"],
 ];
 
+// Administration-section screens — visible only to isAdmin users (see [[project auth]]).
+// A "limited admin" (isAdmin=true but hierarchyLevel>1) sees only the ones granted via
+// their navScreens override; a real Level-1 admin always sees all of them.
+const ADMIN_MENU = [
+  ["user_mgmt",       "User Management",  "👥"],
+  ["manage_rights",   "Manage Rights",    "🔐"],
+  ["audit_log",       "Audit Trail",      "📜"],
+  ["email_config",    "Email Config",     "✉"],
+  ["competitor_data", "Competitor Data",  "📊"],
+  ["exec_targets",    "Monthly Targets",  "🎯"],
+];
+
 const APP_MENU = {
   agent:  { label: "Agent App",   icon: "🏢", tint: "var(--red-l)",   desc: "Agency management — supply, billing, collections and complaints.",
             sub: [["agent_day", "My Day"], ["agent_supply", "Supply & Net Sales"], ["agent_ledger", "Bills & Ledger"], ["agent_complaints", "Complaints"]] },
@@ -1269,7 +1281,7 @@ function _dcrATourTab() {
     ${stats.first_visit_time?`<div style="font-size:11px;color:var(--ink-2);margin-bottom:10px">⏰ ${stats.first_visit_time} → ${stats.last_visit_time||'?'}&nbsp;&nbsp;·&nbsp;&nbsp;📏 Total route: ${stats.total_distance_km} km&nbsp;&nbsp;·&nbsp;&nbsp;⏱ In meetings: ${stats.total_time_in_meetings_min||0} min</div>`:''}`;
 
   // Office location banner / missing warning
-  const isAdmin = S.user?.hierarchyLevel === 1;
+  const isAdmin = S.user?.isAdmin;
   let officeBanner = '';
   if (d.office) {
     officeBanner = `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--grn-l);border-radius:8px;font-size:12px;margin-bottom:10px;border:1px solid var(--grn)">
@@ -10554,7 +10566,7 @@ function arMainView() {
   const flt  = st.filters;
   const sum  = st.summary;
   const list = st.list;
-  const isAdmin = S.user && S.user.hierarchyLevel === 1;
+  const isAdmin = S.user && S.user.isAdmin;
   const bw = st.draftBW != null ? st.draftBW : 40;
 
   // ── Grade summary cards ──
@@ -11854,7 +11866,7 @@ function permAllows(form, action) {
 window.can = (form, action = 'view') => {
   const o = permAllows(form, action);
   if (o !== null) return o;
-  return (S.user && S.user.hierarchyLevel === 1) ? true : (action === 'view');
+  return (S.user && S.user.isAdmin) ? true : (action === 'view');
 };
 
 window.mrSelectUser = (pc) => {
@@ -11867,10 +11879,16 @@ window.mrSelectUser = (pc) => {
   S.live.mr.sel  = pc;
   S.live.mr.edit = {
     dashboard:  u.dashboard,
+    isAdmin:    !!u.isAdmin,
     navScreens: u.navScreens ? [...u.navScreens] : [...defaultScreens],
     modules:    [...(u.modules || [])],
     perms:      u.perms ? JSON.parse(JSON.stringify(u.perms)) : {},
   };
+  render();
+};
+window.mrToggleAdmin = () => {
+  if (!S.live.mr?.edit) return;
+  S.live.mr.edit.isAdmin = !S.live.mr.edit.isAdmin;
   render();
 };
 window.mrTogglePerm = (form, action) => {
@@ -11916,13 +11934,17 @@ window.mrSave = async () => {
   if (!mr?.sel || !mr?.edit) return;
   const btn = document.getElementById('mrSaveBtn');
   if (btn) btn.disabled = true;
-  const res = await api.post('/api/admin/permissions', {
+  const body = {
     person_code: mr.sel,
     dashboard:   mr.edit.dashboard,
     nav_screens: mr.edit.navScreens,
     modules:     mr.edit.modules,
     perms:       mr.edit.perms,
-  });
+  };
+  // Only a real Level-1 admin can grant/revoke Admin status (backend enforces this too) —
+  // omit the field entirely otherwise so it's never sent as an unintended change.
+  if (S.user?.hierarchyLevel === 1) body.is_admin = mr.edit.isAdmin;
+  const res = await api.post('/api/admin/permissions', body);
   if (res && res.ok) {
     toast('✅ Permissions saved — user will see changes on next login');
     S.live.dbUsers = null; // force refresh
@@ -11982,6 +12004,7 @@ VIEWS.manage_rights = () => {
             <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(u.name)}</div>
             <div style="font-size:11px;color:var(--ink-2)">${esc(u.roleLabel)} · ${esc(u.unit_code||'')}</div>
           </span>
+          ${u.isAdmin ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:#dbeafe;color:#1e40af;flex:none" title="Admin status">🛡️ Admin</span>` : ''}
           ${hasOverride ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--gold-l);color:var(--gold-d);flex:none">Custom</span>` : ''}
         </button>`;
       }).join('')
@@ -11999,6 +12022,21 @@ VIEWS.manage_rights = () => {
       <div style="font-weight:700;font-size:15px;margin-bottom:2px">${esc(selUser?.name || sel)}</div>
       <div style="font-size:12px;color:var(--ink-2);margin-bottom:16px">${esc(selUser?.roleLabel||'')} · Level ${selUser?.hierarchyLevel||'?'} · ${esc(selUser?.unit_code||'')}</div>
 
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--ink-2);margin-bottom:8px">Admin Status</div>
+      ${S.user?.hierarchyLevel === 1 ? `
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 10px;border-radius:8px;background:${edit.isAdmin ? 'var(--gold-l,#fef3c7)' : 'var(--surface-2)'};margin-bottom:6px"
+             onclick="mrToggleAdmin()">
+        ${chk(edit.isAdmin)}
+        <span style="font-size:13px">🛡️ Admin — sees the Administration section (independent of hierarchy level / data scope)</span>
+      </label>
+      <div style="font-size:11px;color:var(--ink-2);margin-bottom:16px">Grants elevated status without widening this user's data scope. Once checked, tick which Administration screens below they can actually open — leave all unchecked and they're Admin in name only, with no admin screens visible.</div>
+      ` : `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;background:var(--surface-2);margin-bottom:16px">
+        ${chk(edit.isAdmin)}
+        <span style="font-size:13px;color:var(--ink-2)">🛡️ Admin ${edit.isAdmin ? '— granted' : '— not granted'} <i>(only a Level-1 administrator can change this)</i></span>
+      </div>
+      `}
+
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--ink-2);margin-bottom:8px">Dashboard Access</div>
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 10px;border-radius:8px;background:var(--surface-2);margin-bottom:16px"
              onclick="mrToggleDash()">
@@ -12010,6 +12048,17 @@ VIEWS.manage_rights = () => {
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--ink-2);margin-bottom:8px">Visible Dashboard Screens</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:16px">
         ${DASH_MENU.map(([id, label, icon]) => `
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:7px 10px;border-radius:7px;background:var(--surface-2)"
+                 onclick="mrToggleScreen('${id}')">
+            ${chk(edit.navScreens.includes(id))}
+            <span style="font-size:12px">${icon} ${esc(label)}</span>
+          </label>`).join('')}
+      </div>` : ''}
+
+      ${edit.isAdmin ? `
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--ink-2);margin-bottom:8px">Visible Administration Screens</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:16px">
+        ${ADMIN_MENU.map(([id, label, icon]) => `
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:7px 10px;border-radius:7px;background:var(--surface-2)"
                  onclick="mrToggleScreen('${id}')">
             ${chk(edit.navScreens.includes(id))}
@@ -13830,14 +13879,16 @@ function navGroups() {
   }
   const apps = u.modules.filter(k => permAllows(k, 'view') !== false).map(k => ({ key: k, ...APP_MENU[k] }));
   if (apps.length) groups.push({ label: "Field Apps", apps });
-  if (hl === 1) groups.push({ label: "Administration", items: [
-    { id: "user_mgmt",       label: "User Management",  icon: "👥" },
-    { id: "manage_rights",   label: "Manage Rights",    icon: "🔐" },
-    { id: "audit_log",       label: "Audit Trail",      icon: "📜" },
-    { id: "email_config",    label: "Email Config",     icon: "✉" },
-    { id: "competitor_data", label: "Competitor Data",  icon: "📊" },
-    { id: "exec_targets",    label: "Monthly Targets",  icon: "🎯" },
-  ]});
+  if (u.isAdmin) {
+    // Real Level-1 admins always see every Administration screen; a "limited admin"
+    // (isAdmin granted at a lower hierarchy level) sees only what their navScreens
+    // override includes — same pattern as the Dashboard section above.
+    const adminItems = ADMIN_MENU
+      .filter(([id]) => hl === 1 || !u.navScreens || u.navScreens.includes(id))
+      .filter(([id]) => permAllows(id, 'view') !== false)
+      .map(([id, l, ic]) => ({ id, label: l, icon: ic }));
+    if (adminItems.length) groups.push({ label: "Administration", items: adminItems });
+  }
   if (hl > 1 && hl <= 3) groups.push({ label: "Data Entry", items: [
     { id: "competitor_data", label: "Competitor Data",  icon: "📊" },
   ]});
