@@ -2198,6 +2198,12 @@ window.dcrASetTab = t => { _dcrA.tab = t; render(); };
 
 /* ── Main view ── */
 VIEWS.dcr_analytics = () => {
+  // _dcrA is a plain module-level object created before login, so the PAN-India admin
+  // default (see _isPanIndiaAdmin) is applied once here instead, on first render.
+  if (!_dcrA._defaultsApplied) {
+    _dcrA._defaultsApplied = true;
+    if (_isPanIndiaAdmin() && !_dcrA.state && !_dcrA.unit_code) { _dcrA.state = 'Rajasthan'; _dcrA.unit_code = 'JA0'; }
+  }
   const tab = _dcrA.tab;
   const hdr = pagehead('DCR - Field Visit Analysis', 'DCR analytics — agency visits, center attendance, GPS mapping & executive performance');
 
@@ -3123,6 +3129,15 @@ window._dcrATgWeekTeamSend = async () => {
   } catch (e) { errEl.textContent = 'Send failed: ' + e.message; }
 };
 
+/* PAN-India (hierarchyLevel 1) admins land on Rajasthan / Jaipur RP on every dashboard,
+   rather than a blank "All States/Units" view. Everyone else already sees only their
+   own branch server-side (scope is enforced by req.auth, not by these UI filters)
+   regardless of what these default to, so they're left blank for them. Every
+   dashboard below has its own state/unit value convention (full name vs abbreviation
+   vs code vs title-case, unit code vs unit name) — verified live against each
+   dashboard's own /filters endpoint rather than assumed. */
+function _isPanIndiaAdmin() { return !!(S.user && S.user.hierarchyLevel === 1); }
+
 /* ---- Dashboard: Command Centre ---- */
 /* ── Command Centre helpers ─────────────────────────────── */
 function _cmdBase() { return location.origin; }
@@ -3132,18 +3147,31 @@ function _cmdBase() { return location.origin; }
    data model (no per-line revenue split; scoping is already enforced per
    logged-in user, not user-switchable) — intentionally omitted. ── */
 function _cmdFilterState() {
-  return S.live.cmdFilters || (S.live.cmdFilters = { period: 'month', state: '', unit_code: '', unit_name: '', search: '', searchResults: null });
+  if (!S.live.cmdFilters) {
+    const isPanIndia = _isPanIndiaAdmin();
+    S.live.cmdFilters = {
+      period: 'month',
+      state: isPanIndia ? 'RAJASTHAN' : '',
+      unit_code: isPanIndia ? 'JA0' : '',
+      unit_name: isPanIndia ? 'JAIPUR RP' : '',
+      district: '', search: '', searchResults: null,
+    };
+  }
+  return S.live.cmdFilters;
 }
 function _cmdPeriodRange(period) {
   const today = new Date(), y = today.getFullYear(), m = today.getMonth();
   const iso = d => d.toISOString().slice(0, 10);
+  if (period === 'today')      return { from: todayISO(), to: todayISO() };
+  if (period === 'yesterday')  { const y1 = new Date(today); y1.setDate(y1.getDate() - 1); return { from: iso(y1), to: iso(y1) }; }
   if (period === 'last_month') return { from: iso(new Date(y, m - 1, 1)), to: iso(new Date(y, m, 0)) };
   if (period === 'quarter')    return { from: iso(new Date(y, Math.floor(m / 3) * 3, 1)), to: todayISO() };
   return { from: monthStartISO(), to: todayISO() };
 }
 window.cmdSetPeriod = p => { _cmdFilterState().period = p; S.live.cmd = {}; render(); };
-window.cmdSetState = s => { const f = _cmdFilterState(); f.state = s; f.unit_code = ''; f.unit_name = ''; S.live.cmd = {}; render(); };
-window.cmdSetUnit = (code, name) => { const f = _cmdFilterState(); f.unit_code = code; f.unit_name = name || ''; S.live.cmd = {}; render(); };
+window.cmdSetState = s => { const f = _cmdFilterState(); f.state = s; f.unit_code = ''; f.unit_name = ''; f.district = ''; S.live.cmd = {}; render(); };
+window.cmdSetUnit = (code, name) => { const f = _cmdFilterState(); f.unit_code = code; f.unit_name = name || ''; f.district = ''; S.live.cmd = {}; render(); };
+window.cmdSetDistrict = d => { const f = _cmdFilterState(); f.district = d; S.live.cmd = {}; render(); };
 window.cmdResetFilters = () => { S.live.cmdFilters = null; S.live.cmd = {}; render(); };
 window.cmdSearchInput = v => {
   const f = _cmdFilterState();
@@ -3167,8 +3195,8 @@ function _cmdLoadUnits() {
   S.live._cmdUnitsLoading = true;
   fetch(_cmdBase() + '/api/supply-dash/filters', { headers: api.h() })
     .then(r => r.json())
-    .then(d => { S.live.cmdUnits = d.units || []; S.live.cmdStates = d.states || []; S.live._cmdUnitsLoading = false; if (S.screen === 'command') render(); })
-    .catch(() => { S.live.cmdUnits = []; S.live.cmdStates = []; S.live._cmdUnitsLoading = false; });
+    .then(d => { S.live.cmdUnits = d.units || []; S.live.cmdStates = d.states || []; S.live.cmdUnitDistricts = d.unit_districts || {}; S.live._cmdUnitsLoading = false; if (S.screen === 'command') render(); })
+    .catch(() => { S.live.cmdUnits = []; S.live.cmdStates = []; S.live.cmdUnitDistricts = {}; S.live._cmdUnitsLoading = false; });
 }
 
 function _cmdLoad() {
@@ -3197,6 +3225,13 @@ function _cmdLoad() {
   const sPFull = isCoreState ? 'state=' + encodeURIComponent(f.state) + '&state_name=' + encodeURIComponent(f.state) : '';
   const sPAbbr = isCoreState ? 'state=' + encodeURIComponent(CMD_STATE_ABBR[f.state] || f.state) : '';
   const dP = 'from=' + period.from + '&to=' + period.to;
+  // District — only wired into the 3 endpoints whose underlying table actually has a
+  // district column (agency_collection.district_name; supply_data.dist_name for
+  // day-compare/trend). Left out of outstanding/kpis and survey/kpis (no district data
+  // at all) and the Agent+Cash sale-summary KPI (hawker_supply, the Cash half, has no
+  // district column — filtering only the Agent half would silently mix a
+  // district-scoped number with a unit-wide one under a single combined total).
+  const distP = f.district ? 'district=' + encodeURIComponent(f.district) : '';
   const qs = (...parts) => { const s = parts.filter(Boolean).join('&'); return s ? '?' + s : ''; };
 
   if (!c.ou && !c._ouLoading) {
@@ -3209,7 +3244,7 @@ function _cmdLoad() {
   if (!c.co && !c._coLoading) {
     c._coLoading = true;
     const branchP = f.unit_name ? 'branch=' + encodeURIComponent(f.unit_name) : '';
-    fetch(_cmdBase() + '/api/collection/kpis' + qs(dP, branchP, sPFull), { headers: api.h() })
+    fetch(_cmdBase() + '/api/collection/kpis' + qs(dP, branchP, sPFull, distP), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.co = d; c._coLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._coLoading = false; c.co = { _err: true }; if (S.screen === 'command') render(); });
@@ -3256,14 +3291,14 @@ function _cmdLoad() {
   const _dcK  = 'dc_' + _grp + '_' + _mode;
   if (!c[_dcK] && !c['_l' + _dcK]) {
     c['_l' + _dcK] = true;
-    fetch(_cmdBase() + '/api/supply-dash/day-compare?group=' + _grp + '&mode=' + _mode + [uP, sPFull].filter(Boolean).map(p => '&' + p).join(''), { headers: api.h() })
+    fetch(_cmdBase() + '/api/supply-dash/day-compare?group=' + _grp + '&mode=' + _mode + [uP, sPFull, distP].filter(Boolean).map(p => '&' + p).join(''), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c[_dcK] = d; c['_l' + _dcK] = false; if (S.screen === 'command') render(); })
       .catch(() => { c['_l' + _dcK] = false; c[_dcK] = { _err: true }; if (S.screen === 'command') render(); });
   }
   if (!c.tr && !c._trLoading) {
     c._trLoading = true;
-    fetch(_cmdBase() + '/api/supply-dash/trend?granularity=daily&days=90' + [uP, sPFull].filter(Boolean).map(p => '&' + p).join(''), { headers: api.h() })
+    fetch(_cmdBase() + '/api/supply-dash/trend?granularity=daily&days=90' + [uP, sPFull, distP].filter(Boolean).map(p => '&' + p).join(''), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.tr = d; c._trLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._trLoading = false; c.tr = { _err: true }; if (S.screen === 'command') render(); });
@@ -3523,7 +3558,7 @@ VIEWS.command = () => {
   const c = S.live.cmd || {};
   const ou = c.ou, co = c.co, si = c.si, sv = c.sv, sup = c.sup, fa = c.fa, dcr = c.dcr;
   const cf = _cmdFilterState();
-  const cmdPeriodLabel = { month: 'This Month', last_month: 'Last Month', quarter: 'Quarter' }[cf.period] || 'This Month';
+  const cmdPeriodLabel = { today: 'Today', yesterday: 'Yesterday', month: 'This Month', last_month: 'Last Month', quarter: 'Quarter' }[cf.period] || 'This Month';
   const cmdPeriod = _cmdPeriodRange(cf.period);
 
   // Header subtitle: Supply/Collections/Field Intelligence are Oracle-synced overnight, so
@@ -3693,6 +3728,7 @@ VIEWS.command = () => {
   const cmdRegionOf = s => { const u = String(s || '').toUpperCase(); return CMD_CORE_STATES.has(u) ? u : 'NATIONAL'; };
   const cmdUnits = S.live.cmdUnits || [];
   const cmdUnitsInState = cf.state ? cmdUnits.filter(u => cmdRegionOf(u.state_name) === cf.state) : cmdUnits;
+  const cmdDistricts = (cf.unit_code && S.live.cmdUnitDistricts && S.live.cmdUnitDistricts[cf.unit_code]) || [];
   const periodBtn = (p, label, edge) => `<button onclick="cmdSetPeriod('${p}')" style="padding:7px 16px;border:1px solid var(--brd);${edge === 'l' ? 'border-radius:8px 0 0 8px;border-right:none' : edge === 'r' ? 'border-radius:0 8px 8px 0' : 'border-left:none;border-right:none'};background:${cf.period === p ? 'var(--navy,#1C2B45)' : 'var(--card)'};color:${cf.period === p ? '#fff' : 'var(--ink)'};font-size:12.5px;font-weight:600;cursor:pointer">${label}</button>`;
   const searchDrop = cf.searchResults != null
     ? (cf.searchResults.length
@@ -3706,7 +3742,7 @@ VIEWS.command = () => {
   const filterBar = `<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;padding:12px 0 18px;border-bottom:1px solid var(--brd);margin-bottom:18px">
     <div>
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Period</div>
-      <div style="display:flex">${periodBtn('month', 'This month', 'l')}${periodBtn('last_month', 'Last month')}${periodBtn('quarter', 'Quarter', 'r')}</div>
+      <div style="display:flex">${periodBtn('today', 'Today', 'l')}${periodBtn('yesterday', 'Yesterday')}${periodBtn('month', 'This month')}${periodBtn('last_month', 'Last month')}${periodBtn('quarter', 'Quarter', 'r')}</div>
     </div>
     <div>
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">State</div>
@@ -3722,12 +3758,19 @@ VIEWS.command = () => {
         ${cmdUnitsInState.map(u => `<option value="${esc(u.unit_code)}" data-name="${esc(u.unit_name || u.unit_code)}" ${cf.unit_code === u.unit_code ? 'selected' : ''}>${esc(u.unit_name || u.unit_code)}</option>`).join('')}
       </select>
     </div>
+    <div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">District</div>
+      <select onchange="cmdSetDistrict(this.value)" ${!cf.unit_code ? 'disabled' : ''} style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;min-width:150px${!cf.unit_code ? ';opacity:.55;cursor:not-allowed' : ''}">
+        <option value="">${cf.unit_code ? 'All Districts' : 'Pick a unit first'}</option>
+        ${cmdDistricts.map(d => `<option value="${esc(d)}" ${cf.district === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}
+      </select>
+    </div>
     <div style="position:relative;flex:1;min-width:220px;max-width:340px">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Search — Agency</div>
       <input type="text" placeholder="Agency name…" value="${esc(cf.search || '')}" oninput="cmdSearchInput(this.value)" style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;width:100%">
       ${searchDrop}
     </div>
-    ${cf.state || cf.unit_code || cf.period !== 'month' ? `<button onclick="cmdResetFilters()" style="padding:7px 14px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--muted);font-size:12px;cursor:pointer">✕ Reset filters</button>` : ''}
+    ${cf.state || cf.unit_code || cf.district || cf.period !== 'month' ? `<button onclick="cmdResetFilters()" style="padding:7px 14px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--muted);font-size:12px;cursor:pointer">✕ Reset filters</button>` : ''}
   </div>`;
 
   return pagehead('Command Centre', cmdSubtitle) + filterBar + `
@@ -3970,7 +4013,8 @@ function vzDonut(o) {
 
 /* ═══════════ Supply Management Dashboard ═══════════ */
 function _supdState() {
-  return S.live.supd || (S.live.supd = { tab: 'sale', state: '', unit: '', from: '', to: '', agentOrder: 'supply', trendGran: 'daily', trendDays: 30, drillMode: null, drillState: '', drillUnit: '', drillBy: 'district' });
+  const isPanIndia = _isPanIndiaAdmin();
+  return S.live.supd || (S.live.supd = { tab: 'sale', state: isPanIndia ? 'RAJASTHAN' : '', unit: isPanIndia ? 'JA0' : '', from: '', to: '', agentOrder: 'supply', trendGran: 'daily', trendDays: 30, drillMode: null, drillState: '', drillUnit: '', drillBy: 'district' });
 }
 const _supdN = v => v == null ? '—' : Number(v).toLocaleString('en-IN');
 const _supdINR = v => v == null ? '—' : (Math.abs(v) >= 1e7 ? '₹' + (v / 1e7).toFixed(2) + ' Cr' : Math.abs(v) >= 1e5 ? '₹' + (v / 1e5).toFixed(2) + ' L' : '₹' + Math.round(v).toLocaleString('en-IN'));
@@ -6779,9 +6823,10 @@ VIEWS.salesleads = () => {
 /* ---- Dashboard: Collections ---- */
 
 function colState() {
+  const isPanIndia = _isPanIndiaAdmin();
   return window._colState || (window._colState = {
     tab: 'overview', gran: 'monthly', agSearch: '', bSearch: '', loading: false, error: null,
-    filters: { from: prevMonthRange().from, to: prevMonthRange().to, state:'', branch:'', district:'', ag_code:'', payment_cat:'' },
+    filters: { from: prevMonthRange().from, to: prevMonthRange().to, state: isPanIndia ? 'RAJASTHAN' : '', branch: isPanIndia ? 'JAIPUR RP' : '', district:'', ag_code:'', payment_cat:'' },
     opts: { states:[], branches:[], districts:[], payment_cats:[], agencies:[] },
     kpis: null, trend: [], modes: [], agencies: [], appUsage: [],
     bhDrillState: null, bhDrillUnit: null, bhState: null, bhUnit: null, bhAgency: null,
@@ -8133,7 +8178,7 @@ window.sendRouteAlert = async function(unit, route, sub, date, channel) {
 
 // ── State ──────────────────────────────────────────────────
 const ouState = () => S.live.ou || (S.live.ou = {
-  tab: 'overview', filters: {}, filterOpts: null, kpis: null,
+  tab: 'overview', filters: _isPanIndiaAdmin() ? { state: 'RPPL', unit_code: 'JA0' } : {}, filterOpts: null, kpis: null,
   ageing: null, agencies: null, top: null, trend: null, unitSummary: null,
   topLimit: 10, topSort: 'outstanding', agSort: 'outstanding',
   agPage: 1, agSearch: '', agBucket: null, _loading: {},
@@ -8750,7 +8795,7 @@ VIEWS.outstanding = () => {
 
 // ── State ────────────────────────────────────────────────────────────────────
 const epState = () => S.live.ep || (S.live.ep = {
-  filters: { from: prevMonthRange().from, to: prevMonthRange().to, state: '', unit_code: '', metric: 'collection_pct', top_n: 10, period: 'month' },
+  filters: { from: prevMonthRange().from, to: prevMonthRange().to, state: _isPanIndiaAdmin() ? 'RAJASTHAN' : '', unit_code: _isPanIndiaAdmin() ? 'JA0' : '', metric: 'collection_pct', top_n: 10, period: 'month' },
   filterOpts: null, kpis: null, ranking: null,
   list: null, listPage: 1, listSearch: '', listSort: 'collection_pct', listSortDir: 'desc', _listKey: '',
   drillExec: '', drillExecName: '', drillExecData: null,
@@ -10354,7 +10399,7 @@ const spState = () => S.live.sp || (S.live.sp = {
   fromMonth: '', toMonth: '',
   availMonths: null,
   filterOpts: null,   // loaded once from /api/outstanding/filters
-  filters: { state: '', unit_code: '', zh_name: '', ag_status: '', payment_status: '' },
+  filters: _isPanIndiaAdmin() ? { state: 'RPPL', unit_code: 'JA0', zh_name: '', ag_status: '', payment_status: '' } : { state: '', unit_code: '', zh_name: '', ag_status: '', payment_status: '' },
   data: null, page: 1, summaryTab: 'state',
   drillState: null, drillZH: null, _loading: false,
 });
@@ -10418,7 +10463,7 @@ const arApi = p => `/api/agency-rating/${p}`;
 
 const arState = () => S.live.ar || (S.live.ar = {
   // filters
-  state: '', unit_code: '', grade: '', search: '', exec: '',
+  state: _isPanIndiaAdmin() ? 'RAJASTHAN' : '', unit_code: _isPanIndiaAdmin() ? 'JA0' : '', grade: '', search: '', exec: '',
   sort: 'composite', dir: 'desc', page: 1,
   // data
   summary: null, list: null, filters: null, config: null,
@@ -13754,6 +13799,11 @@ VIEWS.survey_dash = () => {
     const y = now.getFullYear(), mo = String(now.getMonth() + 1).padStart(2, '0'), d = String(now.getDate()).padStart(2, '0');
     if (S.live.sdvFrom === undefined) S.live.sdvFrom = `${y}-${mo}-01`;
     if (S.live.sdvTo   === undefined) S.live.sdvTo   = `${y}-${mo}-${d}`;
+  }
+  // PAN-India admin default (Rajasthan / Jaipur RP) — only on first load; the state
+  // code 'RA0' matches /api/readers/filters's own state option values.
+  if (S.live.sdvState === undefined && _isPanIndiaAdmin()) {
+    S.live.sdvState = 'RA0'; S.live.sdvUnit = 'JA0';
   }
 
   const tab = S.live.sdvTab || 'summary';

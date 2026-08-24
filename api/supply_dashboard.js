@@ -117,16 +117,20 @@ module.exports = function registerSupplyDash(ctx) {
       // (unit_code, unit_name, state_name) yields one row per state a unit touches —
       // the same unit_code repeated 3-4x with different state_name. Dedupe to one row
       // per unit here and attach its single dominant "home state" instead.
-      const [units, states, execs, uhs] = await Promise.all([
+      const [units, states, execs, uhs, dists] = await Promise.all([
         q(`SELECT DISTINCT unit_code, unit_name FROM supply_data WHERE 1=1${on(sc2, 'unit_code')} ORDER BY unit_name`, sc2.params),
         q(`SELECT DISTINCT state_name FROM supply_data WHERE state_name IS NOT NULL AND state_name<>''${on(sc2, 'unit_code')} ORDER BY state_name`, sc2.params),
         q(`SELECT DISTINCT executive_code, executive_name FROM agency_master
            WHERE executive_name IS NOT NULL${on(sc2, 'unit')} ORDER BY executive_name LIMIT 500`, sc2.params),
         unitHomeState(),
+        // Districts, per unit — drives the Command Centre's Unit -> District cascade.
+        q(`SELECT DISTINCT unit_code, dist_name FROM supply_data WHERE dist_name IS NOT NULL AND dist_name<>''${on(sc2, 'unit_code')} ORDER BY dist_name`, sc2.params),
       ]);
       const unitsDeduped = units.rows.map(u => ({ ...u, state_name: uhs[u.unit_code] || null }));
+      const unitDistricts = {};
+      dists.rows.forEach(r => { (unitDistricts[r.unit_code] = unitDistricts[r.unit_code] || []).push(r.dist_name); });
       const d = await refDates(req);
-      const data = { units: unitsDeduped, states: states.rows, executives: execs.rows, data_upto: d ? d.cur : null };
+      const data = { units: unitsDeduped, states: states.rows, executives: execs.rows, unit_districts: unitDistricts, data_upto: d ? d.cur : null };
       _supdFiltersCache.set(key, { data, exp: now + _SUPD_FILTERS_TTL });
       res.json(data);
     } catch (e) { res.status(500).json({ detail: String(e) }); }
@@ -360,27 +364,30 @@ module.exports = function registerSupplyDash(ctx) {
       if (!d) return res.json({ rows: [] });
       const sc2 = await scopeUnits(req);
       const S = on(sc2, 'unit_code');
+      const district = (req.query.district || '').trim();
+      const distCls = district ? ' AND dist_name = ?' : '';
+      const distP = district ? [district] : [];
       const g = req.query.granularity || 'daily';
       let sql, params;
       if (g === 'monthly') {
         sql = `SELECT DATE_FORMAT(supply_date,'%Y-%m') label,
                       SUM(sup_copy) copies, COUNT(DISTINCT supply_date) days,
                       ROUND(SUM(sup_copy)/COUNT(DISTINCT supply_date)) daily_avg
-               FROM supply_data WHERE 1=1${S} GROUP BY label ORDER BY label`;
-        params = sc2.params;
+               FROM supply_data WHERE 1=1${S}${distCls} GROUP BY label ORDER BY label`;
+        params = [...sc2.params, ...distP];
       } else if (g === 'yearly') {
         sql = `SELECT DATE_FORMAT(supply_date,'%Y') label,
                       SUM(sup_copy) copies, COUNT(DISTINCT supply_date) days,
                       ROUND(SUM(sup_copy)/COUNT(DISTINCT supply_date)) daily_avg
-               FROM supply_data WHERE 1=1${S} GROUP BY label ORDER BY label`;
-        params = sc2.params;
+               FROM supply_data WHERE 1=1${S}${distCls} GROUP BY label ORDER BY label`;
+        params = [...sc2.params, ...distP];
       } else {
         const days = Math.min(parseInt(req.query.days || '30', 10) || 30, 120);
         sql = `SELECT DATE_FORMAT(supply_date,'%Y-%m-%d') label, SUM(sup_copy) copies
                FROM supply_data
-               WHERE supply_date > DATE_SUB(?, INTERVAL ${days} DAY)${S}
+               WHERE supply_date > DATE_SUB(?, INTERVAL ${days} DAY)${S}${distCls}
                GROUP BY label ORDER BY label`;
-        params = [d.cur, ...sc2.params];
+        params = [d.cur, ...sc2.params, ...distP];
       }
       const { rows } = await q(sql, params);
       res.json({ data_upto: d.cur, granularity: g, rows });
@@ -396,6 +403,9 @@ module.exports = function registerSupplyDash(ctx) {
       const sc2 = await scopeUnits(req);
       const S = on(sc2, 'unit_code');
       const mode = String(req.query.mode || 'prev');
+      const district = (req.query.district || '').trim();
+      const distCls = district ? ' AND s.dist_name = ?' : '';
+      const distP = district ? [district] : [];
 
       // Baseline must be a data-complete day: partially-synced days (a few stray rows)
       // produce absurd +4000% comparisons, so skip days below 30% of current-day volume.
@@ -421,14 +431,14 @@ module.exports = function registerSupplyDash(ctx) {
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
              FROM supply_data s ${AGENT_JOIN}
-             WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${on(sc2, 's.unit_code')}
+             WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${on(sc2, 's.unit_code')}${distCls}
              GROUP BY s.unit_code, s.agcd`
         : `SELECT COALESCE(NULLIF(s.state_name,''),'OTHER') gkey,
                   COALESCE(NULLIF(s.state_name,''),'OTHER') glabel, s.agcd,
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
              FROM supply_data s ${AGENT_JOIN}
-             WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${on(sc2, 's.unit_code')}
+             WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${on(sc2, 's.unit_code')}${distCls}
              GROUP BY gkey, s.agcd`;
       const { rows } = await q(
         `SELECT gkey, MAX(glabel) glabel,
@@ -443,7 +453,7 @@ module.exports = function registerSupplyDash(ctx) {
                 SUM(CASE WHEN cur = 0 THEN prv ELSE 0 END) closed_copies,
                 SUM(CASE WHEN prv = 0 THEN cur ELSE 0 END) new_copies
          FROM (${inner}) x GROUP BY gkey ORDER BY cur DESC`,
-        [d.cur, baseDate, d.cur, baseDate, ...sc2.params]);
+        [d.cur, baseDate, d.cur, baseDate, ...sc2.params, ...distP]);
 
       res.json({
         cur_date: d.cur, base_date: baseDate, mode, group,
