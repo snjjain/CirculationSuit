@@ -2761,31 +2761,58 @@ app.get('/api/outstanding/filters', async (req, res) => {
 });
 
 // GET /api/outstanding/kpis — primary KPI cards
+// Outstanding is a BALANCE, not a period flow, so it is read from a snapshot rather
+// than summed over a date range. 'CURRENT' is the live balance as on today; the
+// monthly labels ('YYYY-MM') are month-end snapshots the sync writes. Callers wanting
+// a past month pass period_label=YYYY-MM; anything with no rows falls back to CURRENT
+// and the response reports which snapshot was actually used, so the UI can date it
+// honestly instead of silently showing today's balance under a past period's heading.
+// Ageing is measured against the snapshot's own as-on date (month-end for a monthly
+// snapshot, today for CURRENT) — using CURDATE() for a past snapshot would age every
+// balance by however long ago that month was.
 app.get('/api/outstanding/kpis', async (req, res) => {
   try {
     const { clause, params } = ouFilters(req.query);
     const sc = await getOuScopeFilter(req);
+    const wanted = String(req.query.period_label || 'CURRENT').trim();
+    let label = 'CURRENT';
+    if (/^\d{4}-\d{2}$/.test(wanted)) {
+      const chk = await q(
+        `SELECT 1 FROM agency_outstanding ao WHERE period_label = ? ${clause}${sc.clause} LIMIT 1`,
+        [wanted, ...params, ...sc.params]);
+      if (chk.rows.length) label = wanted;
+    }
+    // As-on date drives the ageing cut-off; LAST_DAY() of the snapshot month, else today.
+    const asOnSql = label === 'CURRENT' ? 'CURDATE()' : `LAST_DAY(?)`;
+    const asOnP   = label === 'CURRENT' ? [] : [`${label}-01`];
     const r = await q(`
       SELECT
         /* Agency counts: unit+ag_code is the unique agency identity; DPCD=1 is a
            main agency, DPCD>1 a sub-agency — only main agencies are counted. */
         SUM(CASE WHEN CAST(dp_code AS UNSIGNED) = 1 THEN 1 ELSE 0 END) total_agencies,
         SUM(CASE WHEN CAST(dp_code AS UNSIGNED) = 1 AND cl_amt > 0 THEN 1 ELSE 0 END) agencies_with_outstanding,
-        SUM(CASE WHEN CAST(dp_code AS UNSIGNED) = 1 AND cl_amt > 0 AND (last_supply_date IS NULL OR DATEDIFF(CURDATE(), last_supply_date) > 30) THEN 1 ELSE 0 END) overdue_ag_count,
+        SUM(CASE WHEN CAST(dp_code AS UNSIGNED) = 1 AND cl_amt > 0 AND (last_supply_date IS NULL OR DATEDIFF(${asOnSql}, last_supply_date) > 30) THEN 1 ELSE 0 END) overdue_ag_count,
         SUM(CASE WHEN CAST(dp_code AS UNSIGNED) = 1 AND cl_amt >= 100000 THEN 1 ELSE 0 END) critical_count,
         SUM(bill_amt) total_billed,
         SUM(CASE WHEN rec_amt > bill_amt * 10 AND rec_amt > 1000000 THEN 0 ELSE rec_amt END + other_cr) total_collected,
         SUM(CASE WHEN cl_amt > 0 THEN cl_amt ELSE 0 END) total_outstanding,
         SUM(op_amt) op_total,
-        SUM(CASE WHEN cl_amt > 0 AND last_supply_date IS NOT NULL AND DATEDIFF(CURDATE(), last_supply_date) > 30 THEN cl_amt ELSE 0 END) overdue_outstanding,
+        SUM(CASE WHEN cl_amt > 0 AND last_supply_date IS NOT NULL AND DATEDIFF(${asOnSql}, last_supply_date) > 30 THEN cl_amt ELSE 0 END) overdue_outstanding,
         SUM(CASE WHEN cl_amt >= 100000 THEN cl_amt ELSE 0 END) critical_outstanding
       FROM agency_outstanding ao
-      WHERE period_label='CURRENT' ${clause}${sc.clause}
-    `, [...params, ...sc.params]);
+      WHERE period_label = ? ${clause}${sc.clause}
+    `, [...asOnP, ...asOnP, label, ...params, ...sc.params]);
     const d = r.rows[0] || {};
     const N = v => Number(v) || 0;
     const billed = N(d.total_billed), collected = N(d.total_collected);
+    const asOn = label === 'CURRENT' ? null : (() => {
+      const [y, m] = label.split('-').map(Number);
+      return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);   // month-end
+    })();
     res.json({
+      period_label:            label,          // snapshot actually used
+      as_on:                   asOn,           // null = live balance (today)
+      requested_period_label:  wanted,
       total_agencies:          N(d.total_agencies),
       agencies_with_outstanding: N(d.agencies_with_outstanding),
       overdue_ag_count:        N(d.overdue_ag_count),

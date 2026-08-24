@@ -3238,11 +3238,22 @@ function _cmdLoad() {
   // taxi supply-issues feed (a today-only vehicle snapshot with no agency dimension).
   const distP = f.district  ? 'district='  + encodeURIComponent(f.district)  : '';
   const exP   = f.exec_name ? 'exec_name=' + encodeURIComponent(f.exec_name) : '';
+  // Outstanding is a balance, not a flow, so it follows the period by SNAPSHOT rather
+  // than by date range. Only month-end snapshots exist (plus the live CURRENT one), so
+  // a period that closed in an earlier month reads that month's snapshot; anything
+  // running up to today — Today, This month, Quarter — is the live balance. Yesterday
+  // is also live: no daily outstanding history is kept, and inventing one would be worse
+  // than a figure that legitimately does not move for a one-day step.
+  const ouSnapP = (() => {
+    if (f.period !== 'last_month') return '';
+    const t = new Date(period.to);
+    return 'period_label=' + t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0');
+  })();
   const qs = (...parts) => { const s = parts.filter(Boolean).join('&'); return s ? '?' + s : ''; };
 
   if (!c.ou && !c._ouLoading) {
     c._ouLoading = true;
-    fetch(_cmdBase() + '/api/outstanding/kpis' + qs(uP, distP, exP), { headers: api.h() })
+    fetch(_cmdBase() + '/api/outstanding/kpis' + qs(uP, distP, exP, ouSnapP), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.ou = d; c._ouLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._ouLoading = false; c.ou = { _err: true }; if (S.screen === 'command') render(); });
@@ -3270,10 +3281,14 @@ function _cmdLoad() {
       .then(d => { c.sv = d; c._svLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._svLoading = false; c.sv = { _err: true }; if (S.screen === 'command') render(); });
   }
-  // Supply's sale-summary is a day-over-day comparison, not a period aggregate — branch-filterable, not period-filterable.
+  // Supply is a daily copies figure, so sale-summary reads the period's endpoints
+  // rather than summing it: current = last supply day in range, previous = first.
+  // Sending the range makes the card follow the period. Note supply syncs overnight,
+  // so picking "Today" before the sync lands legitimately returns no_data — the card
+  // says so rather than showing a stale yesterday figure under today's heading.
   if (!c.sup && !c._supLoading) {
     c._supLoading = true;
-    fetch(_cmdBase() + '/api/supply-dash/sale-summary' + qs(uP, sPFull, distP, exP), { headers: api.h() })
+    fetch(_cmdBase() + '/api/supply-dash/sale-summary' + qs(uP, sPFull, distP, exP, dP), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.sup = d; c._supLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._supLoading = false; c.sup = { _err: true }; if (S.screen === 'command') render(); });
@@ -3329,6 +3344,15 @@ function _cmdFmtC(n) {
   if (a >= 1e7) return s + '₹' + (a / 1e7).toFixed(2) + ' Cr';
   if (a >= 1e5) return s + '₹' + (a / 1e5).toFixed(2) + ' L';
   return s + '₹' + a.toLocaleString('en-IN');
+}
+
+// 'YYYY-MM-DD' -> '31 Jul 2026' (used to date the Outstanding snapshot on its card)
+function _cmdD(iso) {
+  if (!iso) return '';
+  const d = new Date(String(iso).slice(0, 10) + 'T00:00:00');
+  if (isNaN(d)) return String(iso).slice(0, 10);
+  const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return d.getDate() + ' ' + M[d.getMonth()] + ' ' + d.getFullYear();
 }
 
 function _cmdBar(pct, color) {
@@ -3705,16 +3729,25 @@ VIEWS.command = () => {
   const cashNote  = sup && sup.agent_only && hasCashCentres
     ? ' · Agent Sale only — Cash is city sale, not split by district' : '';
   const cashVal   = sup && sup.cash ? (Number(sup.cash.current) || 0).toLocaleString('en-IN') : null;
-  const supLbl    = !sup || sup._err || sup.no_data ? 'Latest Supply · Agent+Cash'
-    : (!hasCashCentres ? 'Latest Supply · Agent (credit sale branch)'
-      : sup.agent_only ? 'Latest Supply · Agent' : 'Latest Supply · Agent+Cash');
+  const supHead   = 'Supply · ' + cmdPeriodLabel;
+  const supLbl    = !sup || sup._err || sup.no_data ? supHead
+    : (!hasCashCentres ? supHead + ' · Agent (credit sale branch)'
+      : sup.agent_only ? supHead + ' · Agent' : supHead + ' · Agent+Cash');
+  // Supply syncs overnight, so "Today" has no row until it lands. Say that rather than
+  // falling back to the last synced day under a "Today" heading.
+  const supPending = sup && !sup._err && sup.no_data;
+  // Outstanding is a balance: as_on is null for the live CURRENT snapshot, else the
+  // month-end date of the snapshot actually used (server decides and reports back).
+  const ouAsOn    = ou && !ou._err && ou.as_on ? _cmdD(ou.as_on) : null;
   const strip = [
-    { val: sup && !sup._err && !sup.no_data ? (Number(sup.total.current) || 0).toLocaleString('en-IN') : (c._supLoading ? '…' : '—'),
+    { val: sup && !sup._err && !sup.no_data ? (Number(sup.total.current) || 0).toLocaleString('en-IN') : (c._supLoading ? '…' : (supPending ? '—' : '—')),
       lbl: supLbl, icon: '📦', color: 'var(--blue)', goto: "go('supply_dash')",
-      sub: sup && !sup._err && !sup.no_data ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + (cashVal != null && hasCashCentres ? ' · Cash ' + cashVal : '') + ' · ' + sup.data_upto + cashNote : '' },
+      sub: supPending ? 'Not synced yet for this period — supply loads overnight'
+        : (sup && !sup._err ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + (cashVal != null && hasCashCentres ? ' · Cash ' + cashVal : '') + ' · ' + sup.data_upto + cashNote : '') },
     { val: ou && !ou._err ? _cmdFmtC(ou.total_outstanding)      : (c._ouLoading ? '…' : '—'),
-      lbl: 'Outstanding · As on Today', icon: '💰', color: 'var(--red)', goto: "go('outstanding')",
-      sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies' : '' },
+      lbl: 'Outstanding · ' + (ouAsOn ? 'As on ' + ouAsOn : 'As on Today'), icon: '💰', color: 'var(--red)', goto: "go('outstanding')",
+      sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies'
+        + (!ouAsOn && (cf.period === 'today' || cf.period === 'yesterday') ? ' · live balance, no daily history' : '') : '' },
     { val: co && !co._err ? _cmdFmtC(co.total_collection)        : (c._coLoading ? '…' : '—'),
       lbl: cmdPeriodLabel + ' Collections', icon: '₹',  color: 'var(--grn)', goto: "go('collections')",
       sub: co && !co._err ? (co.total_txn||0).toLocaleString('en-IN') + ' transactions' : '' },
@@ -3835,7 +3868,7 @@ VIEWS.command = () => {
     <!-- main card grid -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       ${_cmdModuleCard({
-        icon:'💰', title:'Agency Outstanding', period:'Balance as on today',
+        icon:'💰', title:'Agency Outstanding', period: ouAsOn ? 'Month-end balance as on ' + ouAsOn : 'Balance as on today',
         onClick:"go('outstanding')", accent:'var(--red)',
         kpis: ouKpis, footer: ouFooter,
         loading: !ou && !c._ouError, error: ou?._err,
@@ -3851,7 +3884,8 @@ VIEWS.command = () => {
         badgeColor: 'var(--grn)',
       })}
       ${_cmdModuleCard({
-        icon:'📦', title:'Supply', period:(sup && (sup.agent_only || !hasCashCentres) ? 'Agent only · ' : 'Agent + Cash · ') + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…') + cashNote,
+        icon:'📦', title:'Supply', period: supPending ? cmdPeriodLabel + ' · not synced yet (supply loads overnight)'
+          : (sup && (sup.agent_only || !hasCashCentres) ? 'Agent only · ' : 'Agent + Cash · ') + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…') + cashNote,
         onClick:"go('supply_dash')", accent:'var(--blue)',
         kpis: supKpis, footer: supFooter,
         loading: !sup && c._supLoading, error: sup?._err,
