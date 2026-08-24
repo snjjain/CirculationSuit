@@ -3515,6 +3515,21 @@ VIEWS.command = () => {
   const cmdPeriodLabel = { month: 'This Month', last_month: 'Last Month', quarter: 'Quarter' }[cf.period] || 'This Month';
   const cmdPeriod = _cmdPeriodRange(cf.period);
 
+  // Header subtitle: Supply/Collections/Field Intelligence are Oracle-synced overnight, so
+  // they reflect through yesterday (D-1), not today — labeling that "Live · <today>" reads
+  // as same-day data when it isn't. Outstanding is a genuine point-in-time snapshot (already
+  // says "As on Today" on its own card) and Taxi tracks in near-real-time, so only note the
+  // exception rather than pretend everything lags.
+  const _cmdFmtDate = iso => {
+    if (!iso) return '';
+    const [y, m, dd] = String(iso).slice(0, 10).split('-').map(Number);
+    return new Date(y, m - 1, dd).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  };
+  const cmdDataDate = (sup && !sup._err && !sup.no_data && sup.data_upto) ? _cmdFmtDate(sup.data_upto) : null;
+  const cmdSubtitle = cmdDataDate
+    ? `Data as of ${cmdDataDate} · Outstanding &amp; Taxi update in real-time`
+    : 'Loading latest data…';
+
   /* ── Agency Outstanding — point-in-time balance, never a period sum ── */
   let ouKpis, ouFooter;
   if (ou && !ou._err) {
@@ -3624,8 +3639,8 @@ VIEWS.command = () => {
   /* ── Top KPI strip data ─────────────────────────────────── */
   const strip = [
     { val: sup && !sup._err && !sup.no_data ? (Number(sup.total.current) || 0).toLocaleString('en-IN') : (c._supLoading ? '…' : '—'),
-      lbl: 'Supply Today · Agent+Cash', icon: '📦', color: 'var(--blue)', goto: "go('supply_dash')",
-      sub: sup && !sup._err && !sup.no_data ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + ' · Cash ' + (Number(sup.cash.current) || 0).toLocaleString('en-IN') : '' },
+      lbl: 'Latest Supply · Agent+Cash', icon: '📦', color: 'var(--blue)', goto: "go('supply_dash')",
+      sub: sup && !sup._err && !sup.no_data ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + ' · Cash ' + (Number(sup.cash.current) || 0).toLocaleString('en-IN') + ' · ' + sup.data_upto : '' },
     { val: ou && !ou._err ? _cmdFmtC(ou.total_outstanding)      : (c._ouLoading ? '…' : '—'),
       lbl: 'Outstanding · As on Today', icon: '💰', color: 'var(--red)', goto: "go('outstanding')",
       sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies' : '' },
@@ -3704,7 +3719,7 @@ VIEWS.command = () => {
     ${cf.state || cf.unit_code || cf.period !== 'month' ? `<button onclick="cmdResetFilters()" style="padding:7px 14px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--muted);font-size:12px;cursor:pointer">✕ Reset filters</button>` : ''}
   </div>`;
 
-  return pagehead('Command Centre', 'Live data summary · ' + TODAY) + filterBar + `
+  return pagehead('Command Centre', cmdSubtitle) + filterBar + `
     <style>
       ._cmd-card{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:16px 18px;transition:box-shadow .15s,border-color .15s}
       ._cmd-card[onclick]:hover{box-shadow:0 4px 20px rgba(0,0,0,.11);border-color:var(--acc)}
