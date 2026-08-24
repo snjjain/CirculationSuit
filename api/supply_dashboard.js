@@ -798,7 +798,7 @@ module.exports = function registerSupplyDash(ctx) {
       res.json({
         ...winMeta(w), unit_code: unit, by, district: district || null, total,
         rows: rows.map(r => ({
-          label: r.label, agents: N(r.agents), supply: N(r.supply), prev_supply: N(r.prev_supply),
+          label: r.label, agcd: by === 'agency' ? r.agcd : null, agents: N(r.agents), supply: N(r.supply), prev_supply: N(r.prev_supply),
           net_change: N(r.supply) - N(r.prev_supply), growth_pct: r1(pct(N(r.supply), N(r.prev_supply))),
           contribution_pct: total ? r1(N(r.supply) / total * 100) : null,
         })),

@@ -2891,7 +2891,7 @@ app.get('/api/outstanding/top', async (req, res) => {
     };
     const sort = sortMap[req.query.sort] || 'cl_amt DESC';
     const rows = await q(`
-      SELECT ag_code, ag_name, unit_name, city_name, ag_type, ag_status,
+      SELECT ag_code, unit_code, ag_name, unit_name, city_name, ag_type, ag_status,
              op_amt, bill_amt, rec_amt, other_cr, cl_amt,
              last_supply_date, last_supply_copies,
              DATEDIFF(CURDATE(), last_supply_date) days_since_supply,
@@ -3769,14 +3769,17 @@ app.get('/api/collection/agencies', async (req, res) => {
     const { clause: rc, params: rp } = colFilters(req.query);
     const clause = rc + sc.clause, params = [...rp, ...sc.params];
     const limit = Math.min(parseInt(req.query.limit||'200',10), 500);
+    // GROUP BY must include unit_code, not just ag_code — an agency code is only unique
+    // within its unit (same gotcha as agency_master's real key), so grouping by ag_code
+    // alone silently merges collection totals from unrelated same-coded agencies.
     const rows = await q(`
-      SELECT ag_code, MAX(ag_name) ag_name, MAX(branch_name) branch_name, MAX(state_name) state_name,
+      SELECT ag_code, unit_code, MAX(ag_name) ag_name, MAX(branch_name) branch_name, MAX(state_name) state_name,
              -COALESCE(SUM(amount),0) total_amount, COUNT(*) txn,
              MAX(coll_date) last_payment_date,
              DATEDIFF(CURDATE(), MAX(coll_date)) days_since
       FROM agency_collection
       WHERE is_valid=1 ${clause}
-      GROUP BY ag_code
+      GROUP BY unit_code, ag_code
       ORDER BY total_amount DESC
       LIMIT ${limit}
     `, params);
@@ -4320,6 +4323,9 @@ require('./exec_targets')({ app, q, getScopeUnitCodes });
 
 // ── Agency Rating Engine ───────────────────────────────────────────────────────
 require('./agency_rating')({ app, q, getScopeUnitCodes });
+
+// ── Agency 360° Profile — single-agency drill-down landing page ────────────────
+require('./agency_profile')({ app, q, getScopeUnitCodes });
 
 // ── Strategic AI Nexus — proactive circulation-boss briefing & tour planning ──
 require('./ai_nexus')({ app, q, getScopeUnitCodes, getOuScopeFilter, computeInsights: insightsApi.computeInsights });

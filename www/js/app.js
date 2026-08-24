@@ -1658,48 +1658,202 @@ function _dcrAExecsTab() {
 }
 
 /* ── Agency drill-down modal ── */
-window._dcrADrillAgency = async (agcd, name, unitCode) => {
-  modal(`<div style="color:var(--ink-2);font-size:13px;padding:24px 0;text-align:center">Loading visit history for ${esc(name)}…</div>`);
-  try {
-    const ucQs = unitCode ? `&unit_code=${encodeURIComponent(unitCode)}` : '';
-    const d = await api.get(`/api/dcr-analytics/agency-visits/${encodeURIComponent(agcd)}?from=${_dcrA.from}&to=${_dcrA.to}${ucQs}`);
-    if (!d) { document.querySelector('.modal')&&(document.querySelector('.modal').innerHTML+=`<p style="color:var(--red)">Failed to load</p>`); return; }
-    const ag = d.agency || {};
-    const allVisits = [
-      ...(d.oracle_visits||[]).map(v=>({...v, exec: v.executive_name, date: v.visit_date, purpose: v.visit_purpose, remarks: v.visit_remarks, status: v.call_status, time: v.from_time&&v.till_time?v.from_time+' – '+v.till_time:v.from_time||''})),
-      ...(d.app_visits||[]).map(v=>({...v, exec: v.staff_name, date: v.visit_date, purpose: v.purpose, remarks: v.remarks, status: v.outcome, time: v.check_in?String(v.check_in).slice(11,16):''})),
-    ].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-    const statusLabel = ag.supply_stop_flag === 'Y' || (ag.suspend_date && new Date(ag.suspend_date) <= new Date()) ? 'Inactive' : 'Active';
-    modal(`<h3 style="margin-bottom:4px">${esc(ag.ag_name || name)}</h3>
-      <div style="font-size:12px;color:var(--ink-2);margin-bottom:14px">
-        Code: <b>${esc(agcd)}</b> &nbsp;·&nbsp; Unit: <b>${esc(ag.unit||'—')}</b> &nbsp;·&nbsp; District: <b>${esc(ag.dist_name||'—')}</b>
-        &nbsp;·&nbsp; Status: <b style="color:${statusLabel==='Active'?'var(--grn)':'var(--red)'}">${statusLabel}</b>
-        &nbsp;·&nbsp; Class: <b>${esc(ag.ag_class_name||'—')}</b>
-        ${ag.outstanding!=null?`&nbsp;·&nbsp; Outstanding: <b style="color:var(--red)">${fmtC(Number(ag.outstanding))}</b>`:''}
+// Every "agency name" click in the app routes through the Agency 360° Profile
+// page (see openAgencyProfile below) — this DCR-specific name is kept as a
+// thin alias since ~7 call sites across DCR views still call it directly.
+window._dcrADrillAgency = (agcd, name, unitCode) => {
+  if (!unitCode) { toast('Cannot open profile — unit unknown for this agency'); return; }
+  window.openAgencyProfile(unitCode, agcd, name);
+};
+
+/* ══════════════════ Agency 360° Profile — one landing page per agency,
+   the single entry point every "agency name" click in the app routes
+   through (DCR, Supply Dashboard, Collections, Agency Outstanding). ══ */
+function apState() {
+  S.agencyProfile = S.agencyProfile || { unitCode: null, agcd: null, name: null, data: null, loading: false, err: null, returnScreen: 'command' };
+  return S.agencyProfile;
+}
+window.openAgencyProfile = (unitCode, agcd, name) => {
+  if (!unitCode || !agcd) { toast('Agency code or unit missing'); return; }
+  const st = apState();
+  if (st.unitCode !== unitCode || st.agcd !== agcd) { st.data = null; st.err = null; }
+  if (S.screen !== 'agency_profile') st.returnScreen = S.screen;
+  st.unitCode = unitCode; st.agcd = agcd; st.name = name || agcd;
+  go('agency_profile');
+};
+window.apBack = () => go(apState().returnScreen || 'command');
+window.apRetry = () => { const st = apState(); st.err = null; st.data = null; render(); };
+
+function _apFmtC(n) {
+  n = Number(n) || 0; const a = Math.abs(n);
+  let s; if (a >= 1e7) s = (a / 1e7).toFixed(2) + ' Cr'; else if (a >= 1e5) s = (a / 1e5).toFixed(2) + ' L'; else s = Math.round(a).toLocaleString('en-IN');
+  return (n < 0 ? '-' : '') + '₹' + s;
+}
+function _apFmtN(n) { return n == null ? '—' : Number(n).toLocaleString('en-IN'); }
+function _apDaysAgo(n) { return n == null ? 'Never' : n === 0 ? 'Today' : n === 1 ? '1 day ago' : n + ' days ago'; }
+
+const AP_STATUS_STYLE = {
+  'Healthy':            { color: 'var(--grn)',    bg: 'var(--grn-l, #e8f8ee)',  icon: '✅' },
+  'Growth Opportunity': { color: 'var(--blue)',   bg: 'var(--blue-l, #e8f1fc)', icon: '🚀' },
+  'Risk':               { color: 'var(--red)',    bg: '#fde8e8',                icon: '⚠️' },
+  'Underperforming':    { color: 'var(--gold-d)', bg: '#fef3c7',                icon: '📉' },
+};
+const AP_TAG_LABEL = {
+  URGENT_ACTION: 'Urgent Action', WIN_BACK: 'Win-back Opportunity', SUPPLY_AT_RISK: 'Supply At Risk',
+  VISIT_OVERDUE: 'Visit Overdue', COLLECTION_RECOVERY: 'Collection Recovery',
+  NO_VISIT_HISTORY: 'No Visit History', MONITOR: 'Monitor',
+};
+
+function _apFetch() {
+  const st = apState();
+  if (st.loading || st.data || st.err) return;
+  st.loading = true;
+  fetch(`${api.base}/api/agency-profile/${encodeURIComponent(st.unitCode)}/${encodeURIComponent(st.agcd)}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => {
+      st.loading = false;
+      if (d && d.detail) { st.err = d.detail; } else { st.data = d; }
+      if (S.screen === 'agency_profile') render();
+    })
+    .catch(() => { st.err = 'Network error'; st.loading = false; if (S.screen === 'agency_profile') render(); });
+}
+
+function _apMonthBars(rows, key, color, unitLabel) {
+  const asc = [...rows].reverse(); // API gives DESC by month; show chronologically
+  const max = Math.max(1, ...asc.map(r => Number(r[key]) || 0));
+  return asc.map(r => {
+    const v = Number(r[key]) || 0;
+    const pct = Math.round(v / max * 100);
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:11px">
+      <span style="width:52px;color:var(--ink-2)">${esc(r.month)}</span>
+      <div style="flex:1;height:8px;background:var(--surface-2);border-radius:4px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${color}"></div></div>
+      <span style="width:76px;text-align:right;font-weight:600">${_apFmtN(v)}${unitLabel || ''}</span>
+    </div>`;
+  }).join('') || `<div style="color:var(--ink-2);font-size:12px">No data</div>`;
+}
+
+function _apCard(icon, title, bodyHtml) {
+  return `<div class="card" style="padding:16px">
+    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-2);margin-bottom:10px">${icon} ${title}</div>
+    ${bodyHtml}
+  </div>`;
+}
+
+function _apVisitRow(v) {
+  const purpose = fmtPurpose(v.purpose);
+  const amt = [];
+  if (v.amount_collected) amt.push(`<span style="color:var(--grn)">✓ ${_apFmtC(v.amount_collected)} collected</span>`);
+  if (v.commitment_amount) amt.push(`<span style="color:var(--gold-d)">↻ ${_apFmtC(v.commitment_amount)} promised${v.commitment_date ? ' by ' + esc(v.commitment_date) : ''}</span>`);
+  if (v.copies_committed) amt.push(`<span style="color:var(--blue)">+${v.copies_committed} copies committed</span>`);
+  return `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
+    <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px">
+      <b>${esc(v.date || '—')}</b>
+      <span style="color:var(--ink-2)">${esc(v.executive || '—')}${v.time ? ' · ' + esc(v.time) : ''}</span>
+    </div>
+    ${purpose ? `<div style="font-size:11px;color:var(--ink-2);margin-top:2px">${esc(purpose)}</div>` : ''}
+    ${v.remarks ? `<div style="font-size:12px;margin-top:3px">${remHtml(v.remarks)}</div>` : ''}
+    ${amt.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;font-size:11px;font-weight:600">${amt.join('')}</div>` : ''}
+  </div>`;
+}
+
+VIEWS.agency_profile = () => {
+  const st = apState();
+  _apFetch();
+  const header = `<div style="margin-bottom:10px"><button class="btn sm" onclick="apBack()">← Back</button></div>`;
+  if (st.err) return header + `<div class="card pad" style="color:var(--red)">${esc(st.err)} <button class="btn sm" style="margin-left:8px" onclick="apRetry()">Retry</button></div>`;
+  if (!st.data) return header + `<div class="card pad" style="color:var(--ink-2)">Loading ${esc(st.name || 'agency')} profile…</div>`;
+
+  const d = st.data, id = d.identity, m = d.metrics, orisk = d.opportunity_risk;
+  const ss = AP_STATUS_STYLE[d.status] || AP_STATUS_STYLE.Healthy;
+  const idLine = [id.dist_name, id.city_name, id.unit_name, id.exec_name].filter(Boolean).map(esc).join(' &nbsp;·&nbsp; ');
+
+  const identityCard = `<div class="card" style="padding:18px;margin-bottom:14px">
+    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:flex-start">
+      <div>
+        <div style="font-size:20px;font-weight:800">${esc(id.ag_name)}</div>
+        <div style="font-size:12px;color:var(--ink-2);margin-top:3px">${idLine}</div>
+        <div style="font-size:11px;color:var(--ink-3);margin-top:2px">Code ${esc(id.agcd)} · ${esc(id.unit_code)}${id.station_code ? ' · Station ' + esc(id.station_code) : ''}${id.mobile_no1 ? ' · 📞 ' + esc(id.mobile_no1) : ''}</div>
+        ${id.exec_location ? `<div style="font-size:11px;color:var(--ink-3);margin-top:2px">👔 Executive base: ${esc(id.exec_location.address || (id.exec_location.lat + ', ' + id.exec_location.lng))}</div>` : ''}
       </div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:6px">Visit History — ${allVisits.length} visits &nbsp;<span style="font-weight:400;color:var(--ink-3)">${_dcrA.from} to ${_dcrA.to}</span></div>
-      <div style="max-height:400px;overflow-y:auto">
-      <table class="tbl" style="font-size:12px">
-        <thead><tr><th>Date</th><th>Time</th><th>Executive</th><th>Type</th><th>Remarks</th><th>Status</th></tr></thead>
-        <tbody>
-        ${allVisits.map(v=>{
-          const purpose = fmtPurpose(v.purpose);
-          const rem = remHtml(v.remarks||'');
-          return `<tr>
-            <td style="white-space:nowrap">${esc(v.date||'—')}</td>
-            <td style="color:var(--ink-2);white-space:nowrap;font-size:11px">${esc(v.time||'—')}</td>
-            <td>${esc(v.exec||'—')}</td>
-            <td style="font-size:11px;color:var(--ink-2)">${purpose?esc(purpose):'—'}</td>
-            <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${rem}">${rem||'—'}</td>
-            <td style="font-size:11px">${esc(v.status||'—')}</td>
-          </tr>`;
-        }).join('')||`<tr><td colspan="6" style="text-align:center;color:var(--ink-2)">No visits recorded</td></tr>`}
-        </tbody>
-      </table></div>
-      <div style="margin-top:14px">
-        <button class="btn" onclick="closeModals()">Close</button>
-      </div>`);
-  } catch(e) { console.error(e); }
+      <div style="background:${ss.bg};color:${ss.color};border-radius:10px;padding:8px 16px;font-weight:700;font-size:13px;white-space:nowrap">${ss.icon} ${esc(d.status)}</div>
+    </div>
+  </div>`;
+
+  const trendArrow = m.supply_trend_pct == null ? '' : m.supply_trend_pct >= 0 ? '▲' : '▼';
+  const trendStatus = m.supply_trend_pct == null ? 'mute' : m.supply_trend_pct >= 0 ? 'good' : 'bad';
+  const collStatus = m.collection_efficiency_pct == null ? 'mute' : m.collection_efficiency_pct >= 80 ? 'good' : m.collection_efficiency_pct >= 50 ? 'warn' : 'bad';
+  const visitStatus = m.last_visit_days_ago == null ? 'bad' : m.last_visit_days_ago <= 7 ? 'good' : m.last_visit_days_ago <= 21 ? 'warn' : 'bad';
+  const chips = `<div class="vz-kgrid" style="margin-bottom:14px">
+    ${vzKpi({ icon: '📦', label: 'Current Supply', value: _apFmtN(m.current_supply) + ' cp', status: 'info' })}
+    ${vzKpi({ icon: '📈', label: 'Supply Trend', value: (m.supply_trend_pct == null ? '—' : trendArrow + ' ' + Math.abs(m.supply_trend_pct) + '%'), sub: 'vs last month', status: trendStatus })}
+    ${vzKpi({ icon: '💳', label: 'Collection Efficiency', value: (m.collection_efficiency_pct == null ? '—' : m.collection_efficiency_pct + '%'), status: collStatus })}
+    ${vzKpi({ icon: '💰', label: 'Outstanding', value: _apFmtC(m.outstanding), status: m.outstanding > 100000 ? 'bad' : m.outstanding > 0 ? 'warn' : 'good' })}
+    ${vzKpi({ icon: '🎯', label: 'Growth Potential', value: '+' + _apFmtN(m.growth_potential_copies) + ' cp', status: m.growth_potential_copies > 0 ? 'info' : 'mute' })}
+    ${vzKpi({ icon: '🗓', label: 'Last Visit', value: _apDaysAgo(m.last_visit_days_ago), sub: m.last_visit_date || '', status: visitStatus })}
+  </div>`;
+
+  const brief = `<div class="card" style="padding:16px;margin-bottom:14px;border-left:4px solid ${ss.color}">
+    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-2);margin-bottom:8px">🤖 AI Agency Brief</div>
+    <div style="font-size:13.5px;line-height:1.5">${esc(d.ai_brief.summary)}</div>
+  </div>`;
+
+  const perfBody = `<div style="font-size:11px;color:var(--ink-2);margin-bottom:6px">Supply (copies/month)</div>
+    ${_apMonthBars(d.trends.supply_history, 'total_supply', 'var(--blue)')}
+    <div style="font-size:11px;color:var(--ink-2);margin:10px 0 6px">Collection (₹/month)</div>
+    ${_apMonthBars(d.trends.collection_history, 'collection', 'var(--grn)')}`;
+
+  const riskBody = `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+      ${orisk.tags.map(t => `<span style="background:var(--surface-2);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600">${AP_TAG_LABEL[t] || t}</span>`).join('')}
+    </div>
+    <div style="font-size:12.5px"><b>Expected outcome:</b> ${esc(orisk.expected_outcome)}</div>
+    ${orisk.decline_pct != null ? `<div style="font-size:12px;color:var(--ink-2);margin-top:6px">30-day peak: ${_apFmtN(orisk.peak30_supply)} cp · change ${orisk.decline_pct}%</div>` : ''}`;
+
+  const visitBody = d.visits.length
+    ? `<div style="max-height:280px;overflow-y:auto">${d.visits.slice(0, 15).map(_apVisitRow).join('')}</div>`
+    : `<div style="color:var(--ink-2);font-size:12px">No visits recorded in the last 6 months</div>`;
+
+  const nearbyBody = d.nearby.length
+    ? d.nearby.map(n => `<div onclick="openAgencyProfile('${esc(id.unit_code)}','${esc(n.agcd).replace(/'/g, "\\'")}','${esc(n.ag_name).replace(/'/g, "\\'")}')" style="cursor:pointer;padding:6px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:12px">
+        <span><b style="color:var(--primary)">${esc(n.ag_name)}</b> <span style="color:var(--ink-2)">${n.distance_km} km</span></span>
+        <span style="color:${n.outstanding > 0 ? 'var(--red)' : 'var(--ink-2)'}">${n.outstanding > 0 ? _apFmtC(n.outstanding) : ''}</span>
+      </div>`).join('')
+    : `<div style="color:var(--ink-2);font-size:12px">No agencies within 5km with a GPS fix on record</div>`;
+
+  const issuesBody = d.issues.length
+    ? d.issues.map(i => `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
+        <b>${esc(i.date || '—')}</b> <span style="color:var(--ink-2)">${esc(i.executive || '')}</span>
+        <div style="margin-top:2px">${remHtml((i.remarks || '').slice(0, 140))}</div>
+      </div>`).join('')
+    : `<div style="color:var(--ink-2);font-size:12px">No complaint-flagged remarks in the last 6 months</div>`;
+
+  const collBody = d.collection_recent.length
+    ? `<div style="max-height:220px;overflow-y:auto"><table class="tbl" style="font-size:12px;width:100%">
+        <thead><tr><th style="text-align:left">Date</th><th style="text-align:left">Mode</th><th class="r">Amount</th></tr></thead>
+        <tbody>${d.collection_recent.map(c => `<tr><td>${esc(c.date)}</td><td style="color:var(--ink-2)">${esc(c.payment_mode || '—')}</td><td class="r">${_apFmtC(c.amount)}</td></tr>`).join('')}</tbody>
+      </table></div>`
+    : `<div style="color:var(--ink-2);font-size:12px">No collection transactions in the last 90 days</div>`;
+
+  const sixCards = `<div class="two" style="margin-bottom:14px">
+      ${_apCard('📈', 'Performance Trends', perfBody)}
+      ${_apCard('🚀', 'Opportunity &amp; Risk', riskBody)}
+    </div>
+    <div class="two" style="margin-bottom:14px">
+      ${_apCard('🎯', 'Visit Intelligence', visitBody)}
+      ${_apCard('📍', 'Nearby Agency Intelligence', nearbyBody)}
+    </div>
+    <div class="two" style="margin-bottom:14px">
+      ${_apCard('⚠️', 'Issues &amp; Complaints', issuesBody)}
+      ${_apCard('💰', 'Collection Insights', collBody)}
+    </div>`;
+
+  const nba = `<div class="card" style="padding:16px;border-left:4px solid var(--gold-d)">
+    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-2);margin-bottom:8px">🧠 AI Next Best Action</div>
+    <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.7">
+      ${d.next_best_action.map(a => `<li>${esc(a)}</li>`).join('')}
+    </ul>
+  </div>`;
+
+  return header + identityCard + chips + brief + sixCards + nba;
 };
 
 /* ── DCR drill-down modals ── */
@@ -4101,7 +4255,10 @@ function _supdSaleDrill(st) {
     const dqs = qs ? '&' + qs.slice(1) : '';
     _supdFetch('drillAgencies', `/api/supply-dash/agent/branch/${encodeURIComponent(st.drillUnit)}?by=agency&district=${encodeURIComponent(st.drillDistrict)}${dqs}`);
     const dd = st.drillAgencies;
-    body = !dd ? _cmdSkel() : _supdDrillTable(dd, 'Agency', r => `<td>${esc(r.label)}</td>`, mode, dd.total);
+    const unitQ = esc(st.drillUnit).replace(/'/g, "\\'");
+    body = !dd ? _cmdSkel() : _supdDrillTable(dd, 'Agency',
+      r => `<td>${r.agcd ? `<span onclick="openAgencyProfile('${unitQ}','${esc(r.agcd).replace(/'/g, "\\'")}','${esc(r.label).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.label)}</span>` : esc(r.label)}</td>`,
+      mode, dd.total);
   } else {
     const opts = mode === 'agent'
       ? [['district', '📍 District Wise'], ['executive', '👔 Executive Wise']]
@@ -6650,8 +6807,10 @@ function colOverviewTab() {
   const maxAgAmt = topAg.length ? Math.max(...topAg.map(r=>Number(r.total_amount)||0)) : 1;
   const goto = tab => `colState().tab='${tab}';render()`;
   const top5 = topAg.map((r,i) => {
-    const nameQ = (r.ag_name||r.ag_code||'').replace(/'/g, "\\'");
-    return `<tr style="cursor:pointer" onclick="colState().tab='agencies';colState().agSearch='${esc(nameQ)}';render()" title="Click to find this agency in Agency Rankings">
+    const nameQ = esc(r.ag_name||r.ag_code||'').replace(/'/g, "\\'");
+    const codeQ = esc(r.ag_code).replace(/'/g, "\\'");
+    const unitQ = esc(r.unit_code||'').replace(/'/g, "\\'");
+    return `<tr style="cursor:pointer" onclick="openAgencyProfile('${unitQ}','${codeQ}','${nameQ}')" title="View agency profile">
     <td style="color:var(--muted);font-size:12px;width:28px">#${i+1}</td>
     <td><b style="font-size:13px;color:var(--chart-1)">${esc(r.ag_name||r.ag_code||'')}</b><br><small style="color:var(--muted)">${esc(r.branch_name||'')}</small></td>
     <td class="r num">${colFmtC(r.total_amount)}</td>
@@ -6901,7 +7060,7 @@ function colAgenciesTab() {
     return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
   });
 
-  const agRow = (r, i) => `<tr>
+  const agRow = (r, i) => `<tr onclick="openAgencyProfile('${esc(r.unit_code||'').replace(/'/g,"\\'")}','${esc(r.ag_code).replace(/'/g,"\\'")}','${esc(r.ag_name||r.ag_code||'').replace(/'/g,"\\'")}')" style="cursor:pointer" title="View agency profile">
     <td style="color:var(--muted);font-size:12px;width:28px">#${i+1}</td>
     <td><b>${esc(r.ag_name||r.ag_code||'')}</b><br><small style="color:var(--muted)">${esc(r.ag_code||'')} · ${esc(r.branch_name||'')}</small></td>
     <td class="r num">${colFmtC(r.total_amount)}</td>
@@ -8147,7 +8306,7 @@ function ouAgenciesTab() {
           const days = Number(r.days_since_supply)||0;
           const overdueAmt = days > 30 ? Number(r.cl_amt)||0 : 0;
           const currAmt   = days <= 30 ? Number(r.cl_amt)||0 : 0;
-          return `<tr style="${i%2?'background:var(--surface-2)':''}">
+          return `<tr style="${i%2?'background:var(--surface-2)':''}cursor:pointer" onclick="openAgencyProfile('${esc(r.unit_code||'').replace(/'/g,"\\'")}','${esc(r.ag_code).replace(/'/g,"\\'")}','${esc(r.ag_name||r.ag_code||'').replace(/'/g,"\\'")}')" title="View agency profile">
             <td style="padding:5px 8px;color:var(--muted);white-space:nowrap">${esc(r.ag_code)}</td>
             <td style="padding:5px 8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.ag_name)}">${esc(r.ag_name)}</td>
             <td style="padding:5px 8px;white-space:nowrap">${esc(r.unit_name||r.unit_code||'')}</td>
@@ -8209,7 +8368,7 @@ function ouTopTab() {
     const risk = r.risk_status || 'Low';
     const pct  = (Number(r.cl_amt) / maxAmt * 100).toFixed(1);
     const days = Number(r.days_since_supply) || 0;
-    return `<div class="card" style="padding:12px 14px;margin-bottom:6px">
+    return `<div class="card" style="padding:12px 14px;margin-bottom:6px;cursor:pointer" onclick="openAgencyProfile('${esc(r.unit_code||'').replace(/'/g,"\\'")}','${esc(r.ag_code||'').replace(/'/g,"\\'")}','${esc(r.ag_name||r.ag_code||'').replace(/'/g,"\\'")}')" title="View agency profile">
       <div style="display:flex;align-items:flex-start;gap:10px">
         <div style="font-size:18px;font-weight:800;color:var(--muted);min-width:28px;text-align:right">#${i+1}</div>
         <div style="flex:1;min-width:0">
