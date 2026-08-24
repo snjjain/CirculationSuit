@@ -1156,7 +1156,7 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
       const [agR, visitR, osR, supR] = await Promise.all([
         // dpcd=1 → main agency only (dpcd>1 = sub-agency of same agcd)
-        q(`SELECT agcd, ag_name, unit_name, executive_name,
+        q(`SELECT unit, agcd, ag_name, unit_name, executive_name,
                   COALESCE(city_name, dist_name) city_name
            FROM agency_master
            WHERE CAST(dpcd AS UNSIGNED) = 1
@@ -1164,12 +1164,12 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
              AND (supply_stop_flag IS NULL OR supply_stop_flag != 'Y')
              AND suspend_date IS NULL${amCl} LIMIT 5000`, amP),
 
-        q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, COUNT(*) cnt
+        q(`SELECT unit_code, visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, COUNT(*) cnt
            FROM dcr_agency_visit
            WHERE mark_attn_date BETWEEN ? AND ? AND visit_to_main_code IS NOT NULL${sc}
-           GROUP BY visit_to_main_code`, [from, to, ...sp]),
+           GROUP BY unit_code, visit_to_main_code`, [from, to, ...sp]),
 
-        q(`SELECT ag_code, cl_amt FROM agency_outstanding
+        q(`SELECT unit_code, ag_code, cl_amt FROM agency_outstanding
            WHERE period_label='CURRENT' AND cl_amt > 0${osCl}`, amP),
 
         // Avg daily supply last 60 days — unit_code+agcd is the unique key
@@ -1179,11 +1179,14 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
            GROUP BY unit_code, agcd`, amP),
       ]);
 
-      // Key all maps by "unit_code|agcd" so same agcd across different units doesn't collide
+      // Key all maps by "unit_code|agcd" — agcd is unique only within a unit (see
+      // dcr_analytics.js's resolveAgency pattern), so a bare-agcd key can mix data
+      // from an unrelated same-coded agency in another unit.
+      const key = (u, a) => `${u}|${a}`;
       const visitMap = {}, osMap = {}, supMap = {};
-      for (const r of visitR.rows) visitMap[r.ag_code] = { last: r.last_visit, cnt: +r.cnt };
-      for (const r of osR.rows) osMap[r.ag_code] = +r.cl_amt;
-      for (const r of supR.rows) supMap[r.agcd] = +r.avg_daily;
+      for (const r of visitR.rows) visitMap[key(r.unit_code, r.ag_code)] = { last: r.last_visit, cnt: +r.cnt };
+      for (const r of osR.rows) osMap[key(r.unit_code, r.ag_code)] = +r.cl_amt;
+      for (const r of supR.rows) supMap[key(r.unit_code, r.agcd)] = +r.avg_daily;
 
       const fromD = new Date(from), toD = new Date(to);
       const rangeDays = Math.max(1, Math.round((toD - fromD) / 86400000));
@@ -1191,13 +1194,14 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
 
       const notVisited = [], rarely = [], covered = [];
       for (const ag of agR.rows) {
-        const v = visitMap[ag.agcd] || {};
+        const k = key(ag.unit, ag.agcd);
+        const v = visitMap[k] || {};
         const cnt = v.cnt || 0;
-        const os  = osMap[ag.agcd] || 0;
-        const rec = { agcd: ag.agcd, ag_name: ag.ag_name, unit_name: ag.unit_name,
+        const os  = osMap[k] || 0;
+        const rec = { agcd: ag.agcd, unit_code: ag.unit, ag_name: ag.ag_name, unit_name: ag.unit_name,
                       exec: ag.executive_name, city: ag.city_name || '',
                       last_visit: v.last || null, visit_count: cnt,
-                      outstanding: os, avg_supply: supMap[ag.agcd] || 0 };
+                      outstanding: os, avg_supply: supMap[k] || 0 };
         if (!cnt) notVisited.push(rec);
         else if (cnt < minCnt) rarely.push(rec);
         else covered.push(rec);

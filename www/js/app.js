@@ -1188,7 +1188,8 @@ function _initTourMap() {
       <br><span style="font-size:11px">${v.from_time||''}${v.till_time?' – '+v.till_time:''} ${durMin?'('+durMin+'m)':''}</span>
       ${fmtPurpose(v.purpose)?`<br><span style="font-size:11px;color:#2563eb">${esc(fmtPurpose(v.purpose))}</span>`:''}
       ${v.remarks?`<br><span style="font-size:11px;color:#374151;font-style:italic">"${remHtml((v.remarks||'').slice(0,120))}"</span>`:''}
-      ${v.distance_from_prev!=null?`<br><span style="font-size:11px;color:#6b7280">📏 ${v.distance_from_prev} km from prev stop</span>`:''}`;
+      ${v.distance_from_prev!=null?`<br><span style="font-size:11px;color:#6b7280">📏 ${v.distance_from_prev} km from prev stop</span>`:''}
+      ${v.agcd?`<br><a href="#" onclick="event.preventDefault();openAgencyProfile('${esc(v.unit_code||'').replace(/'/g,"\\'")}','${esc(v.agcd).replace(/'/g,"\\'")}','${esc(v.ag_name||v.agcd||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#2563eb;font-weight:600">View profile →</a>`:''}`;
     L.marker([v.lat, v.lng], { icon: L.divIcon({ className: '', html: `<div style="background:#2563eb;color:#fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.4)">${num}</div>`, iconAnchor:[13,13] }) })
       .addTo(_dcrTourMap).bindPopup(popup);
   });
@@ -1197,7 +1198,8 @@ function _initTourMap() {
   missed.forEach(ag => {
     L.marker([ag.lat, ag.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#f59e0b;color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:10px;box-shadow:0 2px 4px rgba(0,0,0,.3)">!</div>', iconAnchor:[10,10] }) })
       .addTo(_dcrTourMap)
-      .bindPopup(`<b style="color:#f59e0b">⚠ Missed Nearby</b><br>${esc(ag.ag_name)}<br><span style="font-size:11px;color:#6b7280">${esc(ag.city||'')} · ${ag.nearest_dist_km} km away</span>`);
+      .bindPopup(`<b style="color:#f59e0b">⚠ Missed Nearby</b><br>${esc(ag.ag_name)}<br><span style="font-size:11px;color:#6b7280">${esc(ag.city||'')} · ${ag.nearest_dist_km} km away</span>
+        <br><a href="#" onclick="event.preventDefault();openAgencyProfile('${esc(ag.unit_code||'').replace(/'/g,"\\'")}','${esc(ag.agcd).replace(/'/g,"\\'")}','${esc(ag.ag_name||ag.agcd||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#2563eb;font-weight:600">View profile →</a>`);
   });
 }
 
@@ -2381,7 +2383,7 @@ function _dcrACoverageTab() {
     <div style="font-size:11px;color:var(--ink-2);margin-top:6px">${d.from} to ${d.to} · ${total} active agencies in scope</div>
   </div>`;
 
-  const agRow = (ag, badge) => `<tr>
+  const agRow = (ag, badge) => `<tr onclick="openAgencyProfile('${esc(ag.unit_code||'').replace(/'/g,"\\'")}','${esc(ag.agcd).replace(/'/g,"\\'")}','${esc(ag.ag_name||ag.agcd||'').replace(/'/g,"\\'")}')" style="cursor:pointer" title="View agency profile">
     <td><b style="font-size:12px">${esc(ag.ag_name)}</b><br><span style="font-size:10px;color:var(--ink-2)">${esc(ag.agcd)} · ${esc(ag.city||'')}</span></td>
     <td style="font-size:11px;color:var(--ink-2)">${esc(ag.unit_name||'')}</td>
     <td style="font-size:11px">${esc(ag.exec||'—')}</td>
@@ -2451,7 +2453,7 @@ function _dcrARemarksTab() {
     return `<tr style="vertical-align:top">
       <td style="white-space:nowrap;font-size:11px;color:var(--ink-2)">${String(v.visit_date||'').slice(0,10)}</td>
       <td style="font-size:11px"><b>${esc(v.executive_name||v.emp_code||'')}</b><br><span style="color:var(--ink-2)">${esc(v.unit_name||v.unit_code||'')}</span></td>
-      <td style="font-size:11px;white-space:normal"><b>${esc(v.ag_name||v.ag_code||'')}</b></td>
+      <td style="font-size:11px;white-space:normal">${v.ag_code?`<b style="cursor:pointer;color:var(--chart-1)" onclick="openAgencyProfile('${esc(v.unit_code||'').replace(/'/g,"\\'")}','${esc(v.ag_code).replace(/'/g,"\\'")}','${esc(v.ag_name||v.ag_code||'').replace(/'/g,"\\'")}')" title="View agency profile">${esc(v.ag_name||v.ag_code||'')}</b>`:`<b>${esc(v.ag_name||'')}</b>`}</td>
       <td style="font-size:10px;color:var(--ink-2)">${esc((v.visit_purpose||'').slice(0,25))}</td>
       <td style="font-size:11px;min-width:200px;max-width:260px;white-space:normal;word-break:break-word;color:var(--ink)">${esc((v.visit_remarks||'').slice(0,160))}${(v.visit_remarks||'').length > 160 ? '…' : ''}</td>
       ${hasAi ? `
@@ -6965,9 +6967,22 @@ function colGeoTab() {
   } else {
     colGeoGet('geoAgencies', 'exec-agencies', { branch: st.drillUnitName || st.drillUnit, exec: st.drillExec });
     title = esc(st.drillExec) + ' — Agencies'; sub = esc(st.drillUnitName || st.drillUnit) + ' · collection by agency';
-    data = st.geoAgencies; cols = ['Agency', '>Last Paid', '>Txn', '>Collection'];
-    rowFn = r => `<td style="font-weight:600">${esc(r.ag_name || r.ag_code)}<small style="display:block;color:var(--muted);font-weight:400">${esc(r.ag_code)}</small></td>
-      <td class="r" style="font-size:11px;color:var(--muted)">${r.last_date ? String(r.last_date).slice(0,10) : '—'}${r.days_since!=null?` · ${r.days_since}d`:''}</td><td class="r num">${(r.txn||0).toLocaleString()}</td><td class="r num">${colFmtC(r.amount)}</td>`;
+    data = st.geoAgencies;
+    cols = ['Agency', 'Unit', 'District', 'Station', '>Last Paid', '>Txn', '>Last Month Bill', '>Receipt This Month', '>Diff', '>Collection'];
+    rowFn = r => {
+      const diffColor = r.diff == null ? 'var(--muted)' : r.diff >= 0 ? 'var(--grn)' : 'var(--red)';
+      return `<td style="cursor:pointer" onclick="openAgencyProfile('${esc(r.unit_code||'').replace(/'/g,"\\'")}','${esc(r.ag_code).replace(/'/g,"\\'")}','${esc(r.ag_name||r.ag_code||'').replace(/'/g,"\\'")}')" title="View agency profile">
+        <b style="color:var(--chart-1)">${esc(r.ag_name || r.ag_code)}</b><small style="display:block;color:var(--muted);font-weight:400">${esc(r.ag_code)}</small></td>
+      <td style="font-size:12px">${esc(r.unit_name || r.unit_code || '—')}</td>
+      <td style="font-size:12px">${esc(r.district_name || '—')}</td>
+      <td style="font-size:12px">${esc(r.station_code || '—')}</td>
+      <td class="r" style="font-size:11px;color:var(--muted)">${r.last_date ? String(r.last_date).slice(0,10) : '—'}${r.days_since!=null?` · ${r.days_since}d`:''}</td>
+      <td class="r num">${(r.txn||0).toLocaleString()}</td>
+      <td class="r num">${r.last_month_bill!=null?colFmtC(r.last_month_bill):'—'}</td>
+      <td class="r num">${r.receipt_this_month!=null?colFmtC(r.receipt_this_month):'—'}</td>
+      <td class="r num" style="color:${diffColor};font-weight:600">${r.diff!=null?(r.diff>=0?'+':'-')+colFmtC(r.diff):'—'}</td>
+      <td class="r num">${colFmtC(r.amount)}</td>`;
+    };
   }
 
   const rows = (data && data.rows) || [];
@@ -6985,7 +7000,13 @@ function colGeoTab() {
     const numCell = v => `<td class="r num">${v}</td>`;
     let midCells;
     if (!st.drillRegion)      midCells = numCell(tUnits) + numCell(tAg.toLocaleString()) + numCell(tTxn.toLocaleString());   // State
-    else if (st.drillExec)    midCells = `<td></td>` + numCell(tTxn.toLocaleString());                                      // Agencies
+    else if (st.drillExec) {                                                                                                  // Agencies
+      const tBill = rows.reduce((a, r) => a + (Number(r.last_month_bill) || 0), 0);
+      const tRec  = rows.reduce((a, r) => a + (Number(r.receipt_this_month) || 0), 0);
+      const tDiff = tRec - tBill;
+      midCells = `<td></td><td></td><td></td><td></td>` + numCell(tTxn.toLocaleString()) + numCell(colFmtC(tBill)) + numCell(colFmtC(tRec))
+        + `<td class="r num" style="color:${tDiff >= 0 ? 'var(--grn)' : 'var(--red)'}">${tDiff >= 0 ? '+' : '-'}${colFmtC(tDiff)}</td>`;
+    }
     else                      midCells = numCell(tAg.toLocaleString()) + numCell(tTxn.toLocaleString());                    // Unit / Exec
     body += `<tr style="font-weight:800;background:var(--navy);color:#fff"><td>Total</td>${midCells}${numCell(colFmtC(tAmt))}</tr>`;
   }

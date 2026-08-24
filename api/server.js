@@ -3824,7 +3824,7 @@ function colRegionWhere(region) {
   return { clause: ` AND UPPER(state_name) = ?`, params: [r] };
 }
 // Agency → executive map (main-agency rows of the agency master).
-const COL_EXEC_JOIN = `LEFT JOIN (SELECT unit, agcd, MAX(executive_name) executive_name FROM agency_master GROUP BY unit, agcd) am ON am.unit = ac.unit_code AND am.agcd = ac.ag_code`;
+const COL_EXEC_JOIN = `LEFT JOIN (SELECT unit, agcd, MAX(executive_name) executive_name, MAX(unit_name) unit_name, MAX(dist_name) dist_name, MAX(station_code) station_code FROM agency_master GROUP BY unit, agcd) am ON am.unit = ac.unit_code AND am.agcd = ac.ag_code`;
 
 // GET /api/collection/behavior-trend — agency payment-mode behaviour, 3 levels
 // level=state → state summary; level=unit → units within ?state=; level=agency → per-agency 6-month pivot
@@ -3966,19 +3966,59 @@ app.get('/api/collection/exec-summary', async (req, res) => {
 // GET /api/collection/exec-agencies?branch=UNIT&exec=NAME — Level 4 (an executive's agencies)
 app.get('/api/collection/exec-agencies', async (req, res) => {
   try {
+    const N = v => Number(v) || 0;
+    const R1 = v => v == null ? null : Math.round(v * 10) / 10;
     const sc = await getColScopeFilter(req, 'ac');
     const { clause: rc, params: rp } = colFilters(req.query);
     const exec = String(req.query.exec || '').trim();
     const clause = rc + sc.clause, params = [...rp, ...sc.params, exec];
+    // GROUP BY must include unit_code, not just ag_code — an agency code is only unique
+    // within its unit (same gotcha fixed on /api/collection/agencies).
     const { rows } = await q(`
-      SELECT ac.ag_code, MAX(ac.ag_name) ag_name,
+      SELECT ac.ag_code, ac.unit_code, MAX(ac.ag_name) ag_name, MAX(ac.district_name) district_name,
+             MAX(am.unit_name) unit_name, MAX(am.station_code) station_code,
              -COALESCE(SUM(ac.amount),0) amount, COUNT(*) txn,
              MAX(ac.coll_date) last_date, DATEDIFF(CURDATE(), MAX(ac.coll_date)) days_since
       FROM agency_collection ac ${COL_EXEC_JOIN}
       WHERE ac.is_valid=1 ${clause}
         AND COALESCE(NULLIF(am.executive_name,''),'(no executive)') = ?
-      GROUP BY ac.ag_code ORDER BY amount DESC LIMIT 300`, params);
-    res.json({ rows });
+      GROUP BY ac.unit_code, ac.ag_code ORDER BY amount DESC LIMIT 300`, params);
+
+    // Last month's bill (frozen monthly snapshot) vs this month's receipt so far (the
+    // running 'CURRENT' snapshot — the current month's own 'YYYY-MM' snapshot doesn't
+    // exist until month-end, per the billing snapshot convention), merged in JS
+    // (agency_outstanding is Oracle-synced, agency_collection is app-imported;
+    // different collations, no cross-table JOIN).
+    const now = new Date();
+    const lastMonthD = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthLabel = lastMonthD.toISOString().slice(0, 7);
+    const pairs = rows.map(r => [r.unit_code, r.ag_code]).filter(([u, a]) => u && a);
+    let osMap = {};
+    if (pairs.length) {
+      const ph = pairs.map(() => '(unit_code=? AND ag_code=?)').join(' OR ');
+      const { rows: osRows } = await q(
+        `SELECT unit_code, ag_code, period_label, bill_amt, rec_amt
+         FROM agency_outstanding WHERE period_label IN (?, 'CURRENT') AND (${ph})`,
+        [lastMonthLabel, ...pairs.flat()]
+      );
+      osRows.forEach(r => {
+        const k = r.unit_code + '|' + r.ag_code;
+        osMap[k] = osMap[k] || {};
+        if (r.period_label === lastMonthLabel) osMap[k].last_month_bill = N(r.bill_amt);
+        if (r.period_label === 'CURRENT') osMap[k].receipt_this_month = N(r.rec_amt);
+      });
+    }
+    res.json({
+      rows: rows.map(r => {
+        const os = osMap[r.unit_code + '|' + r.ag_code] || {};
+        const lastMonthBill = os.last_month_bill ?? null, receiptThisMonth = os.receipt_this_month ?? null;
+        return {
+          ...r,
+          last_month_bill: lastMonthBill, receipt_this_month: receiptThisMonth,
+          diff: (lastMonthBill != null && receiptThisMonth != null) ? R1(receiptThisMonth - lastMonthBill) : null,
+        };
+      }),
+    });
   } catch (e) { res.status(500).json({ detail: String(e) }); }
 });
 
