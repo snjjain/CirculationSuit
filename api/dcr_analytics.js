@@ -674,57 +674,71 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
         }
       }
 
-      // 5. Agency names for all visit agcds (oracle + app) — single param-based lookup, safe
+      // 5. Agency names for all visit agcds (oracle + app) — single param-based lookup, safe.
+      // agcd is unique only WITHIN a unit (agency_master's real key is unit+agcd), so the same
+      // code can belong to a different agency in another unit — resolve per-visit by unit_code,
+      // not by a flat agcd->row map, or a visit can pick up a same-coded agency from elsewhere.
       const agcds = [...new Set([
         ...oracleVisits.map(r => r.agcd),
         ...appVisits.map(r => r.agcd),
       ].filter(Boolean))];
-      let agMap = {};
+      let agByCode = {};
       if (agcds.length) {
         const ph = agcds.map(() => '?').join(',');
         const { rows: agRows } = await q(
-          `SELECT agcd, ag_name, city_name AS city, dist_name AS district FROM agency_master WHERE agcd IN (${ph})`,
+          `SELECT agcd, unit, ag_name, city_name AS city, dist_name AS district FROM agency_master WHERE agcd IN (${ph})`,
           agcds
         );
-        agRows.forEach(r => { agMap[r.agcd] = r; });
+        agRows.forEach(r => { (agByCode[r.agcd] = agByCode[r.agcd] || []).push(r); });
       }
+      const resolveAgency = (agcd, unitCd) => {
+        const cands = agByCode[agcd];
+        if (!cands || !cands.length) return null;
+        return cands.find(c => c.unit === unitCd) || cands[0];
+      };
 
       // 6. Build unified sorted visit list
       const visits = [
-        ...oracleVisits.map(r => ({
-          source: 'oracle',
-          id: r.id,
-          agcd: r.agcd,
-          ag_name: agMap[r.agcd]?.ag_name || r.agcd,
-          city: agMap[r.agcd]?.city || '',
-          district: agMap[r.agcd]?.district || '',
-          from_time: r.from_time || null,
-          till_time: r.till_time || null,
-          lat: validGps(r.lat, r.lng) ? Number(r.lat) : null,
-          lng: validGps(r.lat, r.lng) ? Number(r.lng) : null,
-          purpose: r.visit_purpose,
-          remarks: r.visit_remarks,
-          call_status: r.call_status,
-          followup_amount: r.followup_amount || 0,
-          unit_code: r.unit_code,
-        })),
-        ...appVisits.map(r => ({
-          source: 'app',
-          id: r.id,
-          agcd: r.agcd,
-          ag_name: r.ag_name || r.agcd,
-          city: '',
-          district: '',
-          from_time: fmtTime(r.ci),
-          till_time: fmtTime(r.co),
-          lat: validGps(r.lat, r.lng) ? Number(r.lat) : null,
-          lng: validGps(r.lat, r.lng) ? Number(r.lng) : null,
-          purpose: r.purpose,
-          remarks: r.remarks,
-          amount_collected: r.amount_collected || 0,
-          outcome: r.outcome,
-          unit_code: r.unit_code,
-        })),
+        ...oracleVisits.map(r => {
+          const am = resolveAgency(r.agcd, r.unit_code);
+          return {
+            source: 'oracle',
+            id: r.id,
+            agcd: r.agcd,
+            ag_name: am?.ag_name || r.agcd,
+            city: am?.city || '',
+            district: am?.district || '',
+            from_time: r.from_time || null,
+            till_time: r.till_time || null,
+            lat: validGps(r.lat, r.lng) ? Number(r.lat) : null,
+            lng: validGps(r.lat, r.lng) ? Number(r.lng) : null,
+            purpose: r.visit_purpose,
+            remarks: r.visit_remarks,
+            call_status: r.call_status,
+            followup_amount: r.followup_amount || 0,
+            unit_code: r.unit_code,
+          };
+        }),
+        ...appVisits.map(r => {
+          const am = resolveAgency(r.agcd, r.unit_code);
+          return {
+            source: 'app',
+            id: r.id,
+            agcd: r.agcd,
+            ag_name: r.ag_name || am?.ag_name || r.agcd,
+            city: am?.city || '',
+            district: am?.district || '',
+            from_time: fmtTime(r.ci),
+            till_time: fmtTime(r.co),
+            lat: validGps(r.lat, r.lng) ? Number(r.lat) : null,
+            lng: validGps(r.lat, r.lng) ? Number(r.lng) : null,
+            purpose: r.purpose,
+            remarks: r.remarks,
+            amount_collected: r.amount_collected || 0,
+            outcome: r.outcome,
+            unit_code: r.unit_code,
+          };
+        }),
       ].sort((a, b) => (a.from_time || '99:99').localeCompare(b.from_time || '99:99'));
 
       visits.forEach((v, i) => { v.seq = i + 1; });
@@ -801,13 +815,14 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
           if (!gpsMap2[r.agcd]) gpsMap2[r.agcd] = { lat: Number(r.lat), lng: Number(r.lng) };
         });
 
-        // Query B: agency names for those agcds (param-based, no JOIN)
+        // Query B: agency names for those agcds — scoped to this unit, since agcd is only
+        // unique within a unit and the GPS rows above are already unit_code-scoped.
         const unitAgcds = Object.keys(gpsMap2);
         if (unitAgcds.length) {
           const ph3 = unitAgcds.map(() => '?').join(',');
           const { rows: amRows } = await q(
-            `SELECT agcd, ag_name, city_name AS city FROM agency_master WHERE agcd IN (${ph3})`,
-            unitAgcds
+            `SELECT agcd, ag_name, city_name AS city FROM agency_master WHERE agcd IN (${ph3}) AND unit = ?`,
+            [...unitAgcds, unitCode]
           );
           const amMap = {};
           amRows.forEach(r => { amMap[r.agcd] = r; });
@@ -819,7 +834,7 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
             const minDist = Math.min(...chain.map(p => hav(p.lat, p.lng, g.lat, g.lng)));
             if (minDist <= NEARBY) {
               const am = amMap[agcd] || {};
-              missedAgencies.push({ agcd, ag_name: am.ag_name || agcd, city: am.city || '', lat: g.lat, lng: g.lng, nearest_dist_km: Math.round(minDist * 10) / 10 });
+              missedAgencies.push({ agcd, ag_name: am.ag_name || agcd, city: am.city || '', unit_code: unitCode, lat: g.lat, lng: g.lng, nearest_dist_km: Math.round(minDist * 10) / 10 });
             }
           });
         }
@@ -878,16 +893,23 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
         [from, to, ...sp, ...extraParams]
       );
 
-      // Get agency names separately (avoid cross-table JOIN collation issue)
+      // Get agency names separately (avoid cross-table JOIN collation issue). agcd is unique only
+      // WITHIN a unit, so resolve per-visit by unit_code — a flat agcd->row map can pick up a
+      // same-coded agency from a different unit.
       const agcds = [...new Set(visits.map(r => r.agcd).filter(Boolean))];
-      let agMap = {};
+      let agByCode = {};
       if (agcds.length) {
         const ph = agcds.map(() => '?').join(',');
         const { rows: agRows } = await q(
-          `SELECT agcd, ag_name, city_name AS city FROM agency_master WHERE agcd IN (${ph})`, agcds
+          `SELECT agcd, unit, ag_name, city_name AS city FROM agency_master WHERE agcd IN (${ph})`, agcds
         );
-        agRows.forEach(r => { agMap[r.agcd] = r; });
+        agRows.forEach(r => { (agByCode[r.agcd] = agByCode[r.agcd] || []).push(r); });
       }
+      const resolveAgency = (agcd, unitCd) => {
+        const cands = agByCode[agcd];
+        if (!cands || !cands.length) return null;
+        return cands.find(c => c.unit === unitCd) || cands[0];
+      };
 
       res.json({
         period: { from, to },
@@ -896,8 +918,8 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
           id: r.id,
           visit_date: r.visit_date,
           agcd: r.agcd,
-          ag_name: agMap[r.agcd]?.ag_name || r.agcd,
-          city: agMap[r.agcd]?.city || '',
+          ag_name: resolveAgency(r.agcd, r.unit_code)?.ag_name || r.agcd,
+          city: resolveAgency(r.agcd, r.unit_code)?.city || '',
           executive_name: r.executive_name,
           emp_code: r.emp_code,
           from_time: r.from_time,
@@ -999,27 +1021,34 @@ module.exports = function installDcrAnalytics({ app, q, getScopeUnitCodes }) {
       const { agcd } = req.params;
       const from = isDate(req.query.from) ? req.query.from : '2020-01-01';
       const to   = isDate(req.query.to)   ? req.query.to   : new Date().toISOString().slice(0,10);
+      // agcd is unique only WITHIN a unit — the same code can belong to a different agency in
+      // another unit, so a caller that knows which visit it came from should pass unit_code to
+      // disambiguate both which agency_master row this is and which unit's visit history to show.
+      const unitCode = (req.query.unit_code || '').trim();
+      const unitClauseAM = unitCode ? ' AND am.unit = ?' : '';
+      const unitClauseOra = unitCode ? ' AND unit_code = ?' : '';
+      const unitClauseApp = unitCode ? ' AND unit_code = ?' : '';
 
       const [agencyRes, oracleVisits, appVisits] = await Promise.all([
         q(`SELECT am.*, ao.cl_amt AS outstanding
            FROM agency_master am
            LEFT JOIN agency_outstanding ao ON ao.ag_code = am.agcd AND ao.period_label = 'CURRENT'
-           WHERE am.agcd = ? LIMIT 1`, [agcd]),
+           WHERE am.agcd = ?${unitClauseAM} LIMIT 1`, unitCode ? [agcd, unitCode] : [agcd]),
         q(`SELECT visit_date, visit_type, executive_name, emp_code,
                   visit_purpose, visit_remarks, call_status, followup_amount, followup_date,
                   from_time, till_time, lat_long_addr,
                   CAST(latitude AS DECIMAL(10,6)) lat, CAST(longitude AS DECIMAL(10,6)) lng,
                   next_visit_date, contact_mob_no
-           FROM dcr_agency_visit WHERE visit_to_main_code = ?
+           FROM dcr_agency_visit WHERE visit_to_main_code = ?${unitClauseOra}
              AND visit_date BETWEEN ? AND ?
-           ORDER BY visit_date DESC, id DESC LIMIT 200`, [agcd, from, to]),
+           ORDER BY visit_date DESC, id DESC LIMIT 200`, unitCode ? [agcd, unitCode, from, to] : [agcd, from, to]),
         q(`SELECT visit_date, target_type, staff_name, staff_person_code,
                   purpose, remarks, outcome, payment_mode, payment_type,
                   amount_collected, outstanding_amount, copies_committed,
                   check_in, check_out, lat, lng, created_at
-           FROM dcr_visit WHERE target_code = ? AND target_type = 'agent'
+           FROM dcr_visit WHERE target_code = ? AND target_type = 'agent'${unitClauseApp}
              AND visit_date BETWEEN ? AND ?
-           ORDER BY visit_date DESC, id DESC LIMIT 200`, [agcd, from, to]),
+           ORDER BY visit_date DESC, id DESC LIMIT 200`, unitCode ? [agcd, unitCode, from, to] : [agcd, from, to]),
       ]);
 
       const agency = agencyRes.rows[0] || {};

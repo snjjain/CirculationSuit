@@ -1303,7 +1303,7 @@ function _dcrATourTab() {
         const em=v.till_time?parseInt(v.till_time)*60+parseInt((v.till_time||'').split(':')[1]||0):null;
         const dur=(sm&&em&&em>sm)?((em-sm)+'m'):'—';
         const purpose = fmtPurpose(v.purpose);
-        return `<tr onclick="${v.agcd?`_dcrADrillAgency('${esc(v.agcd)}','${esc(v.ag_name||v.agcd||'')}')`:''}" style="cursor:${v.agcd?'pointer':'default'}" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
+        return `<tr onclick="${v.agcd?`_dcrADrillAgency('${esc(v.agcd)}','${esc(v.ag_name||v.agcd||'')}','${esc(v.unit_code||'')}')`:''}" style="cursor:${v.agcd?'pointer':'default'}" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
           <td style="color:var(--ink-2);text-align:center">${v.seq}</td>
           <td><b style="color:var(--primary)">${esc(v.ag_name||v.agcd||'—')}</b>${v.city?`<span style="font-size:10px;color:var(--ink-2)"> ${esc(v.city)}</span>`:''}</td>
           <td style="white-space:nowrap;color:var(--ink-2)">${v.from_time||'—'}${v.till_time?' – '+v.till_time:''}</td>
@@ -1321,7 +1321,7 @@ function _dcrATourTab() {
     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--orange);margin-bottom:8px">⚠ ${missedAg.length} Nearby Unvisited Agencies (within 5 km of route)</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px">
-      ${missedAg.map(ag=>`<div onclick="_dcrADrillAgency('${esc(ag.agcd)}','${esc(ag.ag_name||ag.agcd||'')}')" role="button" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:11.5px;cursor:pointer" onmouseenter="this.style.borderColor='var(--orange)'" onmouseleave="this.style.borderColor='var(--border)'">
+      ${missedAg.map(ag=>`<div onclick="_dcrADrillAgency('${esc(ag.agcd)}','${esc(ag.ag_name||ag.agcd||'')}','${esc(ag.unit_code||'')}')" role="button" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:11.5px;cursor:pointer" onmouseenter="this.style.borderColor='var(--orange)'" onmouseleave="this.style.borderColor='var(--border)'">
         <b>${esc(ag.ag_name||ag.agcd)}</b>&nbsp;<span style="color:var(--ink-2)">${esc(ag.city||'')}</span>
         <span style="color:var(--orange);margin-left:6px">${ag.nearest_dist_km} km</span>
       </div>`).join('')}
@@ -1599,7 +1599,7 @@ function _initDcrAgencyMap() {
         <div style="margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0"><b>Last DCR Visit:</b><br>${esc(lastVisit)}</div>
         ${fmtPurpose(a.last_purpose)?`<div><b>Purpose:</b> ${esc(fmtPurpose(a.last_purpose))}</div>`:''}
         ${a.last_remarks?`<div><b>Remarks:</b> ${remHtml(a.last_remarks).slice(0,160)}</div>`:''}
-        <div style="margin-top:8px"><a href="#" onclick="event.preventDefault();_dcrADrillAgency('${esc(a.agcd)}','${esc(a.ag_name)}')" style="color:#2563eb;font-size:11px;font-weight:600">View visit history →</a></div>
+        <div style="margin-top:8px"><a href="#" onclick="event.preventDefault();_dcrADrillAgency('${esc(a.agcd)}','${esc(a.ag_name)}','${esc(a.unit_code||'')}')" style="color:#2563eb;font-size:11px;font-weight:600">View visit history →</a></div>
       </div>`, { maxWidth: 280 }
     );
     markerGroup.addLayer(marker);
@@ -1658,10 +1658,11 @@ function _dcrAExecsTab() {
 }
 
 /* ── Agency drill-down modal ── */
-window._dcrADrillAgency = async (agcd, name) => {
+window._dcrADrillAgency = async (agcd, name, unitCode) => {
   modal(`<div style="color:var(--ink-2);font-size:13px;padding:24px 0;text-align:center">Loading visit history for ${esc(name)}…</div>`);
   try {
-    const d = await api.get(`/api/dcr-analytics/agency-visits/${encodeURIComponent(agcd)}?from=${_dcrA.from}&to=${_dcrA.to}`);
+    const ucQs = unitCode ? `&unit_code=${encodeURIComponent(unitCode)}` : '';
+    const d = await api.get(`/api/dcr-analytics/agency-visits/${encodeURIComponent(agcd)}?from=${_dcrA.from}&to=${_dcrA.to}${ucQs}`);
     if (!d) { document.querySelector('.modal')&&(document.querySelector('.modal').innerHTML+=`<p style="color:var(--red)">Failed to load</p>`); return; }
     const ag = d.agency || {};
     const allVisits = [
@@ -1718,7 +1719,7 @@ window._dcrADrillVisitList = async (empCode, empName) => {
       <table class="tbl" style="font-size:12px;min-width:560px">
         <thead><tr><th>Date</th><th>Time</th><th>Agency</th><th>Executive</th><th>Remarks</th><th>GPS</th></tr></thead>
         <tbody>
-        ${visits.map(v=>`<tr onclick="_dcrADrillAgency('${esc(v.agcd)}','${esc(v.ag_name||v.agcd||'')}')" style="cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
+        ${visits.map(v=>`<tr onclick="_dcrADrillAgency('${esc(v.agcd)}','${esc(v.ag_name||v.agcd||'')}','${esc(v.unit_code||'')}')" style="cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
           <td style="white-space:nowrap">${esc(v.visit_date||'—')}</td>
           <td style="color:var(--ink-2);font-size:11px;white-space:nowrap">${esc(v.from_time||'—')}</td>
           <td style="color:var(--primary)"><b>${esc(v.ag_name||v.agcd||'—')}</b>${v.city?` <span style="font-size:10px;color:var(--ink-2)">${esc(v.city)}</span>`:''}</td>
@@ -1747,7 +1748,7 @@ window._dcrADrillPurpose = async (purpose) => {
       <table class="tbl" style="font-size:12px;min-width:500px">
         <thead><tr><th>Date</th><th>Agency</th><th>Executive</th><th>Remarks</th></tr></thead>
         <tbody>
-        ${visits.map(v=>`<tr onclick="_dcrADrillAgency('${esc(v.agcd)}','${esc(v.ag_name||v.agcd||'')}')" style="cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
+        ${visits.map(v=>`<tr onclick="_dcrADrillAgency('${esc(v.agcd)}','${esc(v.ag_name||v.agcd||'')}','${esc(v.unit_code||'')}')" style="cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
           <td style="white-space:nowrap">${esc(v.visit_date||'—')}</td>
           <td style="color:var(--primary)">${esc(v.ag_name||v.agcd||'—')}</td>
           <td style="font-size:11px">${esc(v.executive_name||'—')}</td>
@@ -1796,7 +1797,7 @@ window._dcrADrillUnvisited = async () => {
       <table class="tbl" style="font-size:12px;min-width:560px">
         <thead><tr><th style="text-align:left">Agency</th><th>Unit</th><th>District</th><th>Class</th><th class="r">Outstanding</th><th style="text-align:left">Assigned</th></tr></thead>
         <tbody>
-        ${agencies.map(a=>`<tr onclick="_dcrADrillAgency('${esc(a.agcd)}','${esc(a.ag_name||a.agcd||'')}')" style="cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
+        ${agencies.map(a=>`<tr onclick="_dcrADrillAgency('${esc(a.agcd)}','${esc(a.ag_name||a.agcd||'')}','${esc(a.unit_code||'')}')" style="cursor:pointer" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
           <td style="color:var(--primary)"><b>${esc(a.ag_name||a.agcd||'—')}</b> <span style="font-size:10px;color:var(--ink-2)">${esc(a.city||'')}</span></td>
           <td style="color:var(--ink-2)">${esc(a.unit_code||'—')}</td>
           <td style="color:var(--ink-2)">${esc(a.district||'—')}</td>
