@@ -3650,7 +3650,7 @@ window.supdUnit = u => {
   ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
   render();
 };
-const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'receipt', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'execBreakdown', 'covidSummary', 'covidAgentStates', 'covidCashStates', 'brStates', 'brBranches', 'brL2'].forEach(k => { st[k] = null; });
+const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'receipt', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'execBreakdown', 'covidSummary', 'covidAgentStates', 'covidCashStates', 'covidDrillState', 'covidDrillUnit', 'covidDrillUnitName', 'covidSummaryState', 'covidAgentBranches', 'covidCashBranches', 'covidSummaryUnit', 'covidAgentBranch', 'covidCashBranch', 'brStates', 'brBranches', 'brL2'].forEach(k => { st[k] = null; });
 // State dropdown: cascade the Unit list to that state (data refreshes when Apply is pressed)
 window.supdSetState = (v) => {
   const st = _supdState();
@@ -4073,7 +4073,25 @@ function _supdCovidQS(st) {
   if (st.unit) p.push('unit_code=' + encodeURIComponent(st.unit));
   return '?' + p.join('&');
 }
-window.supdCovidDate = v => { const st = _supdState(); st.covidDate = v; ['covidSummary', 'covidAgentStates', 'covidCashStates'].forEach(k => { st[k] = null; }); render(); };
+window.supdCovidDate = v => { const st = _supdState(); st.covidDate = v; ['covidSummary', 'covidAgentStates', 'covidCashStates', 'covidSummaryState', 'covidAgentBranches', 'covidCashBranches', 'covidSummaryUnit', 'covidAgentBranch', 'covidCashBranch'].forEach(k => { st[k] = null; }); render(); };
+window.supdCovidDrillState = function(stateName) {
+  const st = _supdState();
+  st.covidDrillState = stateName; st.covidDrillUnit = null; st.covidDrillUnitName = null;
+  ['covidSummaryState', 'covidAgentBranches', 'covidCashBranches', 'covidSummaryUnit', 'covidAgentBranch', 'covidCashBranch'].forEach(k => { st[k] = null; });
+  render();
+};
+window.supdCovidDrillUnit = function(unitCode, unitName) {
+  const st = _supdState();
+  st.covidDrillUnit = unitCode; st.covidDrillUnitName = unitName;
+  ['covidSummaryUnit', 'covidAgentBranch', 'covidCashBranch'].forEach(k => { st[k] = null; });
+  render();
+};
+window.supdCovidDrillBack = function(level) {
+  const st = _supdState();
+  if (level === 0) { st.covidDrillState = null; st.covidDrillUnit = null; st.covidDrillUnitName = null; }
+  else if (level === 1) { st.covidDrillUnit = null; st.covidDrillUnitName = null; ['covidSummaryUnit', 'covidAgentBranch', 'covidCashBranch'].forEach(k => { st[k] = null; }); }
+  render();
+};
 function _covidKpi(icon, label, color, data) {
   const g = data.growth_pct, c = g == null ? 'var(--muted)' : g >= 0 ? 'var(--grn)' : 'var(--red)', arrow = g == null ? '' : g >= 0 ? '▲' : '▼';
   return `<div class="card pad" style="border-left:4px solid ${color}">
@@ -4083,18 +4101,43 @@ function _covidKpi(icon, label, color, data) {
       <span style="color:var(--muted)">18-Mar-2020: ${_supdN(data.previous)}</span>
       <span style="color:${c};font-weight:700">${arrow} ${_supdN(Math.abs(data.diff))} (${_supdPct(g)})</span></div></div>`;
 }
-function _covidStateMini(title, data) {
+function _covidStateMini(title, data, clickable) {
   if (!data) return _cmdSkel();
-  const rows = (data.rows || []).slice(0, 10);
-  return `<div class="card"><div class="cardhead"><h3>${title}</h3></div>
+  const rows = (data.rows || []).slice(0, 20);
+  return `<div class="card"><div class="cardhead"><h3>${title}${clickable ? ' <span style="font-weight:400;font-size:11px;color:var(--muted)">(tap to drill)</span>' : ''}</h3></div>
     <div class="tablewrap"><table><thead><tr><th>State</th><th class="r">Selected</th><th class="r">COVID</th><th class="r">Change</th></tr></thead>
-    <tbody>${rows.map(r => `<tr><td>${esc(r.state)}</td><td class="r num">${_supdN(r.supply)}</td><td class="r num" style="color:var(--muted)">${_supdN(r.prev_supply)}</td><td class="r num" style="color:${r.growth_pct >= 0 ? 'var(--grn)' : 'var(--red)'}">${_supdPct(r.growth_pct)}</td></tr>`).join('') || `<tr><td colspan="4" style="color:var(--muted)">No data</td></tr>`}</tbody></table></div></div>`;
+    <tbody>${rows.map(r => {
+      const st = esc(r.state).replace(/'/g, "\\'");
+      const trStyle = clickable ? ' style="cursor:pointer" onclick="supdCovidDrillState(\'' + st + '\')"' : '';
+      return `<tr${trStyle}><td${clickable ? ' style="color:var(--blue-d);font-weight:600"' : ''}>${esc(r.state)}</td><td class="r num">${_supdN(r.supply)}</td><td class="r num" style="color:var(--muted)">${_supdN(r.prev_supply)}</td><td class="r num" style="color:${r.growth_pct >= 0 ? 'var(--grn)' : 'var(--red)'}">${_supdPct(r.growth_pct)}</td></tr>`;
+    }).join('') || `<tr><td colspan="4" style="color:var(--muted)">No data</td></tr>`}</tbody></table></div></div>`;
+}
+function _covidBranchMini(title, data) {
+  if (!data) return _cmdSkel();
+  const rows = (data.rows || []).slice(0, 30);
+  return `<div class="card"><div class="cardhead"><h3>${title} <span style="font-weight:400;font-size:11px;color:var(--muted)">(tap to drill)</span></h3></div>
+    <div class="tablewrap"><table><thead><tr><th>Unit</th><th class="r">Selected</th><th class="r">COVID</th><th class="r">Change</th></tr></thead>
+    <tbody>${rows.map(r => {
+      const codeQ = esc(r.unit_code).replace(/'/g, "\\'");
+      const nameQ = esc(r.branch || r.unit_name || r.unit_code).replace(/'/g, "\\'");
+      return `<tr style="cursor:pointer" onclick="supdCovidDrillUnit('${codeQ}','${nameQ}')"><td style="color:var(--blue-d);font-weight:600">${esc(r.branch || r.unit_name || r.unit_code)}</td><td class="r num">${_supdN(r.supply)}</td><td class="r num" style="color:var(--muted)">${_supdN(r.prev_supply)}</td><td class="r num" style="color:${r.growth_pct >= 0 ? 'var(--grn)' : 'var(--red)'}">${_supdPct(r.growth_pct)}</td></tr>`;
+    }).join('') || `<tr><td colspan="4" style="color:var(--muted)">No data</td></tr>`}</tbody></table></div></div>`;
+}
+function _covidDistrictMini(title, data) {
+  if (!data) return _cmdSkel();
+  const rows = (data.rows || []).slice(0, 40);
+  const colLabel = data.by === 'center' ? 'Center / Hawker Area' : 'District';
+  return `<div class="card"><div class="cardhead"><h3>${title}</h3></div>
+    <div class="tablewrap"><table><thead><tr><th>${colLabel}</th><th class="r">Selected</th><th class="r">COVID</th><th class="r">Change</th></tr></thead>
+    <tbody>${rows.map(r => `<tr><td>${esc(r.label)}</td><td class="r num">${_supdN(r.supply)}</td><td class="r num" style="color:var(--muted)">${_supdN(r.prev_supply)}</td><td class="r num" style="color:${r.growth_pct >= 0 ? 'var(--grn)' : 'var(--red)'}">${_supdPct(r.growth_pct)}</td></tr>`).join('') || `<tr><td colspan="4" style="color:var(--muted)">No data</td></tr>`}</tbody></table></div></div>`;
 }
 function _supdCovid(st) {
-  const qs = _supdCovidQS(st);
-  _supdFetch('covidSummary', '/api/supply-dash/sale-summary' + qs);
-  _supdFetch('covidAgentStates', '/api/supply-dash/agent/states' + qs);
-  _supdFetch('covidCashStates', '/api/supply-dash/cash/states' + qs);
+  const baseQS = '?covid=1' + (st.covidDate ? '&date=' + encodeURIComponent(st.covidDate) : '');
+  const dState = st.covidDrillState || null;
+  const dUnit  = st.covidDrillUnit  || null;
+  const dUnitName = st.covidDrillUnitName || dUnit || '';
+
+  _supdFetch('covidSummary', '/api/supply-dash/sale-summary' + baseQS);
   const s = st.covidSummary;
   const maxDate = (st.filters && st.filters.data_upto) ? String(st.filters.data_upto).slice(0, 10) : '';
   const curDate = st.covidDate || (s ? s.data_upto : maxDate);
@@ -4104,13 +4147,59 @@ function _supdCovid(st) {
     <span class="lbl" style="align-self:center;color:var(--muted)">vs fixed COVID baseline <b>18-Mar-2020</b></span></div>`;
   if (!s) return picker + _cmdSkel();
   if (s._err || s.no_data) return picker + `<div class="card pad" style="color:var(--muted)">No supply data for this date.</div>`;
+
+  // Breadcrumb
+  let breadcrumb = '';
+  if (dState || dUnit) {
+    const crumbs = [];
+    crumbs.push(`<a onclick="supdCovidDrillBack(0)" style="cursor:pointer;color:var(--blue-d)">All States</a>`);
+    if (dState) {
+      if (dUnit) crumbs.push(`<a onclick="supdCovidDrillBack(1)" style="cursor:pointer;color:var(--blue-d)">${esc(dState)}</a>`);
+      else crumbs.push(`<span style="font-weight:600">${esc(dState)}</span>`);
+    }
+    if (dUnit) crumbs.push(`<span style="font-weight:600">${esc(dUnitName)}</span>`);
+    breadcrumb = `<div style="margin-bottom:10px;font-size:13px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">${crumbs.join('<span style="color:var(--muted)"> › </span>')}</div>`;
+  }
+
+  if (dState && dUnit) {
+    // Level 2: District breakdown within a unit
+    _supdFetch('covidSummaryUnit', '/api/supply-dash/sale-summary' + baseQS + '&unit_code=' + encodeURIComponent(dUnit));
+    _supdFetch('covidAgentBranch', '/api/supply-dash/agent/branch/' + encodeURIComponent(dUnit) + baseQS + '&by=district');
+    _supdFetch('covidCashBranch', '/api/supply-dash/cash/branch/' + encodeURIComponent(dUnit) + baseQS);
+    const su = st.covidSummaryUnit;
+    const kpis = su && !su._err && !su.no_data
+      ? `<div class="vz-kgrid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr))">${_covidKpi('🏢', 'Agent Sale', 'var(--blue)', su.agent)}${_covidKpi('🛵', 'Cash Sale', 'var(--gold)', su.cash)}${_covidKpi('📊', 'Total Sale', 'var(--grn)', su.total)}</div>`
+      : _cmdSkel();
+    return picker + breadcrumb + kpis
+      + `<div class="lbl" style="margin:14px 0 6px;color:var(--muted)">${esc(dUnitName)} — ${s.cur_label} vs 18-Mar-2020</div>
+      <div class="two">${_covidDistrictMini('Agent Sale by District', st.covidAgentBranch)}${_covidDistrictMini('Cash Sale by Center', st.covidCashBranch)}</div>`;
+  }
+
+  if (dState) {
+    // Level 1: Unit breakdown within a state
+    const stQS = baseQS + '&state_name=' + encodeURIComponent(dState);
+    _supdFetch('covidSummaryState', '/api/supply-dash/sale-summary' + stQS);
+    _supdFetch('covidAgentBranches', '/api/supply-dash/agent/branches' + stQS);
+    _supdFetch('covidCashBranches', '/api/supply-dash/cash/branches' + stQS);
+    const ss = st.covidSummaryState;
+    const kpis = ss && !ss._err && !ss.no_data
+      ? `<div class="vz-kgrid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr))">${_covidKpi('🏢', 'Agent Sale', 'var(--blue)', ss.agent)}${_covidKpi('🛵', 'Cash Sale', 'var(--gold)', ss.cash)}${_covidKpi('📊', 'Total Sale', 'var(--grn)', ss.total)}</div>`
+      : _cmdSkel();
+    return picker + breadcrumb + kpis
+      + `<div class="lbl" style="margin:14px 0 6px;color:var(--muted)">${esc(dState)} — ${s.cur_label} vs 18-Mar-2020 — click a unit to drill further</div>
+      <div class="two">${_covidBranchMini('Agent Sale by Unit', st.covidAgentBranches)}${_covidBranchMini('Cash Sale by Unit', st.covidCashBranches)}</div>`;
+  }
+
+  // Level 0: All states
+  _supdFetch('covidAgentStates', '/api/supply-dash/agent/states' + baseQS);
+  _supdFetch('covidCashStates', '/api/supply-dash/cash/states' + baseQS);
   const kpis = `<div class="vz-kgrid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr))">
     ${_covidKpi('🏢', 'Agent Sale', 'var(--blue)', s.agent)}
     ${_covidKpi('🛵', 'Cash Sale', 'var(--gold)', s.cash)}
     ${_covidKpi('📊', 'Total Sale', 'var(--grn)', s.total)}</div>`;
   return picker + kpis
-    + `<div class="lbl" style="margin:14px 0 6px;color:var(--muted)">${s.cur_label} vs 18-Mar-2020 (pre-COVID baseline)</div>
-    <div class="two">${_covidStateMini('Agent Sale by State', st.covidAgentStates)}${_covidStateMini('Cash Sale by State', st.covidCashStates)}</div>`;
+    + `<div class="lbl" style="margin:14px 0 6px;color:var(--muted)">${s.cur_label} vs 18-Mar-2020 — click a state row to drill down</div>
+    <div class="two">${_covidStateMini('Agent Sale by State', st.covidAgentStates, true)}${_covidStateMini('Cash Sale by State', st.covidCashStates, true)}</div>`;
 }
 
 function _supdReceipt(st) {
