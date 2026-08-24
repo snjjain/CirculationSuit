@@ -2709,6 +2709,14 @@ function ouFilters(query, alias = 'ao') {
   if (query.zh_name)    { cls.push(`${p}zh_name = ?`);    params.push(query.zh_name); }
   if (query.exec_code)  { cls.push(`${p}exec_code = ?`);  params.push(query.exec_code); }
   if (query.exec_name)  { cls.push(`${p}exec_name = ?`);  params.push(query.exec_name); }
+  // agency_outstanding has no district column, so district is resolved through
+  // agency_master's (unit, agcd) key. EXISTS rather than a JOIN keeps every caller's
+  // FROM clause untouched, and rides uq_am_natural(unit, agcd, dpcd) — ~80ms on a
+  // full unit. A JOIN would also fan out on dpcd (sub-agency rows) and double-count.
+  if (query.district) {
+    cls.push(`EXISTS (SELECT 1 FROM agency_master _am WHERE _am.unit = ${p}unit_code AND _am.agcd = ${p}ag_code AND _am.dist_name = ?)`);
+    params.push(query.district);
+  }
   if (query.search) {
     cls.push(`(${p}ag_name LIKE ? OR ${p}ag_code LIKE ? OR ${p}city_name LIKE ?)`);
     const like = `%${query.search}%`;
@@ -3491,6 +3499,14 @@ app.get('/api/sync/collection/status', (req, res) => {
 // COLLECTION DASHBOARD ENDPOINTS
 // ════════════════════════════════════════════════════════════════════════════
 
+// agency_collection has no executive column, so executive is resolved through
+// agency_master's (unit, agcd) key — same EXISTS approach as ouFilters' district.
+function colExecClause(query, clauses, params) {
+  if (!query.exec_name) return;
+  clauses.push(`EXISTS (SELECT 1 FROM agency_master _am WHERE _am.unit = unit_code AND _am.agcd = ag_code AND _am.executive_name = ?)`);
+  params.push(query.exec_name);
+}
+
 function colFilters(query) {
   const clauses = [], params = [];
   if (query.from)    { clauses.push('coll_date >= ?');   params.push(query.from); }
@@ -3500,6 +3516,7 @@ function colFilters(query) {
   if (query.district){ clauses.push('district_name = ?');params.push(query.district); }
   if (query.ag_code) { clauses.push('ag_code = ?');      params.push(query.ag_code); }
   if (query.payment_cat) { clauses.push('payment_cat = ?'); params.push(query.payment_cat); }
+  colExecClause(query, clauses, params);
   const clause = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
   return { clause, params };
 }
@@ -3512,6 +3529,7 @@ function colFiltersNoDate(query) {
   if (query.branch)  { clauses.push('branch_name = ?');  params.push(query.branch); }
   if (query.district){ clauses.push('district_name = ?');params.push(query.district); }
   if (query.ag_code) { clauses.push('ag_code = ?');      params.push(query.ag_code); }
+  colExecClause(query, clauses, params);
   const clause = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
   return { clause, params };
 }

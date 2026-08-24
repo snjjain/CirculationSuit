@@ -3154,7 +3154,7 @@ function _cmdFilterState() {
       state: isPanIndia ? 'RAJASTHAN' : '',
       unit_code: isPanIndia ? 'JA0' : '',
       unit_name: isPanIndia ? 'JAIPUR RP' : '',
-      district: '', search: '', searchResults: null,
+      district: '', exec_name: '',
     };
   }
   return S.live.cmdFilters;
@@ -3169,40 +3169,28 @@ function _cmdPeriodRange(period) {
   return { from: monthStartISO(), to: todayISO() };
 }
 window.cmdSetPeriod = p => { _cmdFilterState().period = p; S.live.cmd = {}; render(); };
-window.cmdSetState = s => { const f = _cmdFilterState(); f.state = s; f.unit_code = ''; f.unit_name = ''; f.district = ''; S.live.cmd = {}; render(); };
-window.cmdSetUnit = (code, name) => { const f = _cmdFilterState(); f.unit_code = code; f.unit_name = name || ''; f.district = ''; S.live.cmd = {}; render(); };
+window.cmdSetState = s => { const f = _cmdFilterState(); f.state = s; f.unit_code = ''; f.unit_name = ''; f.district = ''; f.exec_name = ''; S.live.cmd = {}; render(); };
+window.cmdSetUnit = (code, name) => { const f = _cmdFilterState(); f.unit_code = code; f.unit_name = name || ''; f.district = ''; f.exec_name = ''; S.live.cmd = {}; render(); };
 window.cmdSetDistrict = d => { const f = _cmdFilterState(); f.district = d; S.live.cmd = {}; render(); };
-// Districts are fetched per-unit, on demand (a whole-table version of this query was
-// tried and ran 40s+ under load — see /api/supply-dash/districts/:unit's comment).
-function _cmdLoadDistricts(unitCode) {
+window.cmdSetExec = e => { const f = _cmdFilterState(); f.exec_name = e; S.live.cmd = {}; render(); };
+// Districts and executives are both fetched per-unit, on demand (a whole-table version
+// of the districts query ran 40s+ — see /api/supply-dash/districts/:unit's comment).
+function _cmdLoadCascade(unitCode) {
   if (!unitCode) return;
-  S.live.cmdDistrictsByUnit = S.live.cmdDistrictsByUnit || {};
-  const loadKey = '_cmdDistLoading_' + unitCode;
-  if (S.live.cmdDistrictsByUnit[unitCode] || S.live[loadKey]) return;
-  S.live[loadKey] = true;
-  fetch(_cmdBase() + '/api/supply-dash/districts/' + encodeURIComponent(unitCode), { headers: api.h() })
-    .then(r => r.json())
-    .then(d => { S.live.cmdDistrictsByUnit[unitCode] = d.districts || []; S.live[loadKey] = false; if (S.screen === 'command') render(); })
-    .catch(() => { S.live.cmdDistrictsByUnit[unitCode] = []; S.live[loadKey] = false; if (S.screen === 'command') render(); });
+  const grab = (bucket, path, pick) => {
+    S.live[bucket] = S.live[bucket] || {};
+    const loadKey = '_l_' + bucket + '_' + unitCode;
+    if (S.live[bucket][unitCode] || S.live[loadKey]) return;
+    S.live[loadKey] = true;
+    fetch(_cmdBase() + path + encodeURIComponent(unitCode), { headers: api.h() })
+      .then(r => r.json())
+      .then(d => { S.live[bucket][unitCode] = pick(d) || []; S.live[loadKey] = false; if (S.screen === 'command') render(); })
+      .catch(() => { S.live[bucket][unitCode] = []; S.live[loadKey] = false; if (S.screen === 'command') render(); });
+  };
+  grab('cmdDistrictsByUnit', '/api/supply-dash/districts/',  d => d.districts);
+  grab('cmdExecsByUnit',     '/api/supply-dash/executives/', d => d.executives);
 }
 window.cmdResetFilters = () => { S.live.cmdFilters = null; S.live.cmd = {}; render(); };
-window.cmdSearchInput = v => {
-  const f = _cmdFilterState();
-  f.search = v;
-  if (f._searchTimer) clearTimeout(f._searchTimer);
-  if (!v || v.trim().length < 2) { f.searchResults = null; render(); return; }
-  f._searchTimer = setTimeout(() => {
-    fetch(_cmdBase() + '/api/supply-dash/agents?search=' + encodeURIComponent(v.trim()) + '&limit=8', { headers: api.h() })
-      .then(r => r.json())
-      .then(d => { f.searchResults = d.rows || []; if (S.screen === 'command') render(); })
-      .catch(() => { f.searchResults = []; if (S.screen === 'command') render(); });
-  }, 350);
-  render();
-};
-window.cmdSearchPick = (unitCode, agcd, name) => {
-  const f = _cmdFilterState(); f.search = ''; f.searchResults = null;
-  openAgencyProfile(unitCode, agcd, name);
-};
 function _cmdLoadUnits() {
   if (S.live.cmdUnits || S.live._cmdUnitsLoading) return;
   S.live._cmdUnitsLoading = true;
@@ -3238,18 +3226,23 @@ function _cmdLoad() {
   const sPFull = isCoreState ? 'state=' + encodeURIComponent(f.state) + '&state_name=' + encodeURIComponent(f.state) : '';
   const sPAbbr = isCoreState ? 'state=' + encodeURIComponent(CMD_STATE_ABBR[f.state] || f.state) : '';
   const dP = 'from=' + period.from + '&to=' + period.to;
-  // District — only wired into the 3 endpoints whose underlying table actually has a
-  // district column (agency_collection.district_name; supply_data.dist_name for
-  // day-compare/trend). Left out of outstanding/kpis and survey/kpis (no district data
-  // at all) and the Agent+Cash sale-summary KPI (hawker_supply, the Cash half, has no
-  // district column — filtering only the Agent half would silently mix a
-  // district-scoped number with a unit-wide one under a single combined total).
-  const distP = f.district ? 'district=' + encodeURIComponent(f.district) : '';
+  // District / Executive. Where the source table lacks the column it is reached through
+  // agency_master's (unit, agcd) key server-side:
+  //   - collection/kpis:  district native, executive via agency_master
+  //   - outstanding/kpis: executive native, district via agency_master
+  //   - supply-dash/*:    district native on supply_data, executive via agency_master;
+  //     the Cash (hawker_supply) half of sale-summary has NEITHER and no agency key to
+  //     reach one, so that endpoint returns Agent-only when either filter is set and
+  //     flags it as agent_only rather than adding a scoped figure to an unscoped one.
+  // Still genuinely unfilterable by both: survey/kpis (no district or exec data) and the
+  // taxi supply-issues feed (a today-only vehicle snapshot with no agency dimension).
+  const distP = f.district  ? 'district='  + encodeURIComponent(f.district)  : '';
+  const exP   = f.exec_name ? 'exec_name=' + encodeURIComponent(f.exec_name) : '';
   const qs = (...parts) => { const s = parts.filter(Boolean).join('&'); return s ? '?' + s : ''; };
 
   if (!c.ou && !c._ouLoading) {
     c._ouLoading = true;
-    fetch(_cmdBase() + '/api/outstanding/kpis' + qs(uP), { headers: api.h() })
+    fetch(_cmdBase() + '/api/outstanding/kpis' + qs(uP, distP, exP), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.ou = d; c._ouLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._ouLoading = false; c.ou = { _err: true }; if (S.screen === 'command') render(); });
@@ -3257,7 +3250,7 @@ function _cmdLoad() {
   if (!c.co && !c._coLoading) {
     c._coLoading = true;
     const branchP = f.unit_name ? 'branch=' + encodeURIComponent(f.unit_name) : '';
-    fetch(_cmdBase() + '/api/collection/kpis' + qs(dP, branchP, sPFull, distP), { headers: api.h() })
+    fetch(_cmdBase() + '/api/collection/kpis' + qs(dP, branchP, sPFull, distP, exP), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.co = d; c._coLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._coLoading = false; c.co = { _err: true }; if (S.screen === 'command') render(); });
@@ -3280,7 +3273,7 @@ function _cmdLoad() {
   // Supply's sale-summary is a day-over-day comparison, not a period aggregate — branch-filterable, not period-filterable.
   if (!c.sup && !c._supLoading) {
     c._supLoading = true;
-    fetch(_cmdBase() + '/api/supply-dash/sale-summary' + qs(uP, sPFull), { headers: api.h() })
+    fetch(_cmdBase() + '/api/supply-dash/sale-summary' + qs(uP, sPFull, distP, exP), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.sup = d; c._supLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._supLoading = false; c.sup = { _err: true }; if (S.screen === 'command') render(); });
@@ -3304,14 +3297,14 @@ function _cmdLoad() {
   const _dcK  = 'dc_' + _grp + '_' + _mode;
   if (!c[_dcK] && !c['_l' + _dcK]) {
     c['_l' + _dcK] = true;
-    fetch(_cmdBase() + '/api/supply-dash/day-compare?group=' + _grp + '&mode=' + _mode + [uP, sPFull, distP].filter(Boolean).map(p => '&' + p).join(''), { headers: api.h() })
+    fetch(_cmdBase() + '/api/supply-dash/day-compare?group=' + _grp + '&mode=' + _mode + [uP, sPFull, distP, exP].filter(Boolean).map(p => '&' + p).join(''), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c[_dcK] = d; c['_l' + _dcK] = false; if (S.screen === 'command') render(); })
       .catch(() => { c['_l' + _dcK] = false; c[_dcK] = { _err: true }; if (S.screen === 'command') render(); });
   }
   if (!c.tr && !c._trLoading) {
     c._trLoading = true;
-    fetch(_cmdBase() + '/api/supply-dash/trend?granularity=daily&days=90' + [uP, sPFull, distP].filter(Boolean).map(p => '&' + p).join(''), { headers: api.h() })
+    fetch(_cmdBase() + '/api/supply-dash/trend?granularity=daily&days=90' + [uP, sPFull, distP, exP].filter(Boolean).map(p => '&' + p).join(''), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.tr = d; c._trLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._trLoading = false; c.tr = { _err: true }; if (S.screen === 'command') render(); });
@@ -3696,27 +3689,31 @@ VIEWS.command = () => {
   }
 
   /* ── Top KPI strip data ─────────────────────────────────── */
-  // These 4 sources have no district column at all (Outstanding, Taxi, Survey) or only
-  // partial district data (Supply's Cash/hawker half) — filtering them by district would
-  // either be impossible or silently mix a district-scoped number with a unit-wide one.
-  // Rather than leave them looking broken when a district is picked, say so plainly.
-  const distNote = cf.district ? ' · district filter not available for this figure' : '';
+  // Supply, Outstanding and Collections all honour District/Executive now. Two sources
+  // still genuinely cannot: Reader Surveys (survey_data has neither column) and Taxi
+  // Alerts (a today-only vehicle snapshot with no agency dimension at all). They say so
+  // rather than sitting there looking stuck. Supply's Cash half is the third case — it
+  // is dropped server-side when either filter is on (agent_only), noted on that card.
+  const narrowed  = !!(cf.district || cf.exec_name);
+  const naNote    = narrowed ? ' · not filterable by district/executive' : '';
+  const cashNote  = sup && sup.agent_only ? ' · Agent Sale only (Cash has no district/executive breakdown)' : '';
+  const cashVal   = sup && sup.cash ? (Number(sup.cash.current) || 0).toLocaleString('en-IN') : null;
   const strip = [
     { val: sup && !sup._err && !sup.no_data ? (Number(sup.total.current) || 0).toLocaleString('en-IN') : (c._supLoading ? '…' : '—'),
-      lbl: 'Latest Supply · Agent+Cash', icon: '📦', color: 'var(--blue)', goto: "go('supply_dash')",
-      sub: sup && !sup._err && !sup.no_data ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + ' · Cash ' + (Number(sup.cash.current) || 0).toLocaleString('en-IN') + ' · ' + sup.data_upto + distNote : '' },
+      lbl: sup && sup.agent_only ? 'Latest Supply · Agent' : 'Latest Supply · Agent+Cash', icon: '📦', color: 'var(--blue)', goto: "go('supply_dash')",
+      sub: sup && !sup._err && !sup.no_data ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + (cashVal != null ? ' · Cash ' + cashVal : '') + ' · ' + sup.data_upto + cashNote : '' },
     { val: ou && !ou._err ? _cmdFmtC(ou.total_outstanding)      : (c._ouLoading ? '…' : '—'),
       lbl: 'Outstanding · As on Today', icon: '💰', color: 'var(--red)', goto: "go('outstanding')",
-      sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies' + distNote : '' },
+      sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies' : '' },
     { val: co && !co._err ? _cmdFmtC(co.total_collection)        : (c._coLoading ? '…' : '—'),
       lbl: cmdPeriodLabel + ' Collections', icon: '₹',  color: 'var(--grn)', goto: "go('collections')",
       sub: co && !co._err ? (co.total_txn||0).toLocaleString('en-IN') + ' transactions' : '' },
     { val: si && !si._err ? String((si.late?.length||0) + (si.app_not_running?.length||0)) : (c._siLoading ? '…' : '—'),
       lbl: 'Taxi Alerts Today',  icon: '🚕', color: si && !si._err && (si.late?.length||0)+(si.app_not_running?.length||0)>0 ? 'var(--red)' : 'var(--grn)', goto: "go('transport')",
-      sub: si && !si._err ? (si.late?.length||0)+' late · '+(si.app_not_running?.length||0)+' offline' + distNote : '' },
+      sub: si && !si._err ? (si.late?.length||0)+' late · '+(si.app_not_running?.length||0)+' offline' + naNote : '' },
     { val: sv && !sv._err ? fmtN(sv.total||0)                   : (c._svLoading ? '…' : '—'),
       lbl: 'Reader Surveys',     icon: '📋', color: 'var(--acc)', goto: "go('survey_dash')",
-      sub: sv && !sv._err ? fmtN(sv.order_count||0) + ' orders booked' + distNote : '' },
+      sub: sv && !sv._err ? fmtN(sv.order_count||0) + ' orders booked' + naNote : '' },
   ];
 
   /* ── Pending modules ────────────────────────────────────── */
@@ -3730,10 +3727,13 @@ VIEWS.command = () => {
   if (sup && !sup._err && !sup.no_data) {
     const cp = n => (Number(n) || 0).toLocaleString('en-IN');
     const g = sup.total.growth_pct;
+    // sup.cash is null when a district/executive filter is on — hawker_supply has no
+    // district or agency key, so the server returns Agent-only rather than adding a
+    // scoped Agent figure to an unscoped Cash one. Drop the Cash tile in that case.
     supKpis = [
-      [cp(sup.total.current) + ' cp', 'Total Supply · ' + sup.data_upto, 'var(--ink)'],
+      [cp(sup.total.current) + ' cp', (sup.agent_only ? 'Agent Supply · ' : 'Total Supply · ') + sup.data_upto, 'var(--ink)'],
       [cp(sup.agent.current) + ' cp', 'Agent Sale (' + (sup.agent_share_pct != null ? sup.agent_share_pct + '%' : '—') + ')', 'var(--blue)'],
-      [cp(sup.cash.current) + ' cp', 'Cash Sale (' + (sup.cash_share_pct != null ? sup.cash_share_pct + '%' : '—') + ')', 'var(--gold)'],
+      ...(sup.cash ? [[cp(sup.cash.current) + ' cp', 'Cash Sale (' + (sup.cash_share_pct != null ? sup.cash_share_pct + '%' : '—') + ')', 'var(--gold)']] : []),
       [(g >= 0 ? '+' : '') + (g != null ? g : 0) + '%', 'Day-over-Day', g >= 0 ? 'var(--grn)' : 'var(--red)'],
     ];
     supFooter = `Prev day <b>${cp(sup.total.previous)}</b> cp · change <b style="color:${sup.total.diff >= 0 ? 'var(--grn)' : 'var(--red)'}">${sup.total.diff >= 0 ? '+' : ''}${cp(sup.total.diff)}</b> · ${sup.cur_label} vs ${sup.prev_label}`;
@@ -3746,18 +3746,10 @@ VIEWS.command = () => {
   const cmdRegionOf = s => { const u = String(s || '').toUpperCase(); return CMD_CORE_STATES.has(u) ? u : 'NATIONAL'; };
   const cmdUnits = S.live.cmdUnits || [];
   const cmdUnitsInState = cf.state ? cmdUnits.filter(u => cmdRegionOf(u.state_name) === cf.state) : cmdUnits;
-  _cmdLoadDistricts(cf.unit_code);
+  _cmdLoadCascade(cf.unit_code);
   const cmdDistricts = (cf.unit_code && S.live.cmdDistrictsByUnit && S.live.cmdDistrictsByUnit[cf.unit_code]) || [];
+  const cmdExecs     = (cf.unit_code && S.live.cmdExecsByUnit     && S.live.cmdExecsByUnit[cf.unit_code])     || [];
   const periodBtn = (p, label, edge) => `<button onclick="cmdSetPeriod('${p}')" style="padding:7px 16px;border:1px solid var(--brd);${edge === 'l' ? 'border-radius:8px 0 0 8px;border-right:none' : edge === 'r' ? 'border-radius:0 8px 8px 0' : 'border-left:none;border-right:none'};background:${cf.period === p ? 'var(--navy,#1C2B45)' : 'var(--card)'};color:${cf.period === p ? '#fff' : 'var(--ink)'};font-size:12.5px;font-weight:600;cursor:pointer">${label}</button>`;
-  const searchDrop = cf.searchResults != null
-    ? (cf.searchResults.length
-      ? `<div style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--brd);border-radius:8px;margin-top:4px;max-height:240px;overflow-y:auto;z-index:20;box-shadow:0 4px 16px rgba(0,0,0,.15)">
-          ${cf.searchResults.map(r => `<div onclick="cmdSearchPick('${esc(r.unit_code||'').replace(/'/g,"\\'")}','${esc(r.agcd).replace(/'/g,"\\'")}','${esc(r.agent||r.agcd||'').replace(/'/g,"\\'")}')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--brd);font-size:12.5px" onmouseenter="this.style.background='var(--surface-2, #f4f5f7)'" onmouseleave="this.style.background=''">
-            <b>${esc(r.agent || r.agcd)}</b> <span style="color:var(--muted);font-size:11px">${esc(r.branch || '')}</span>
-          </div>`).join('')}
-        </div>`
-      : `<div style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--brd);border-radius:8px;margin-top:4px;padding:10px 12px;font-size:12px;color:var(--muted);z-index:20">No agencies found</div>`)
-    : '';
   const filterBar = `<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;padding:12px 0 18px;border-bottom:1px solid var(--brd);margin-bottom:18px">
     <div>
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Period</div>
@@ -3784,12 +3776,14 @@ VIEWS.command = () => {
         ${cmdDistricts.map(d => `<option value="${esc(d)}" ${cf.district === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}
       </select>
     </div>
-    <div style="position:relative;flex:1;min-width:220px;max-width:340px">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Search — Agency</div>
-      <input type="text" placeholder="Agency name…" value="${esc(cf.search || '')}" oninput="cmdSearchInput(this.value)" style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;width:100%">
-      ${searchDrop}
+    <div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Executive</div>
+      <select onchange="cmdSetExec(this.value)" ${!cf.unit_code ? 'disabled' : ''} style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;min-width:190px${!cf.unit_code ? ';opacity:.55;cursor:not-allowed' : ''}">
+        <option value="">${cf.unit_code ? 'All Executives' : 'Pick a unit first'}</option>
+        ${cmdExecs.map(e => `<option value="${esc(e.name)}" ${cf.exec_name === e.name ? 'selected' : ''}>${esc(e.name)}${e.agencies ? ` (${e.agencies})` : ''}</option>`).join('')}
+      </select>
     </div>
-    ${cf.state || cf.unit_code || cf.district || cf.period !== 'month' ? `<button onclick="cmdResetFilters()" style="padding:7px 14px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--muted);font-size:12px;cursor:pointer">✕ Reset filters</button>` : ''}
+    ${cf.state || cf.unit_code || cf.district || cf.exec_name || cf.period !== 'month' ? `<button onclick="cmdResetFilters()" style="padding:7px 14px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--muted);font-size:12px;cursor:pointer">✕ Reset filters</button>` : ''}
   </div>`;
 
   return pagehead('Command Centre', cmdSubtitle) + filterBar + `
@@ -3818,7 +3812,7 @@ VIEWS.command = () => {
     <!-- main card grid -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       ${_cmdModuleCard({
-        icon:'💰', title:'Agency Outstanding', period:'Balance as on today' + distNote,
+        icon:'💰', title:'Agency Outstanding', period:'Balance as on today',
         onClick:"go('outstanding')", accent:'var(--red)',
         kpis: ouKpis, footer: ouFooter,
         loading: !ou && !c._ouError, error: ou?._err,
@@ -3834,7 +3828,7 @@ VIEWS.command = () => {
         badgeColor: 'var(--grn)',
       })}
       ${_cmdModuleCard({
-        icon:'📦', title:'Supply', period:'Agent + Cash · ' + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…') + distNote,
+        icon:'📦', title:'Supply', period:(sup && sup.agent_only ? 'Agent only · ' : 'Agent + Cash · ') + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…') + cashNote,
         onClick:"go('supply_dash')", accent:'var(--blue)',
         kpis: supKpis, footer: supFooter,
         loading: !sup && c._supLoading, error: sup?._err,
@@ -3848,14 +3842,14 @@ VIEWS.command = () => {
         badge: siBadge, badgeColor: siBadgeColor,
       })}
       ${_cmdModuleCard({
-        icon:'📍', title:'Field Intelligence', period: 'DCR activity · ' + cmdPeriodLabel.toLowerCase() + distNote,
+        icon:'📍', title:'Field Intelligence', period: 'DCR activity · ' + cmdPeriodLabel.toLowerCase() + naNote,
         onClick:"go('dcr_analytics')", accent: faBadgeColor || 'var(--acc)',
         kpis: faKpis, footer: faFooter,
         loading: !fa, error: fa?._err,
         badge: faBadge, badgeColor: faBadgeColor,
       })}
       ${_cmdModuleCard({
-        icon:'📋', title:'Survey Intelligence', period: 'Reader survey outcomes · ' + cmdPeriodLabel.toLowerCase() + distNote,
+        icon:'📋', title:'Survey Intelligence', period: 'Reader survey outcomes · ' + cmdPeriodLabel.toLowerCase() + naNote,
         onClick:"go('survey_dash')", accent:'var(--acc)',
         kpis: svKpis, footer: svFooter,
         loading: !sv && !c._svError, error: sv?._err,

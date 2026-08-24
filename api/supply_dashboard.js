@@ -393,27 +393,34 @@ module.exports = function registerSupplyDash(ctx) {
       const district = (req.query.district || '').trim();
       const distCls = district ? ' AND dist_name = ?' : '';
       const distP = district ? [district] : [];
+      // Executive lives on agency_master — EXISTS keeps this query's unaliased
+      // single-table shape (all three granularity branches below reuse it).
+      const execName = (req.query.exec_name || '').trim();
+      const execCls = execName
+        ? ` AND EXISTS (SELECT 1 FROM agency_master _am WHERE _am.unit = supply_data.unit_code AND _am.agcd = supply_data.agcd AND _am.executive_name = ?)`
+        : '';
+      const execP = execName ? [execName] : [];
       const g = req.query.granularity || 'daily';
       let sql, params;
       if (g === 'monthly') {
         sql = `SELECT DATE_FORMAT(supply_date,'%Y-%m') label,
                       SUM(sup_copy) copies, COUNT(DISTINCT supply_date) days,
                       ROUND(SUM(sup_copy)/COUNT(DISTINCT supply_date)) daily_avg
-               FROM supply_data WHERE 1=1${S}${distCls} GROUP BY label ORDER BY label`;
-        params = [...sc2.params, ...distP];
+               FROM supply_data WHERE 1=1${S}${distCls}${execCls} GROUP BY label ORDER BY label`;
+        params = [...sc2.params, ...distP, ...execP];
       } else if (g === 'yearly') {
         sql = `SELECT DATE_FORMAT(supply_date,'%Y') label,
                       SUM(sup_copy) copies, COUNT(DISTINCT supply_date) days,
                       ROUND(SUM(sup_copy)/COUNT(DISTINCT supply_date)) daily_avg
-               FROM supply_data WHERE 1=1${S}${distCls} GROUP BY label ORDER BY label`;
-        params = [...sc2.params, ...distP];
+               FROM supply_data WHERE 1=1${S}${distCls}${execCls} GROUP BY label ORDER BY label`;
+        params = [...sc2.params, ...distP, ...execP];
       } else {
         const days = Math.min(parseInt(req.query.days || '30', 10) || 30, 120);
         sql = `SELECT DATE_FORMAT(supply_date,'%Y-%m-%d') label, SUM(sup_copy) copies
                FROM supply_data
-               WHERE supply_date > DATE_SUB(?, INTERVAL ${days} DAY)${S}${distCls}
+               WHERE supply_date > DATE_SUB(?, INTERVAL ${days} DAY)${S}${distCls}${execCls}
                GROUP BY label ORDER BY label`;
-        params = [d.cur, ...sc2.params, ...distP];
+        params = [d.cur, ...sc2.params, ...distP, ...execP];
       }
       const { rows } = await q(sql, params);
       res.json({ data_upto: d.cur, granularity: g, rows });
@@ -432,6 +439,12 @@ module.exports = function registerSupplyDash(ctx) {
       const district = (req.query.district || '').trim();
       const distCls = district ? ' AND s.dist_name = ?' : '';
       const distP = district ? [district] : [];
+      // Executive lives on agency_master, not supply_data — reached via (unit, agcd).
+      const execName = (req.query.exec_name || '').trim();
+      const execJoin = execName
+        ? ` JOIN (SELECT DISTINCT unit, agcd FROM agency_master WHERE executive_name = ?) em ON em.unit = s.unit_code AND em.agcd = s.agcd`
+        : '';
+      const execP = execName ? [execName] : [];
 
       // Baseline must be a data-complete day: partially-synced days (a few stray rows)
       // produce absurd +4000% comparisons, so skip days below 30% of current-day volume.
@@ -456,14 +469,14 @@ module.exports = function registerSupplyDash(ctx) {
         ? `SELECT s.unit_code gkey, MAX(s.unit_name) glabel, s.agcd,
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
-             FROM supply_data s ${AGENT_JOIN}
+             FROM supply_data s ${AGENT_JOIN}${execJoin}
              WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${on(sc2, 's.unit_code')}${distCls}
              GROUP BY s.unit_code, s.agcd`
         : `SELECT COALESCE(NULLIF(s.state_name,''),'OTHER') gkey,
                   COALESCE(NULLIF(s.state_name,''),'OTHER') glabel, s.agcd,
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
-             FROM supply_data s ${AGENT_JOIN}
+             FROM supply_data s ${AGENT_JOIN}${execJoin}
              WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${on(sc2, 's.unit_code')}${distCls}
              GROUP BY gkey, s.agcd`;
       const { rows } = await q(
@@ -479,7 +492,7 @@ module.exports = function registerSupplyDash(ctx) {
                 SUM(CASE WHEN cur = 0 THEN prv ELSE 0 END) closed_copies,
                 SUM(CASE WHEN prv = 0 THEN cur ELSE 0 END) new_copies
          FROM (${inner}) x GROUP BY gkey ORDER BY cur DESC`,
-        [d.cur, baseDate, d.cur, baseDate, ...sc2.params, ...distP]);
+        [d.cur, baseDate, ...execP, d.cur, baseDate, ...sc2.params, ...distP]);
 
       res.json({
         cur_date: d.cur, base_date: baseDate, mode, group,
@@ -728,13 +741,30 @@ module.exports = function registerSupplyDash(ctx) {
       const hsS = hs ? ` AND s.unit_code IN (${hs.map(() => '?').join(',') || "''"})` : '';
       const hsH = hs ? ` AND h.loc_id IN (${hs.map(() => '?').join(',') || "''"})` : '';
       const S = on(sc2, 's.unit_code'), Sh = on(sc2, 'h.loc_id');
+      // District / executive narrow the AGENT half only. Cash Sale comes from
+      // hawker_supply, which has neither a district column nor any agency key to reach
+      // one through (it is keyed by hawker/centre, and hawker_master has no district
+      // either), so it cannot be narrowed the same way. Rather than add a
+      // district-scoped Agent figure to a unit-wide Cash figure under one "Total" —
+      // which would read as a real number but be neither — Cash is dropped and the
+      // response says so via agent_only, which the UI surfaces.
+      const district = (req.query.district || '').trim();
+      const execName = (req.query.exec_name || '').trim();
+      const agentOnly = !!(district || execName);
+      const distCls = district ? ' AND s.dist_name = ?' : '';
+      const distP   = district ? [district] : [];
+      const execJoin = execName
+        ? ` JOIN (SELECT DISTINCT unit, agcd FROM agency_master WHERE executive_name = ?) em ON em.unit = s.unit_code AND em.agcd = s.agcd`
+        : '';
+      const execP = execName ? [execName] : [];
       const [agent, cash] = await Promise.all([
         q(`SELECT SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) cur,
                   SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prv
-           FROM supply_data s ${AGENT_JOIN}
-           WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${S}${hsS}`,
-          [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params, ...(hs || [])]),
-        q(`SELECT SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) cur,
+           FROM supply_data s ${AGENT_JOIN}${execJoin}
+           WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${S}${hsS}${distCls}`,
+          [w.cF, w.cT, w.pF, w.pT, ...execP, w.cF, w.pF, ...sc2.params, ...(hs || []), ...distP]),
+        agentOnly ? Promise.resolve({ rows: [{ cur: 0, prv: 0 }] })
+        : q(`SELECT SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) cur,
                   SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) prv
            FROM hawker_supply h WHERE h.supply_date IN (?, ?)${Sh}${hsH}`,
           [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params, ...(hs || [])]),
@@ -744,9 +774,34 @@ module.exports = function registerSupplyDash(ctx) {
       const totC = aC + cC;
       res.json({
         ...winMeta(w), prev_day: w.range ? null : w.prev_label, from: w.range ? w.cF : null, to: w.range ? w.cT : null,
-        agent: mkDelta(aC, aP), cash: mkDelta(cC, cP), total: mkDelta(totC, aP + cP),
+        agent: mkDelta(aC, aP), cash: agentOnly ? null : mkDelta(cC, cP), total: mkDelta(totC, aP + cP),
+        agent_only: agentOnly, district: district || null, exec_name: execName || null,
         agent_share_pct: totC ? r1(aC / totC * 100) : null, cash_share_pct: totC ? r1(cC / totC * 100) : null,
       });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ════ Executives for one unit — drives the Command Centre's Unit -> Executive cascade ════
+  // Placeholder names ("NOT APPLICABLE", "N/A", "#N/A") are real values in agency_master
+  // for unassigned agencies — they are not people, so they are not offered as options.
+  const _supdExecsCache = new Map();
+  app.get('/api/supply-dash/executives/:unit', async (req, res) => {
+    try {
+      const unit = req.params.unit;
+      const now = Date.now();
+      const hit = _supdExecsCache.get(unit);
+      if (hit && hit.exp > now) return res.json(hit.data);
+      const { rows } = await q(
+        `SELECT executive_name, COUNT(DISTINCT agcd) agencies
+         FROM agency_master
+         WHERE unit = ? AND executive_name IS NOT NULL AND executive_name <> ''
+           AND UPPER(executive_name) NOT IN ('NOT APPLICABLE','N/A','#N/A','NA')
+           AND COALESCE(supply_stop_flag,'N') = 'N'
+           AND (suspend_date IS NULL OR suspend_date > CURDATE())
+         GROUP BY executive_name ORDER BY executive_name`, [unit]);
+      const data = { unit_code: unit, executives: rows.map(r => ({ name: r.executive_name, agencies: N(r.agencies) })) };
+      _supdExecsCache.set(unit, { data, exp: now + 30 * 60 * 1000 });
+      res.json(data);
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
