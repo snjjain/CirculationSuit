@@ -3516,7 +3516,8 @@ function vzKpi(o) {
     const good = o.invert ? !up : up;
     pill = `<span class="vz-pill ${good ? 'up' : 'down'}">${up ? '▲' : '▼'} ${VZ.fmt(Math.abs(o.delta))}${o.pct != null ? ` · ${Math.abs(o.pct)}%` : ''}</span>`;
   } else if (o.delta === 0) pill = `<span class="vz-pill flat">—</span>`;
-  return `<div class="vz-kpi" style="--kpi-c:${c}" ${o.tip ? `data-tip="${esc(o.tip)}"` : ''}>
+  const clickAttrs = o.onclick ? ` onclick="${esc(o.onclick)}" title="Click to drill down"` : '';
+  return `<div class="vz-kpi" style="--kpi-c:${c}${o.onclick ? ';cursor:pointer' : ''}"${clickAttrs} ${o.tip ? `data-tip="${esc(o.tip)}"` : ''}>
     <span class="kl">${o.icon || ''} ${esc(o.label)}</span>
     <div class="kv num">${o.value}</div>
     <div class="kd">${pill}${o.sub ? `<small style="color:var(--muted)">${o.sub}</small>` : ''}</div>
@@ -6515,7 +6516,7 @@ function colDonut(modes) {
   }).join('');
   const legend = entries.map(([name,val],i) => {
     const pct = total>0?(val/total*100).toFixed(1):0;
-    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer" onclick="colState().tab='modes';render()" title="Click to see mode-wise breakdown">
       <div style="width:12px;height:12px;border-radius:50%;background:${COLORS[i%COLORS.length]};flex-shrink:0"></div>
       <span style="flex:1;font-size:12px;color:var(--ink)">${esc(name)}</span>
       <b style="font-size:12px">${colFmtC(val)}</b>
@@ -6585,32 +6586,36 @@ function colOverviewTab() {
   const digPct   = k.total_collection>0 ? (k.digital_collection/k.total_collection*100).toFixed(1) : 0;
   const topAg    = (st.agencies||[]).slice(0,5);
   const maxAgAmt = topAg.length ? Math.max(...topAg.map(r=>Number(r.total_amount)||0)) : 1;
-  const top5 = topAg.map((r,i) => `<tr>
+  const goto = tab => `colState().tab='${tab}';render()`;
+  const top5 = topAg.map((r,i) => {
+    const nameQ = (r.ag_name||r.ag_code||'').replace(/'/g, "\\'");
+    return `<tr style="cursor:pointer" onclick="colState().tab='agencies';colState().agSearch='${esc(nameQ)}';render()" title="Click to find this agency in Agency Rankings">
     <td style="color:var(--muted);font-size:12px;width:28px">#${i+1}</td>
-    <td><b style="font-size:13px">${esc(r.ag_name||r.ag_code||'')}</b><br><small style="color:var(--muted)">${esc(r.branch_name||'')}</small></td>
+    <td><b style="font-size:13px;color:var(--chart-1)">${esc(r.ag_name||r.ag_code||'')}</b><br><small style="color:var(--muted)">${esc(r.branch_name||'')}</small></td>
     <td class="r num">${colFmtC(r.total_amount)}</td>
     <td class="r" style="font-size:11px;color:var(--muted)">${(r.txn||0).toLocaleString()}</td>
     <td style="width:80px">${colBar2(Number(r.total_amount),maxAgAmt,'var(--acc)')}</td>
-  </tr>`).join('');
+  </tr>`;
+  }).join('');
   return `<div class="vz-kgrid" style="margin-bottom:16px">
-    ${vzKpi({ icon:'💰', label:'Total Collection', value:colFmtC(k.total_collection), status:'up' })}
-    ${vzKpi({ icon:'📆', label:'MTD Collection',   value:colFmtC(k.mtd_collection),   status:'up' })}
-    ${vzKpi({ icon:'📊', label:'YTD Collection',   value:colFmtC(k.ytd_collection),   status:'fl' })}
-    ${vzKpi({ icon:'🔄', label:'Transactions',     value:(k.total_txn||0).toLocaleString(), status:'fl' })}
-    ${vzKpi({ icon:'🏢', label:'Agencies Paid',    value:(k.agencies_paid||0).toLocaleString(), status:'up' })}
-    ${vzKpi({ icon:'📐', label:'Avg / Agency',     value:colFmtC(k.avg_per_agency), status:'fl' })}
-    ${vzKpi({ icon:'💵', label:'Cash',             value:colFmtC(k.cash_collection), sub:cashPct+'% of total', status:'fl' })}
-    ${vzKpi({ icon:'📱', label:'Digital',          value:colFmtC(k.digital_collection), sub:digPct+'% of total', status:'up' })}
-    ${vzKpi({ icon:'🏆', label:'Highest Single',   value:colFmtC(k.highest_collection), status:'fl' })}
-    ${vzKpi({ icon:'📅', label:'Latest Day',       value:colFmtC(k.today_collection), sub:k.last_date||'', status:'up' })}
+    ${vzKpi({ icon:'💰', label:'Total Collection', value:colFmtC(k.total_collection), status:'up', onclick:goto('geo') })}
+    ${vzKpi({ icon:'📆', label:'MTD Collection',   value:colFmtC(k.mtd_collection),   status:'up', onclick:goto('trend') })}
+    ${vzKpi({ icon:'📊', label:'YTD Collection',   value:colFmtC(k.ytd_collection),   status:'fl', onclick:goto('trend') })}
+    ${vzKpi({ icon:'🔄', label:'Transactions',     value:(k.total_txn||0).toLocaleString(), status:'fl', onclick:goto('geo') })}
+    ${vzKpi({ icon:'🏢', label:'Agencies Paid',    value:(k.agencies_paid||0).toLocaleString(), status:'up', onclick:goto('agencies') })}
+    ${vzKpi({ icon:'📐', label:'Avg / Agency',     value:colFmtC(k.avg_per_agency), status:'fl', onclick:goto('agencies') })}
+    ${vzKpi({ icon:'💵', label:'Cash',             value:colFmtC(k.cash_collection), sub:cashPct+'% of total', status:'fl', onclick:goto('modes') })}
+    ${vzKpi({ icon:'📱', label:'Digital',          value:colFmtC(k.digital_collection), sub:digPct+'% of total', status:'up', onclick:goto('modes') })}
+    ${vzKpi({ icon:'🏆', label:'Highest Single',   value:colFmtC(k.highest_collection), status:'fl', onclick:goto('agencies') })}
+    ${vzKpi({ icon:'📅', label:'Latest Day',       value:colFmtC(k.today_collection), sub:k.last_date||'', status:'up', onclick:goto('trend') })}
   </div>
   <div class="two">
     <div class="vz-sec">
-      <div class="cardhead"><h3>Payment Mode Mix</h3></div>
+      <div class="cardhead"><h3>Payment Mode Mix <span style="font-weight:400;font-size:11px;color:var(--muted)">(tap to drill)</span></h3></div>
       ${colDonut(st.modes)}
     </div>
     <div class="vz-sec">
-      <div class="cardhead" style="padding:0 0 12px"><h3>Top 5 Agencies</h3></div>
+      <div class="cardhead" style="padding:0 0 12px"><h3>Top 5 Agencies <span style="font-weight:400;font-size:11px;color:var(--muted)">(tap to drill)</span></h3></div>
       <div class="tablewrap"><table>
         <thead><tr><th>#</th><th>Agency</th><th class="r">Collection</th><th class="r">Txn</th><th>Share</th></tr></thead>
         <tbody>${top5||'<tr><td colspan="5" style="text-align:center;color:var(--muted)">No data</td></tr>'}</tbody>
