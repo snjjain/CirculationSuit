@@ -741,22 +741,28 @@ module.exports = function registerSupplyDash(ctx) {
       const hsS = hs ? ` AND s.unit_code IN (${hs.map(() => '?').join(',') || "''"})` : '';
       const hsH = hs ? ` AND h.loc_id IN (${hs.map(() => '?').join(',') || "''"})` : '';
       const S = on(sc2, 's.unit_code'), Sh = on(sc2, 'h.loc_id');
-      // District / executive narrow the AGENT half only. Cash Sale comes from
-      // hawker_supply, which has neither a district column nor any agency key to reach
-      // one through (it is keyed by hawker/centre, and hawker_master has no district
-      // either), so it cannot be narrowed the same way. Rather than add a
-      // district-scoped Agent figure to a unit-wide Cash figure under one "Total" —
-      // which would read as a real number but be neither — Cash is dropped and the
-      // response says so via agent_only, which the UI surfaces.
+      // A person narrows BOTH halves, each through its own key, because the two halves
+      // are run by two different roles (see /executives/:unit):
+      //   EXEC -> agencies      -> agency_master.executive_name  -> Agent supply
+      //   CI   -> hawker centres-> hawker_supply.center_incharge_name -> Cash supply
+      // Filtering by name on both means an Executive simply shows 0 Cash (they hold no
+      // centres) and a Centre Incharge shows 0 Agent (they hold no agencies) — both
+      // true, rather than one half silently staying unit-wide.
+      // District is the one filter that still cannot touch Cash: hawker_supply has no
+      // district column and no agency key to reach one, and hawker_master has none
+      // either. So a district selection drops Cash and flags agent_only, rather than
+      // adding a district-scoped Agent figure to a unit-wide Cash figure.
       const district = (req.query.district || '').trim();
       const execName = (req.query.exec_name || '').trim();
-      const agentOnly = !!(district || execName);
+      const agentOnly = !!district;
       const distCls = district ? ' AND s.dist_name = ?' : '';
       const distP   = district ? [district] : [];
       const execJoin = execName
         ? ` JOIN (SELECT DISTINCT unit, agcd FROM agency_master WHERE executive_name = ?) em ON em.unit = s.unit_code AND em.agcd = s.agcd`
         : '';
       const execP = execName ? [execName] : [];
+      const ciCls = execName ? ' AND h.center_incharge_name = ?' : '';
+      const ciP   = execName ? [execName] : [];
       const [agent, cash] = await Promise.all([
         q(`SELECT SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) cur,
                   SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prv
@@ -766,8 +772,8 @@ module.exports = function registerSupplyDash(ctx) {
         agentOnly ? Promise.resolve({ rows: [{ cur: 0, prv: 0 }] })
         : q(`SELECT SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) cur,
                   SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) prv
-           FROM hawker_supply h WHERE h.supply_date IN (?, ?)${Sh}${hsH}`,
-          [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params, ...(hs || [])]),
+           FROM hawker_supply h WHERE h.supply_date IN (?, ?)${Sh}${hsH}${ciCls}`,
+          [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params, ...(hs || []), ...ciP]),
       ]);
       const aC = N(agent.rows[0] && agent.rows[0].cur), aP = N(agent.rows[0] && agent.rows[0].prv);
       const cC = N(cash.rows[0] && cash.rows[0].cur), cP = N(cash.rows[0] && cash.rows[0].prv);
@@ -781,25 +787,55 @@ module.exports = function registerSupplyDash(ctx) {
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
-  // ════ Executives for one unit — drives the Command Centre's Unit -> Executive cascade ════
-  // Placeholder names ("NOT APPLICABLE", "N/A", "#N/A") are real values in agency_master
-  // for unassigned agencies — they are not people, so they are not offered as options.
+  // ════ People for one unit — drives the Command Centre's Unit -> Executive cascade ════
+  // Two different roles cover two different halves of the business, so both are listed:
+  //   EXEC (Executive)       -> credit-sale AGENCIES  -> Agent supply, outstanding, collections
+  //   CI   (Centre Incharge) -> hawker CENTRES        -> Cash supply
+  // exec_master.exec_designation is the authority on which is which (agency_master's
+  // executive_name is not: it also carries CIs and FOs assigned to the odd agency, which
+  // is why an earlier version of this list showed 23 "executives" for a unit that has 5).
+  // Only is_active_pli='Y' rows are offered, and placeholder rows ("N/A", "NOT
+  // APPLICABLE", "NAEXECUTIVE") are dropped — they mark unassigned, not a person.
   const _supdExecsCache = new Map();
+  const _PLACEHOLDER_NAMES = ['N/A', '#N/A', 'NA', 'NOT APPLICABLE', 'NAEXECUTIVE', 'NONE'];
   app.get('/api/supply-dash/executives/:unit', async (req, res) => {
     try {
       const unit = req.params.unit;
       const now = Date.now();
       const hit = _supdExecsCache.get(unit);
-      if (hit && hit.exp > now) return res.json(hit.data);
-      const { rows } = await q(
-        `SELECT executive_name, COUNT(DISTINCT agcd) agencies
-         FROM agency_master
-         WHERE unit = ? AND executive_name IS NOT NULL AND executive_name <> ''
-           AND UPPER(executive_name) NOT IN ('NOT APPLICABLE','N/A','#N/A','NA')
-           AND COALESCE(supply_stop_flag,'N') = 'N'
-           AND (suspend_date IS NULL OR suspend_date > CURDATE())
-         GROUP BY executive_name ORDER BY executive_name`, [unit]);
-      const data = { unit_code: unit, executives: rows.map(r => ({ name: r.executive_name, agencies: N(r.agencies) })) };
+      if (hit && hit.exp > now && !('refresh' in req.query)) return res.json(hit.data);
+      const ph = _PLACEHOLDER_NAMES.map(() => '?').join(',');
+      const [people, agencyCnt, centreCnt] = await Promise.all([
+        q(`SELECT executive_code, executive_desc, exec_designation
+           FROM exec_master
+           WHERE unit_code = ? AND is_active_pli = 'Y' AND exec_designation IN ('EXEC','CI')
+             AND executive_desc IS NOT NULL AND TRIM(executive_desc) <> ''
+             AND UPPER(TRIM(executive_desc)) NOT IN (${ph})
+           ORDER BY exec_designation, executive_desc`, [unit, ..._PLACEHOLDER_NAMES]),
+        // Agencies per executive name (an EXEC's book).
+        q(`SELECT executive_name nm, COUNT(DISTINCT agcd) n FROM agency_master
+           WHERE unit = ? AND COALESCE(supply_stop_flag,'N') = 'N'
+             AND (suspend_date IS NULL OR suspend_date > CURDATE())
+           GROUP BY executive_name`, [unit]),
+        // Centres + hawkers per centre-incharge, from the latest synced supply day.
+        q(`SELECT center_incharge_name nm, COUNT(DISTINCT hwk_cent_code) centres, COUNT(DISTINCT hawker_id) hawkers
+           FROM hawker_supply
+           WHERE loc_id = ? AND supply_date = (SELECT MAX(supply_date) FROM hawker_supply WHERE loc_id = ?)
+           GROUP BY center_incharge_name`, [unit, unit]),
+      ]);
+      const key = s => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+      const agMap = new Map(agencyCnt.rows.map(r => [key(r.nm), N(r.n)]));
+      const ctMap = new Map(centreCnt.rows.map(r => [key(r.nm), { centres: N(r.centres), hawkers: N(r.hawkers) }]));
+      const executives = people.rows.map(r => {
+        const k = key(r.executive_desc), ct = ctMap.get(k);
+        return {
+          name: String(r.executive_desc).trim(), code: r.executive_code,
+          role: r.exec_designation,                        // 'EXEC' | 'CI'
+          agencies: agMap.get(k) || 0,
+          centres: ct ? ct.centres : 0, hawkers: ct ? ct.hawkers : 0,
+        };
+      });
+      const data = { unit_code: unit, executives };
       _supdExecsCache.set(unit, { data, exp: now + 30 * 60 * 1000 });
       res.json(data);
     } catch (e) { res.status(500).json({ detail: String(e) }); }

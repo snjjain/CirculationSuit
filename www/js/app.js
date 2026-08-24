@@ -3689,14 +3689,15 @@ VIEWS.command = () => {
   }
 
   /* ── Top KPI strip data ─────────────────────────────────── */
-  // Supply, Outstanding and Collections all honour District/Executive now. Two sources
-  // still genuinely cannot: Reader Surveys (survey_data has neither column) and Taxi
-  // Alerts (a today-only vehicle snapshot with no agency dimension at all). They say so
-  // rather than sitting there looking stuck. Supply's Cash half is the third case — it
-  // is dropped server-side when either filter is on (agent_only), noted on that card.
+  // Supply, Outstanding and Collections all honour District / Executive-CI now. Two
+  // sources still genuinely cannot: Reader Surveys (survey_data has neither column) and
+  // Taxi Alerts (a today-only vehicle snapshot with no agency dimension at all) — they
+  // say so rather than sitting there looking stuck. Cash supply is filterable by Centre
+  // Incharge but NOT by district (hawker data has no district anywhere), so a district
+  // selection alone drops Cash server-side (agent_only) and the Supply card says so.
   const narrowed  = !!(cf.district || cf.exec_name);
-  const naNote    = narrowed ? ' · not filterable by district/executive' : '';
-  const cashNote  = sup && sup.agent_only ? ' · Agent Sale only (Cash has no district/executive breakdown)' : '';
+  const naNote    = narrowed ? ' · not filterable by district / executive' : '';
+  const cashNote  = sup && sup.agent_only ? ' · Agent Sale only (hawker Cash sale has no district breakdown)' : '';
   const cashVal   = sup && sup.cash ? (Number(sup.cash.current) || 0).toLocaleString('en-IN') : null;
   const strip = [
     { val: sup && !sup._err && !sup.no_data ? (Number(sup.total.current) || 0).toLocaleString('en-IN') : (c._supLoading ? '…' : '—'),
@@ -3777,10 +3778,22 @@ VIEWS.command = () => {
       </select>
     </div>
     <div>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Executive</div>
-      <select onchange="cmdSetExec(this.value)" ${!cf.unit_code ? 'disabled' : ''} style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;min-width:190px${!cf.unit_code ? ';opacity:.55;cursor:not-allowed' : ''}">
-        <option value="">${cf.unit_code ? 'All Executives' : 'Pick a unit first'}</option>
-        ${cmdExecs.map(e => `<option value="${esc(e.name)}" ${cf.exec_name === e.name ? 'selected' : ''}>${esc(e.name)}${e.agencies ? ` (${e.agencies})` : ''}</option>`).join('')}
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Executive / Centre Incharge</div>
+      <select onchange="cmdSetExec(this.value)" ${!cf.unit_code ? 'disabled' : ''} style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;min-width:230px${!cf.unit_code ? ';opacity:.55;cursor:not-allowed' : ''}">
+        <option value="">${cf.unit_code ? 'All Executives & CIs' : 'Pick a unit first'}</option>
+        ${(() => {
+          // Executives run credit-sale agencies (Agent supply); Centre Incharges run
+          // hawker centres (Cash supply). Grouped and CI-suffixed so it is obvious which
+          // half of the business a name will narrow — see /executives/:unit.
+          const grp = (role, label, cnt) => {
+            const list = cmdExecs.filter(e => e.role === role);
+            if (!list.length) return '';
+            return `<optgroup label="${label} (${list.length})">` + list.map(e =>
+              `<option value="${esc(e.name)}" ${cf.exec_name === e.name ? 'selected' : ''}>${esc(e.name)}${role === 'CI' ? ' · CI' : ''}${cnt(e) ? ` (${cnt(e)})` : ''}</option>`).join('') + `</optgroup>`;
+          };
+          return grp('EXEC', 'Executives', e => e.agencies)
+               + grp('CI',   'Centre Incharges', e => e.hawkers);
+        })()}
       </select>
     </div>
     ${cf.state || cf.unit_code || cf.district || cf.exec_name || cf.period !== 'month' ? `<button onclick="cmdResetFilters()" style="padding:7px 14px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--muted);font-size:12px;cursor:pointer">✕ Reset filters</button>` : ''}
