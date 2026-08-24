@@ -3,18 +3,17 @@
 
 /* ---------- navigation model (menus & submenus from both references) ---------- */
 const DASH_MENU = [
-  ["command",          "Command Centre",          "📊"],
-  ["ai_nexus",         "Strategic AI Nexus",      "🧭"],
-  ["supply_dash",      "Supply Dashboard",        "📦"],
-  ["collections",      "Collections",             "₹"],
-  ["outstanding",      "Agency Outstanding",      "💰"],
-  ["exec_perf",        "Executive Performance",   "👤"],
-  ["exec_targets",     "Monthly Targets",         "🎯"],
-  ["agency_rating",    "Agency Rating Engine",    "⭐"],
-  ["short_payment",    "Short Payment",           "📋"],
-  ["transport",        "Taxi Dashboard",          "🚕"],
-  ["survey_dash",      "Survey Intelligence",     "📊"],
-  ["dcr_analytics",    "Field Visit Intelligence","📍"],
+  ["command",          "Command Centre",              "📊"],
+  ["ai_nexus",         "Strategic AI Nexus",          "🧭"],
+  ["supply_dash",      "Supply Dashboard",            "📦"],
+  ["collections",      "Collections",                 "₹"],
+  ["outstanding",      "Agency Outstanding",          "💰"],
+  ["exec_perf",        "Executive Performance",       "👤"],
+  ["dcr_analytics",    "DCR - Field Visit Analysis",  "📍"],
+  ["agency_rating",    "Agency Rating Engine",        "⭐"],
+  ["short_payment",    "Short Payment",               "📋"],
+  ["transport",        "Taxi Dashboard",              "🚕"],
+  ["survey_dash",      "Survey Intelligence",         "📊"],
 ];
 
 const APP_MENU = {
@@ -2188,7 +2187,7 @@ window.dcrASetTab = t => { _dcrA.tab = t; render(); };
 /* ── Main view ── */
 VIEWS.dcr_analytics = () => {
   const tab = _dcrA.tab;
-  const hdr = pagehead('Field Visit Intelligence', 'DCR analytics — agency visits, center attendance, GPS mapping & executive performance');
+  const hdr = pagehead('DCR - Field Visit Analysis', 'DCR analytics — agency visits, center attendance, GPS mapping & executive performance');
 
   _dcrALoadUnits();
   const allUnits = _dcrA.units || [];
@@ -5577,7 +5576,7 @@ VIEWS.ai_nexus = () => {
   else if (st.tab === 'actions') body = _aiActionsTab(_aiState());
   else body = _nexusOverview(st);
 
-  return pagehead('Strategic AI Nexus', 'Your AI Circulation Boss — insights, opportunities, risks, nearby-agency alerts and actions, computed from live data. 7-Day Tour Plan now lives in Field Visit Intelligence.') + `
+  return pagehead('Strategic AI Nexus', 'Your AI Circulation Boss — insights, opportunities, risks, nearby-agency alerts and actions, computed from live data. 7-Day Tour Plan now lives in DCR - Field Visit Analysis.') + `
     <style>@keyframes _cmdPulse{0%,100%{opacity:1}50%{opacity:.45}}
     ._cmd-card{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:16px 18px}
     ._cmd-strip-item{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px}</style>
@@ -13817,7 +13816,7 @@ function navGroups() {
   if (u.dashboard) {
     const fieldIds = ["routes", "collections", "complaints", "partners"];
     // mgmtIds are always shown to hl≤4 regardless of saved navScreens (handles screens added after a user's navScreens was last saved)
-    const mgmtIds  = ["command", "ai_nexus", "supply_dash", "exec_perf", "exec_targets", "agency_rating"];
+    const mgmtIds  = ["command", "ai_nexus", "supply_dash", "exec_perf", "agency_rating"];
     const items = DASH_MENU
       .filter(([id]) => (hl <= 4 && mgmtIds.includes(id)) || (u.navScreens ? u.navScreens.includes(id) : (hl <= 4 || fieldIds.includes(id))))
       .filter(([id]) => permAllows(id, 'view') !== false)   // explicit rights-matrix deny hides the screen
@@ -13837,6 +13836,7 @@ function navGroups() {
     { id: "audit_log",       label: "Audit Trail",      icon: "📜" },
     { id: "email_config",    label: "Email Config",     icon: "✉" },
     { id: "competitor_data", label: "Competitor Data",  icon: "📊" },
+    { id: "exec_targets",    label: "Monthly Targets",  icon: "🎯" },
   ]});
   if (hl > 1 && hl <= 3) groups.push({ label: "Data Entry", items: [
     { id: "competitor_data", label: "Competitor Data",  icon: "📊" },
