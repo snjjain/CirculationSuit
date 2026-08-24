@@ -133,34 +133,44 @@ module.exports = function registerSupplyDash(ctx) {
   });
 
   // ════ 1. KPI cards ════
+  // "Day Supply" here must match the Sale tab's "Total Sale" definition (Agent regular
+  // circulation + Cash) — it previously summed every supply_data row unfiltered (any
+  // sup_type_code, stopped/suspended agencies, excluded editions included) with no Cash
+  // at all, so the two tabs showed two different numbers for what looked like the same
+  // metric. Agent-side queries now share AGENT_JOIN/AGENT_WHERE with sale-summary, and
+  // Cash is added from hawker_supply the same way sale-summary does.
   app.get('/api/supply-dash/kpis', async (req, res) => {
     try {
       const d = await refDates(req);
       if (!d) return res.json({ no_data: true });
       const sc2 = await scopeUnits(req);
-      const S = on(sc2, 'unit_code'), P = sc2.params;
+      const S = on(sc2, 's.unit_code'), P = sc2.params;
+      const Sh = on(sc2, 'h.loc_id');
       const SM = on(sc2, 'unit'), // agency_master uses "unit"
             PM = sc2.params;
 
-      const [today, mtd, agentDelta, masterStats, newAgents, sparkQ] = await Promise.all([
-        // today + yesterday totals
-        q(`SELECT supply_date, SUM(sup_copy) copies, COUNT(DISTINCT agcd) agents
-           FROM supply_data WHERE supply_date IN (?, ?)${S} GROUP BY supply_date`,
+      const [today, mtd, agentDelta, masterStats, newAgents, sparkQ, cashToday, cashSpark] = await Promise.all([
+        // today + yesterday totals — Agent regular circulation only (matches sale-summary)
+        q(`SELECT s.supply_date, SUM(s.sup_copy) copies, COUNT(DISTINCT s.agcd) agents
+           FROM supply_data s ${AGENT_JOIN}
+           WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${S} GROUP BY s.supply_date`,
           [d.cur, d.prev || d.cur, ...P]),
         // month-to-date daily average (month of the latest day)
-        q(`SELECT SUM(sup_copy)/NULLIF(COUNT(DISTINCT supply_date),0) daily_avg,
-                  COUNT(DISTINCT supply_date) days
-           FROM supply_data WHERE supply_date >= ?${S}`, [d.monthStart, ...P]),
+        q(`SELECT SUM(s.sup_copy)/NULLIF(COUNT(DISTINCT s.supply_date),0) daily_avg,
+                  COUNT(DISTINCT s.supply_date) days
+           FROM supply_data s ${AGENT_JOIN}
+           WHERE ${AGENT_WHERE} AND s.supply_date >= ?${S}`, [d.monthStart, ...P]),
         // per-agent growth/reduction between prev and cur day
         q(`SELECT SUM(CASE WHEN cur > prv THEN cur - prv ELSE 0 END) growth,
                   SUM(CASE WHEN cur < prv THEN prv - cur ELSE 0 END) reduction,
                   SUM(cur > prv) grow_agents, SUM(cur < prv AND cur > 0) reduce_agents,
                   SUM(prv > 0 AND cur = 0) zero_agents
-           FROM (SELECT agcd, dpcd,
-                        SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) cur,
-                        SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) prv
-                 FROM supply_data WHERE supply_date IN (?, ?)${S}
-                 GROUP BY agcd, dpcd) x`,
+           FROM (SELECT s.agcd, s.dpcd,
+                        SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
+                        SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
+                 FROM supply_data s ${AGENT_JOIN}
+                 WHERE ${AGENT_WHERE} AND s.supply_date IN (?, ?)${S}
+                 GROUP BY s.agcd, s.dpcd) x`,
           [d.cur, d.prev || d.cur, d.cur, d.prev || d.cur, ...P]),
         // master counts
         q(`SELECT SUM(supply_stop_flag='N' AND suspend_date IS NULL) active_agents,
@@ -171,23 +181,40 @@ module.exports = function registerSupplyDash(ctx) {
         q(`SELECT COUNT(*) cnt FROM agency_master
            WHERE supply_start_dt >= ? AND supply_start_dt <= LAST_DAY(?)${SM}`,
           [d.monthStart, d.cur, ...PM]),
-        // 14-day daily totals for the KPI sparkline
-        q(`SELECT supply_date, SUM(sup_copy) copies FROM supply_data
-           WHERE supply_date > DATE_SUB(?, INTERVAL 14 DAY)${S}
-           GROUP BY supply_date ORDER BY supply_date`, [d.cur, ...P]),
+        // 14-day daily totals for the KPI sparkline — Agent only, Cash added below
+        q(`SELECT s.supply_date, SUM(s.sup_copy) copies FROM supply_data s ${AGENT_JOIN}
+           WHERE ${AGENT_WHERE} AND s.supply_date > DATE_SUB(?, INTERVAL 14 DAY)${S}
+           GROUP BY s.supply_date ORDER BY s.supply_date`, [d.cur, ...P]),
+        // Cash sale today/yesterday (hawker_supply)
+        q(`SELECT h.supply_date, SUM(h.sup_copies) copies FROM hawker_supply h
+           WHERE h.supply_date IN (?, ?)${Sh} GROUP BY h.supply_date`,
+          [d.cur, d.prev || d.cur, ...P]),
+        // Cash sale 14-day for the sparkline
+        q(`SELECT h.supply_date, SUM(h.sup_copies) copies FROM hawker_supply h
+           WHERE h.supply_date > DATE_SUB(?, INTERVAL 14 DAY)${Sh}
+           GROUP BY h.supply_date ORDER BY h.supply_date`, [d.cur, ...P]),
       ]);
 
       const curRow  = today.rows.find(r => String(r.supply_date).slice(0, 10) === d.cur) || {};
       const prevRow = today.rows.find(r => String(r.supply_date).slice(0, 10) === d.prev) || {};
       const ad = agentDelta.rows[0] || {};
       const ms = masterStats.rows[0] || {};
+      const cashByDate = {};
+      cashToday.rows.forEach(r => { cashByDate[String(r.supply_date).slice(0, 10)] = N(r.copies); });
+      const curCash  = cashByDate[d.cur] || 0;
+      const prevCash = cashByDate[d.prev] || 0;
+      const cashSparkByDate = {};
+      cashSpark.rows.forEach(r => { cashSparkByDate[String(r.supply_date).slice(0, 10)] = N(r.copies); });
+
+      const curTotal  = N(curRow.copies) + curCash;
+      const prevTotal = N(prevRow.copies) + prevCash;
 
       res.json({
         data_upto: d.cur, prev_day: d.prev,
-        today_supply: N(curRow.copies), today_agents: N(curRow.agents),
-        yesterday_supply: N(prevRow.copies),
-        day_change: N(curRow.copies) - N(prevRow.copies),
-        day_change_pct: r1(pct(N(curRow.copies), N(prevRow.copies))),
+        today_supply: curTotal, today_agents: N(curRow.agents),
+        yesterday_supply: prevTotal,
+        day_change: curTotal - prevTotal,
+        day_change_pct: r1(pct(curTotal, prevTotal)),
         month_avg_supply: Math.round(N(mtd.rows[0]?.daily_avg)),
         mtd_days: N(mtd.rows[0]?.days),
         mtd_growth_copies: N(ad.growth),
@@ -198,7 +225,7 @@ module.exports = function registerSupplyDash(ctx) {
         active_agents: N(ms.active_agents), inactive_agents: N(ms.inactive_agents),
         centers: N(ms.centers),
         new_agents_month: N(newAgents.rows[0]?.cnt),
-        spark: sparkQ.rows.map(r => N(r.copies)),
+        spark: sparkQ.rows.map(r => N(r.copies) + (cashSparkByDate[String(r.supply_date).slice(0, 10)] || 0)),
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
