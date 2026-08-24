@@ -3950,16 +3950,49 @@ app.get('/api/collection/unit-summary', async (req, res) => {
 // GET /api/collection/exec-summary?branch=UNIT — Level 3 (executives within a unit)
 app.get('/api/collection/exec-summary', async (req, res) => {
   try {
+    const N = v => Number(v) || 0;
+    const R1 = v => v == null ? null : Math.round(v * 10) / 10;
     const sc = await getColScopeFilter(req, 'ac');
     const { clause: rc, params: rp } = colFilters(req.query);
     const clause = rc + sc.clause, params = [...rp, ...sc.params];
+    const branch = String(req.query.branch || '').trim();
     const { rows } = await q(`
       SELECT COALESCE(NULLIF(am.executive_name,''),'(no executive)') exec_name,
              -COALESCE(SUM(ac.amount),0) amount, COUNT(*) txn, COUNT(DISTINCT ac.ag_code) agencies
       FROM agency_collection ac ${COL_EXEC_JOIN}
       WHERE ac.is_valid=1 ${clause}
       GROUP BY exec_name ORDER BY amount DESC`, params);
-    res.json({ rows });
+
+    // Bill/Receipt/District come from agency_outstanding+agency_master (both Oracle-synced,
+    // same collation — safe to JOIN directly, unlike agency_collection which is app-imported).
+    const branchClause = branch ? ' AND am.unit_name = ?' : '';
+    const branchParams = branch ? [branch] : [];
+    const { rows: billRows } = await q(`
+      SELECT COALESCE(NULLIF(am.executive_name,''),'(no executive)') exec_name,
+             SUM(ao.bill_amt) bill_amt, SUM(ao.rec_amt) rec_amt,
+             GROUP_CONCAT(DISTINCT NULLIF(am.dist_name,'') ORDER BY am.dist_name SEPARATOR ', ') districts
+      FROM agency_outstanding ao
+      JOIN (SELECT unit, agcd, MAX(executive_name) executive_name, MAX(unit_name) unit_name, MAX(dist_name) dist_name
+            FROM agency_master GROUP BY unit, agcd) am
+        ON am.unit = ao.unit_code AND am.agcd = ao.ag_code
+      WHERE ao.period_label='CURRENT'${branchClause}
+      GROUP BY exec_name`, branchParams);
+    const billMap = {};
+    billRows.forEach(r => { billMap[r.exec_name] = r; });
+
+    res.json({
+      rows: rows.map(r => {
+        const b = billMap[r.exec_name] || {};
+        const bill = b.bill_amt != null ? N(b.bill_amt) : null, rec = b.rec_amt != null ? N(b.rec_amt) : null;
+        return {
+          ...r,
+          district: b.districts || null,
+          bill_amt: bill, rec_amt: rec,
+          diff: (bill != null && rec != null) ? R1(rec - bill) : null,
+          collection_pct: (bill != null && bill > 0 && rec != null) ? R1(rec / bill * 100) : null,
+        };
+      }),
+    });
   } catch (e) { res.status(500).json({ detail: String(e) }); }
 });
 

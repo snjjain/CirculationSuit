@@ -3121,7 +3121,7 @@ function _cmdBase() { return location.origin; }
    data model (no per-line revenue split; scoping is already enforced per
    logged-in user, not user-switchable) — intentionally omitted. ── */
 function _cmdFilterState() {
-  return S.live.cmdFilters || (S.live.cmdFilters = { period: 'month', unit_code: '', unit_name: '', search: '', searchResults: null });
+  return S.live.cmdFilters || (S.live.cmdFilters = { period: 'month', state: '', unit_code: '', unit_name: '', search: '', searchResults: null });
 }
 function _cmdPeriodRange(period) {
   const today = new Date(), y = today.getFullYear(), m = today.getMonth();
@@ -3131,6 +3131,7 @@ function _cmdPeriodRange(period) {
   return { from: monthStartISO(), to: todayISO() };
 }
 window.cmdSetPeriod = p => { _cmdFilterState().period = p; S.live.cmd = {}; render(); };
+window.cmdSetState = s => { const f = _cmdFilterState(); f.state = s; f.unit_code = ''; f.unit_name = ''; S.live.cmd = {}; render(); };
 window.cmdSetUnit = (code, name) => { const f = _cmdFilterState(); f.unit_code = code; f.unit_name = name || ''; S.live.cmd = {}; render(); };
 window.cmdResetFilters = () => { S.live.cmdFilters = null; S.live.cmd = {}; render(); };
 window.cmdSearchInput = v => {
@@ -3155,8 +3156,8 @@ function _cmdLoadUnits() {
   S.live._cmdUnitsLoading = true;
   fetch(_cmdBase() + '/api/supply-dash/filters', { headers: api.h() })
     .then(r => r.json())
-    .then(d => { S.live.cmdUnits = d.units || []; S.live._cmdUnitsLoading = false; if (S.screen === 'command') render(); })
-    .catch(() => { S.live.cmdUnits = []; S.live._cmdUnitsLoading = false; });
+    .then(d => { S.live.cmdUnits = d.units || []; S.live.cmdStates = d.states || []; S.live._cmdUnitsLoading = false; if (S.screen === 'command') render(); })
+    .catch(() => { S.live.cmdUnits = []; S.live.cmdStates = []; S.live._cmdUnitsLoading = false; });
 }
 
 function _cmdLoad() {
@@ -3165,6 +3166,25 @@ function _cmdLoad() {
   _cmdLoadUnits();
   const period = _cmdPeriodRange(f.period);
   const uP = f.unit_code ? 'unit_code=' + encodeURIComponent(f.unit_code) : '';
+  // State is Rajasthan/MP/Chhattisgarh/National (matches the regionOf() bucketing used
+  // everywhere else in the app). "National" is an umbrella for everything else with no
+  // literal row to match, so it only narrows the Unit dropdown (below) — never sent as a
+  // filter param. For the 3 real states, every endpoint here was individually verified
+  // against live data (several looked "supported" by their code but silently returned
+  // zero rows for the obvious param):
+  //   - collection/kpis, supply-dash/sale-summary|day-compare|trend: full name works
+  //     (state_name columns store "RAJASTHAN" etc.)
+  //   - exec-perf/alerts|dcr: needs the ABBREVIATED code (agency_master.unit_state_nm
+  //     stores "RJ"/"MP"/"CG", not the full name)
+  //   - outstanding/kpis: its `state` param is actually `group_unit_name`, an unrelated
+  //     zonal grouping — there is no way to filter this endpoint by geographic state
+  //   - survey/kpis: state_name column didn't match any tested format (full name,
+  //     abbreviation, or lowercase) — left unfiltered by state rather than risk a
+  //     confident-looking zero
+  const CMD_STATE_ABBR = { 'RAJASTHAN': 'RJ', 'MADHYA PRADESH': 'MP', 'CHHATTISGARH': 'CG' };
+  const isCoreState = f.state && f.state !== 'NATIONAL';
+  const sPFull = isCoreState ? 'state=' + encodeURIComponent(f.state) + '&state_name=' + encodeURIComponent(f.state) : '';
+  const sPAbbr = isCoreState ? 'state=' + encodeURIComponent(CMD_STATE_ABBR[f.state] || f.state) : '';
   const dP = 'from=' + period.from + '&to=' + period.to;
   const qs = (...parts) => { const s = parts.filter(Boolean).join('&'); return s ? '?' + s : ''; };
 
@@ -3178,7 +3198,7 @@ function _cmdLoad() {
   if (!c.co && !c._coLoading) {
     c._coLoading = true;
     const branchP = f.unit_name ? 'branch=' + encodeURIComponent(f.unit_name) : '';
-    fetch(_cmdBase() + '/api/collection/kpis' + qs(dP, branchP), { headers: api.h() })
+    fetch(_cmdBase() + '/api/collection/kpis' + qs(dP, branchP, sPFull), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.co = d; c._coLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._coLoading = false; c.co = { _err: true }; if (S.screen === 'command') render(); });
@@ -3201,21 +3221,21 @@ function _cmdLoad() {
   // Supply's sale-summary is a day-over-day comparison, not a period aggregate — branch-filterable, not period-filterable.
   if (!c.sup && !c._supLoading) {
     c._supLoading = true;
-    fetch(_cmdBase() + '/api/supply-dash/sale-summary' + qs(uP), { headers: api.h() })
+    fetch(_cmdBase() + '/api/supply-dash/sale-summary' + qs(uP, sPFull), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.sup = d; c._supLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._supLoading = false; c.sup = { _err: true }; if (S.screen === 'command') render(); });
   }
   if (!c.fa && !c._faLoading) {
     c._faLoading = true;
-    fetch(_cmdBase() + '/api/exec-perf/alerts' + qs(uP, dP), { headers: api.h() })
+    fetch(_cmdBase() + '/api/exec-perf/alerts' + qs(uP, dP, sPAbbr), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.fa = d; c._faLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._faLoading = false; c.fa = { _err: true }; if (S.screen === 'command') render(); });
   }
   if (!c.dcr && !c._dcrLoading) {
     c._dcrLoading = true;
-    fetch(_cmdBase() + '/api/exec-perf/dcr' + qs(uP, dP), { headers: api.h() })
+    fetch(_cmdBase() + '/api/exec-perf/dcr' + qs(uP, dP, sPAbbr), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.dcr = d; c._dcrLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._dcrLoading = false; c.dcr = { _err: true }; if (S.screen === 'command') render(); });
@@ -3225,14 +3245,14 @@ function _cmdLoad() {
   const _dcK  = 'dc_' + _grp + '_' + _mode;
   if (!c[_dcK] && !c['_l' + _dcK]) {
     c['_l' + _dcK] = true;
-    fetch(_cmdBase() + '/api/supply-dash/day-compare?group=' + _grp + '&mode=' + _mode + (uP ? '&' + uP : ''), { headers: api.h() })
+    fetch(_cmdBase() + '/api/supply-dash/day-compare?group=' + _grp + '&mode=' + _mode + [uP, sPFull].filter(Boolean).map(p => '&' + p).join(''), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c[_dcK] = d; c['_l' + _dcK] = false; if (S.screen === 'command') render(); })
       .catch(() => { c['_l' + _dcK] = false; c[_dcK] = { _err: true }; if (S.screen === 'command') render(); });
   }
   if (!c.tr && !c._trLoading) {
     c._trLoading = true;
-    fetch(_cmdBase() + '/api/supply-dash/trend?granularity=daily&days=90' + (uP ? '&' + uP : ''), { headers: api.h() })
+    fetch(_cmdBase() + '/api/supply-dash/trend?granularity=daily&days=90' + [uP, sPFull].filter(Boolean).map(p => '&' + p).join(''), { headers: api.h() })
       .then(r => r.json())
       .then(d => { c.tr = d; c._trLoading = false; if (S.screen === 'command') render(); })
       .catch(() => { c._trLoading = false; c.tr = { _err: true }; if (S.screen === 'command') render(); });
@@ -3642,7 +3662,11 @@ VIEWS.command = () => {
   }
 
   /* ── Filter bar ──────────────────────────────────────────── */
+  const CMD_STATE_OPTS = [['RAJASTHAN','Rajasthan'],['MADHYA PRADESH','Madhya Pradesh'],['CHHATTISGARH','Chhattisgarh'],['NATIONAL','National']];
+  const CMD_CORE_STATES = new Set(['RAJASTHAN','MADHYA PRADESH','CHHATTISGARH']);
+  const cmdRegionOf = s => { const u = String(s || '').toUpperCase(); return CMD_CORE_STATES.has(u) ? u : 'NATIONAL'; };
   const cmdUnits = S.live.cmdUnits || [];
+  const cmdUnitsInState = cf.state ? cmdUnits.filter(u => cmdRegionOf(u.state_name) === cf.state) : cmdUnits;
   const periodBtn = (p, label, edge) => `<button onclick="cmdSetPeriod('${p}')" style="padding:7px 16px;border:1px solid var(--brd);${edge === 'l' ? 'border-radius:8px 0 0 8px;border-right:none' : edge === 'r' ? 'border-radius:0 8px 8px 0' : 'border-left:none;border-right:none'};background:${cf.period === p ? 'var(--navy,#1C2B45)' : 'var(--card)'};color:${cf.period === p ? '#fff' : 'var(--ink)'};font-size:12.5px;font-weight:600;cursor:pointer">${label}</button>`;
   const searchDrop = cf.searchResults != null
     ? (cf.searchResults.length
@@ -3659,10 +3683,17 @@ VIEWS.command = () => {
       <div style="display:flex">${periodBtn('month', 'This month', 'l')}${periodBtn('last_month', 'Last month')}${periodBtn('quarter', 'Quarter', 'r')}</div>
     </div>
     <div>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Branch</div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">State</div>
+      <select onchange="cmdSetState(this.value)" style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;min-width:150px">
+        <option value="">All States</option>
+        ${CMD_STATE_OPTS.map(([v, l]) => `<option value="${v}" ${cf.state === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>
+    </div>
+    <div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Unit</div>
       <select onchange="cmdSetUnit(this.value, this.selectedOptions[0].dataset.name||'')" style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;min-width:170px">
-        <option value="">All Branches</option>
-        ${cmdUnits.map(u => `<option value="${esc(u.unit_code)}" data-name="${esc(u.unit_name || u.unit_code)}" ${cf.unit_code === u.unit_code ? 'selected' : ''}>${esc(u.unit_name || u.unit_code)}</option>`).join('')}
+        <option value="">All Units</option>
+        ${cmdUnitsInState.map(u => `<option value="${esc(u.unit_code)}" data-name="${esc(u.unit_name || u.unit_code)}" ${cf.unit_code === u.unit_code ? 'selected' : ''}>${esc(u.unit_name || u.unit_code)}</option>`).join('')}
       </select>
     </div>
     <div style="position:relative;flex:1;min-width:220px;max-width:340px">
@@ -3670,7 +3701,7 @@ VIEWS.command = () => {
       <input type="text" placeholder="Agency name…" value="${esc(cf.search || '')}" oninput="cmdSearchInput(this.value)" style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;width:100%">
       ${searchDrop}
     </div>
-    ${cf.unit_code || cf.period !== 'month' ? `<button onclick="cmdResetFilters()" style="padding:7px 14px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--muted);font-size:12px;cursor:pointer">✕ Reset filters</button>` : ''}
+    ${cf.state || cf.unit_code || cf.period !== 'month' ? `<button onclick="cmdResetFilters()" style="padding:7px 14px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--muted);font-size:12px;cursor:pointer">✕ Reset filters</button>` : ''}
   </div>`;
 
   return pagehead('Command Centre', 'Live data summary · ' + TODAY) + filterBar + `
@@ -6961,9 +6992,21 @@ function colGeoTab() {
   } else if (!st.drillExec) {
     colGeoGet('geoExecs', 'exec-summary', { branch: st.drillUnitName || st.drillUnit });
     title = esc(st.drillUnitName || st.drillUnit) + ' — Executives'; sub = 'Click an executive to see their agencies';
-    data = st.geoExecs; cols = ['Executive', '>Agencies', '>Txn', '>Collection'];
-    rowFn = r => `<td style="cursor:pointer;color:var(--chart-1);font-weight:600" onclick="colDrill('${esc(st.drillRegion)}','${esc(st.drillUnit)}','${un}','${esc(r.exec_name).replace(/'/g, "\\'")}')">👔 ${esc(r.exec_name)}</td>
-      <td class="r num">${(r.agencies||0).toLocaleString()}</td><td class="r num">${(r.txn||0).toLocaleString()}</td><td class="r num">${colFmtC(r.amount)}</td>`;
+    data = st.geoExecs;
+    cols = ['Executive', 'District', '>Agencies', '>Txn', '>Total Bill', '>Total Receipt', '>Diff', '>Collection %', '>Collection'];
+    rowFn = r => {
+      const diffColor = r.diff == null ? 'var(--muted)' : r.diff >= 0 ? 'var(--grn)' : 'var(--red)';
+      const pctColor = r.collection_pct == null ? 'var(--muted)' : r.collection_pct >= 80 ? 'var(--grn)' : r.collection_pct >= 50 ? 'var(--gold)' : 'var(--red)';
+      return `<td style="cursor:pointer;color:var(--chart-1);font-weight:600" onclick="colDrill('${esc(st.drillRegion)}','${esc(st.drillUnit)}','${un}','${esc(r.exec_name).replace(/'/g, "\\'")}')">👔 ${esc(r.exec_name)}</td>
+      <td style="font-size:12px">${esc(r.district || '—')}</td>
+      <td class="r num">${(r.agencies||0).toLocaleString()}</td>
+      <td class="r num">${(r.txn||0).toLocaleString()}</td>
+      <td class="r num">${r.bill_amt!=null?colFmtC(r.bill_amt):'—'}</td>
+      <td class="r num">${r.rec_amt!=null?colFmtC(r.rec_amt):'—'}</td>
+      <td class="r num" style="color:${diffColor};font-weight:600">${r.diff!=null?(r.diff>=0?'+':'-')+colFmtC(r.diff):'—'}</td>
+      <td class="r num" style="color:${pctColor};font-weight:600">${r.collection_pct!=null?r.collection_pct+'%':'—'}</td>
+      <td class="r num">${colFmtC(r.amount)}</td>`;
+    };
   } else {
     colGeoGet('geoAgencies', 'exec-agencies', { branch: st.drillUnitName || st.drillUnit, exec: st.drillExec });
     title = esc(st.drillExec) + ' — Agencies'; sub = esc(st.drillUnitName || st.drillUnit) + ' · collection by agency';
@@ -7007,7 +7050,16 @@ function colGeoTab() {
       midCells = `<td></td><td></td><td></td><td></td>` + numCell(tTxn.toLocaleString()) + numCell(colFmtC(tBill)) + numCell(colFmtC(tRec))
         + `<td class="r num" style="color:${tDiff >= 0 ? 'var(--grn)' : 'var(--red)'}">${tDiff >= 0 ? '+' : '-'}${colFmtC(tDiff)}</td>`;
     }
-    else                      midCells = numCell(tAg.toLocaleString()) + numCell(tTxn.toLocaleString());                    // Unit / Exec
+    else if (st.drillUnit) {                                                                                                   // Executives
+      const tBill = rows.reduce((a, r) => a + (Number(r.bill_amt) || 0), 0);
+      const tRec  = rows.reduce((a, r) => a + (Number(r.rec_amt) || 0), 0);
+      const tDiff = tRec - tBill;
+      const tPct  = tBill > 0 ? Math.round(tRec / tBill * 1000) / 10 : null;
+      midCells = `<td></td>` + numCell(tAg.toLocaleString()) + numCell(tTxn.toLocaleString()) + numCell(colFmtC(tBill)) + numCell(colFmtC(tRec))
+        + `<td class="r num" style="color:${tDiff >= 0 ? 'var(--grn)' : 'var(--red)'}">${tDiff >= 0 ? '+' : '-'}${colFmtC(tDiff)}</td>`
+        + `<td class="r num">${tPct != null ? tPct + '%' : '—'}</td>`;
+    }
+    else                      midCells = numCell(tAg.toLocaleString()) + numCell(tTxn.toLocaleString());                    // Unit
     body += `<tr style="font-weight:800;background:var(--navy);color:#fff"><td>Total</td>${midCells}${numCell(colFmtC(tAmt))}</tr>`;
   }
 
@@ -13933,6 +13985,12 @@ function render() {
   const app = $("#app");
   if (!S.user) { app.innerHTML = loginHTML(); return; }
   if (S.user.mustChangePassword) { app.innerHTML = changePasswordHTML(true); return; }
+  // Full innerHTML replacement below discards scroll position — preserve it across
+  // in-place re-renders (a toggle/filter click) so the page doesn't jump to the top.
+  // Real navigation (go()) explicitly resets scrollTop=0 right after calling render(),
+  // so that case still works as before.
+  const prevMain = $(".main");
+  const prevScroll = prevMain ? prevMain.scrollTop : 0;
   const view = VIEWS[S.screen] || VIEWS.home;
   app.innerHTML = `<div class="shell">
     <header class="topbar">
@@ -13950,6 +14008,8 @@ function render() {
     <nav class="bottombar">${bottomHTML()}</nav>
   </div>`;
   paintSide();
+  const newMain = $(".main");
+  if (newMain && prevScroll) newMain.scrollTop = prevScroll;
   // Re-attach the live Leaflet map synchronously — timers are throttled in background
   // tabs, so a setTimeout-based re-attach can leave the map detached for seconds
   if (S.screen === 'readers_connect' && (S.live.rcTab || 'map') === 'map') rcInitMap();

@@ -113,14 +113,20 @@ module.exports = function registerSupplyDash(ctx) {
       const hit = _supdFiltersCache.get(key);
       if (hit && hit.exp > now && !('refresh' in req.query)) return res.json(hit.data);
 
-      const [units, states, execs] = await Promise.all([
-        q(`SELECT DISTINCT unit_code, unit_name, state_name FROM supply_data WHERE 1=1${on(sc2, 'unit_code')} ORDER BY unit_name`, sc2.params),
+      // A unit supplies copies across many states (border units), so DISTINCT over
+      // (unit_code, unit_name, state_name) yields one row per state a unit touches —
+      // the same unit_code repeated 3-4x with different state_name. Dedupe to one row
+      // per unit here and attach its single dominant "home state" instead.
+      const [units, states, execs, uhs] = await Promise.all([
+        q(`SELECT DISTINCT unit_code, unit_name FROM supply_data WHERE 1=1${on(sc2, 'unit_code')} ORDER BY unit_name`, sc2.params),
         q(`SELECT DISTINCT state_name FROM supply_data WHERE state_name IS NOT NULL AND state_name<>''${on(sc2, 'unit_code')} ORDER BY state_name`, sc2.params),
         q(`SELECT DISTINCT executive_code, executive_name FROM agency_master
            WHERE executive_name IS NOT NULL${on(sc2, 'unit')} ORDER BY executive_name LIMIT 500`, sc2.params),
+        unitHomeState(),
       ]);
+      const unitsDeduped = units.rows.map(u => ({ ...u, state_name: uhs[u.unit_code] || null }));
       const d = await refDates(req);
-      const data = { units: units.rows, states: states.rows, executives: execs.rows, data_upto: d ? d.cur : null };
+      const data = { units: unitsDeduped, states: states.rows, executives: execs.rows, data_upto: d ? d.cur : null };
       _supdFiltersCache.set(key, { data, exp: now + _SUPD_FILTERS_TTL });
       res.json(data);
     } catch (e) { res.status(500).json({ detail: String(e) }); }
