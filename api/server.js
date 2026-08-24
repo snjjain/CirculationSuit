@@ -3857,8 +3857,10 @@ app.get('/api/collection/behavior-trend', async (req, res) => {
         const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i);
         months.push(d.toISOString().slice(0, 7)); // YYYY-MM
       }
+      // GROUP BY includes unit_code, not just ag_code — an agency code is only unique
+      // within its unit (same gotcha as agency_master's real key).
       const { rows } = await q(`
-        SELECT ag_code, MAX(ag_name) ag_name, MAX(branch_name) branch_name, MAX(state_name) state_name,
+        SELECT ag_code, unit_code, MAX(ag_name) ag_name, MAX(branch_name) branch_name, MAX(state_name) state_name,
                MAX(coll_date) last_payment, DATEDIFF(CURDATE(), MAX(coll_date)) days_since,
                DATE_FORMAT(coll_date,'%Y-%m') mon,
                SUM(CASE WHEN ${APP}  THEN 1 ELSE 0 END) app_txn,
@@ -3869,14 +3871,14 @@ app.get('/api/collection/behavior-trend', async (req, res) => {
                -SUM(CASE WHEN ${DIG}  THEN amount ELSE 0 END) dig_amt,
                COUNT(*) txn, -SUM(amount) amount
         FROM agency_collection WHERE ${base}
-        GROUP BY ag_code, DATE_FORMAT(coll_date,'%Y-%m')
+        GROUP BY unit_code, ag_code, DATE_FORMAT(coll_date,'%Y-%m')
         ORDER BY branch_name, ag_name, mon`, bp);
 
       const byAg = {};
       for (const r of rows) {
-        const k = r.ag_code;
+        const k = r.unit_code + '|' + r.ag_code;
         if (!byAg[k]) byAg[k] = {
-          ag_code: k, ag_name: r.ag_name, branch_name: r.branch_name, state_name: r.state_name,
+          ag_code: r.ag_code, unit_code: r.unit_code, ag_name: r.ag_name, branch_name: r.branch_name, state_name: r.state_name,
           last_payment: r.last_payment, days_since: +r.days_since,
           months: {}, app_txn: 0, cash_txn: 0, dig_txn: 0, app_amt: 0, cash_amt: 0, dig_amt: 0, total_amt: 0,
         };

@@ -442,46 +442,50 @@ module.exports = function registerSupplyDash(ctx) {
       const S = on(sc2, 'unit_code');
       const SM = on(sc2, 'am.unit');
 
+      // Every subquery below groups by (unit_code, agcd), not agcd alone — agcd is unique
+      // only within a unit (agency_master's real key), so a bare-agcd GROUP BY can merge
+      // two unrelated same-coded agencies from different units when scope isn't narrowed
+      // to one unit (e.g. an admin viewing "all units").
       const [zeroSupply, negGrowth, abnormal, highOS, noVisit] = await Promise.all([
         // active agents with no supply on current day but supply on prev day
-        q(`SELECT ag_name, unit_name, prv copies_lost FROM (
-             SELECT agcd, MAX(ag_name) ag_name, MAX(unit_name) unit_name,
+        q(`SELECT agcd, unit_code, ag_name, unit_name, prv copies_lost FROM (
+             SELECT agcd, unit_code, MAX(ag_name) ag_name, MAX(unit_name) unit_name,
                     SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) cur,
                     SUM(CASE WHEN supply_date = ? THEN sup_copy ELSE 0 END) prv
              FROM supply_data WHERE supply_date IN (?, ?)${S}
-             GROUP BY agcd) x
+             GROUP BY unit_code, agcd) x
            WHERE cur = 0 AND prv > 0 ORDER BY prv DESC LIMIT 50`,
           [d.cur, d.prev || d.cur, d.cur, d.prev || d.cur, ...sc2.params]),
         // negative growth >10% (14d vs prior 14d)
-        q(`SELECT ag_name, unit_name, recent, prior,
+        q(`SELECT agcd, unit_code, ag_name, unit_name, recent, prior,
                   ROUND((recent - prior) / prior * 100, 1) change_pct
-           FROM (SELECT agcd, MAX(ag_name) ag_name, MAX(unit_name) unit_name,
+           FROM (SELECT agcd, unit_code, MAX(ag_name) ag_name, MAX(unit_name) unit_name,
                         SUM(CASE WHEN supply_date >  DATE_SUB(?, INTERVAL 14 DAY) THEN sup_copy ELSE 0 END) recent,
                         SUM(CASE WHEN supply_date <= DATE_SUB(?, INTERVAL 14 DAY) THEN sup_copy ELSE 0 END) prior
                  FROM supply_data WHERE supply_date > DATE_SUB(?, INTERVAL 28 DAY)${S}
-                 GROUP BY agcd) x
+                 GROUP BY unit_code, agcd) x
            WHERE prior > 0 AND recent < prior * 0.9
            ORDER BY (prior - recent) DESC LIMIT 50`,
           [d.cur, d.cur, d.cur, ...sc2.params]),
         // abnormal growth >20%
-        q(`SELECT ag_name, unit_name, recent, prior,
+        q(`SELECT agcd, unit_code, ag_name, unit_name, recent, prior,
                   ROUND((recent - prior) / prior * 100, 1) change_pct
-           FROM (SELECT agcd, MAX(ag_name) ag_name, MAX(unit_name) unit_name,
+           FROM (SELECT agcd, unit_code, MAX(ag_name) ag_name, MAX(unit_name) unit_name,
                         SUM(CASE WHEN supply_date >  DATE_SUB(?, INTERVAL 14 DAY) THEN sup_copy ELSE 0 END) recent,
                         SUM(CASE WHEN supply_date <= DATE_SUB(?, INTERVAL 14 DAY) THEN sup_copy ELSE 0 END) prior
                  FROM supply_data WHERE supply_date > DATE_SUB(?, INTERVAL 28 DAY)${S}
-                 GROUP BY agcd) x
+                 GROUP BY unit_code, agcd) x
            WHERE prior > 100 AND recent > prior * 1.2
            ORDER BY (recent - prior) DESC LIMIT 50`,
           [d.cur, d.cur, d.cur, ...sc2.params]),
         // high outstanding among high-supply agents
-        q(`SELECT ao.ag_name, ao.unit_name, ao.cl_amt outstanding, ao.last_supply_copies
+        q(`SELECT ao.ag_code agcd, ao.unit_code, ao.ag_name, ao.unit_name, ao.cl_amt outstanding, ao.last_supply_copies
            FROM agency_outstanding ao
            WHERE ao.period_label='CURRENT' AND ao.cl_amt > 100000
              AND ao.last_supply_copies > 100${on(sc2, 'ao.unit_code')}
            ORDER BY ao.cl_amt DESC LIMIT 50`, sc2.params),
         // agents active in last 14 days with no DCR visit in last 30 days
-        q(`SELECT s.agcd, MAX(s.ag_name) ag_name, MAX(s.unit_name) unit_name,
+        q(`SELECT s.agcd, s.unit_code, MAX(s.ag_name) ag_name, MAX(s.unit_name) unit_name,
                   SUM(s.sup_copy) total_copies, MAX(v.mark_attn_date) last_visit
            FROM supply_data s
            LEFT JOIN dcr_agency_visit v
@@ -489,7 +493,7 @@ module.exports = function registerSupplyDash(ctx) {
              AND v.unit_code COLLATE utf8mb4_unicode_ci = s.unit_code
              AND v.mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
            WHERE s.supply_date >= DATE_SUB(?, INTERVAL 14 DAY)${S}
-           GROUP BY s.agcd
+           GROUP BY s.unit_code, s.agcd
            HAVING MAX(v.mark_attn_date) IS NULL OR DATEDIFF(CURDATE(), MAX(v.mark_attn_date)) > 30
            ORDER BY (MAX(v.mark_attn_date) IS NULL) DESC, DATEDIFF(CURDATE(), MAX(v.mark_attn_date)) DESC
            LIMIT 50`, [d.cur, ...sc2.params]),

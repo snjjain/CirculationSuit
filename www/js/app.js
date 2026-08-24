@@ -4145,7 +4145,7 @@ function _supdAgents(st) {
   if (!d) return bar + _cmdSkel();
   if (d._err || !d.rows || !d.rows.length) return bar + `<div class="card pad" style="color:var(--muted)">No agents found.</div>`;
   const rows = d.rows.map(r => `<tr>
-    <td><b>${esc(r.agent)}</b><small style="display:block;color:var(--muted)">${esc(r.agcd)} · ${esc(r.city || '')}</small></td>
+    <td style="cursor:pointer" onclick="openAgencyProfile('${esc(r.unit_code||'').replace(/'/g,"\\'")}','${esc(r.agcd).replace(/'/g,"\\'")}','${esc(r.agent||r.agcd||'').replace(/'/g,"\\'")}')" title="View agency profile"><b style="color:var(--gold-d)">${esc(r.agent)}</b><small style="display:block;color:var(--muted)">${esc(r.agcd)} · ${esc(r.city || '')}</small></td>
     <td>${esc(r.branch)}</td>
     <td><small>${esc(r.executive || '—')}</small></td>
     <td class="r num">${_supdN(r.supply)}</td>
@@ -4236,16 +4236,17 @@ function _supdExceptions(st) {
         <thead><tr>${cols.map(c => `<th${c.startsWith('>') ? ' class="r"' : ''}>${c.replace(/^>/, '')}</th>`).join('')}</tr></thead>
         <tbody>${rows.slice(0, 25).map(mk).join('')}</tbody></table></div>` : `<small style="color:var(--muted)">None 🎉</small>`}
     </div>`;
+  const agentCell = r => `<td style="cursor:pointer" onclick="openAgencyProfile('${esc(r.unit_code||'').replace(/'/g,"\\'")}','${esc(r.agcd).replace(/'/g,"\\'")}','${esc(r.ag_name||r.agcd||'').replace(/'/g,"\\'")}')" title="View agency profile"><b style="color:var(--gold-d)">${esc(r.ag_name)}</b></td>`;
   return sect('⚠️ Zero Supply (had copies previous day)', 'var(--gold)', d.zero_supply || [], ['Agent', 'Branch', '>Copies Lost'],
-      r => `<tr><td><b>${esc(r.ag_name)}</b></td><td>${esc(r.unit_name)}</td><td class="r num" style="color:var(--red)">${_supdN(r.copies_lost)}</td></tr>`)
+      r => `<tr>${agentCell(r)}<td>${esc(r.unit_name)}</td><td class="r num" style="color:var(--red)">${_supdN(r.copies_lost)}</td></tr>`)
     + sect('📉 Negative Growth >10% (14 days)', 'var(--red)', d.negative_growth || [], ['Agent', 'Branch', '>Before', '>Now', '>%'],
-      r => `<tr><td><b>${esc(r.ag_name)}</b></td><td>${esc(r.unit_name)}</td><td class="r num">${_supdN(r.prior)}</td><td class="r num">${_supdN(r.recent)}</td><td class="r num" style="color:var(--red)">${r.change_pct}%</td></tr>`)
+      r => `<tr>${agentCell(r)}<td>${esc(r.unit_name)}</td><td class="r num">${_supdN(r.prior)}</td><td class="r num">${_supdN(r.recent)}</td><td class="r num" style="color:var(--red)">${r.change_pct}%</td></tr>`)
     + sect('🚀 Abnormal Growth >20% (14 days)', 'var(--acc)', d.abnormal_growth || [], ['Agent', 'Branch', '>Before', '>Now', '>%'],
-      r => `<tr><td><b>${esc(r.ag_name)}</b></td><td>${esc(r.unit_name)}</td><td class="r num">${_supdN(r.prior)}</td><td class="r num">${_supdN(r.recent)}</td><td class="r num" style="color:var(--grn)">+${r.change_pct}%</td></tr>`)
+      r => `<tr>${agentCell(r)}<td>${esc(r.unit_name)}</td><td class="r num">${_supdN(r.prior)}</td><td class="r num">${_supdN(r.recent)}</td><td class="r num" style="color:var(--grn)">+${r.change_pct}%</td></tr>`)
     + sect('💰 High Outstanding (>₹1L) with Active Supply', 'var(--red)', d.high_outstanding || [], ['Agent', 'Branch', '>Outstanding', '>Last Supply'],
-      r => `<tr><td><b>${esc(r.ag_name)}</b></td><td>${esc(r.unit_name)}</td><td class="r num" style="color:var(--red)">${_supdINR(Number(r.outstanding))}</td><td class="r num">${_supdN(r.last_supply_copies)}</td></tr>`)
+      r => `<tr>${agentCell(r)}<td>${esc(r.unit_name)}</td><td class="r num" style="color:var(--red)">${_supdINR(Number(r.outstanding))}</td><td class="r num">${_supdN(r.last_supply_copies)}</td></tr>`)
     + sect('🚶 No DCR Visit in Last 30 Days', 'var(--muted)', d.no_visit || [], ['Agent', 'Branch', '>Supply (14d)', 'Last Visit'],
-      r => `<tr><td><b>${esc(r.ag_name)}</b></td><td>${esc(r.unit_name)}</td><td class="r num">${_supdN(r.total_copies)}</td><td style="color:var(--red)">${r.last_visit ? esc(String(r.last_visit).slice(0, 10)) : '—'}</td></tr>`);
+      r => `<tr>${agentCell(r)}<td>${esc(r.unit_name)}</td><td class="r num">${_supdN(r.total_copies)}</td><td style="color:var(--red)">${r.last_visit ? esc(String(r.last_visit).slice(0, 10)) : '—'}</td></tr>`);
 }
 
 /* ── Sale view: Agent Sale vs Cash Sale (default) + drill-downs with breadcrumbs ── */
@@ -5449,13 +5450,7 @@ function _nexusCompetitor(st) {
 }
 
 /* ── Drill-down: open any AI Nexus agency in the full Agency Rating detail page ── */
-window.nexusOpenAgency = (unitCode, agcd, agName) => {
-  const st = arState();
-  st.drillAgency = { unit_code: unitCode, ag_code: agcd, ag_name: agName };
-  st.detail = null; st._returnScreen = 'ai_nexus';
-  arLoadDetail(unitCode, agcd);
-  go('agency_rating');
-};
+window.nexusOpenAgency = (unitCode, agcd, agName) => window.openAgencyProfile(unitCode, agcd, agName);
 
 /* ── Email / Telegram — Hindi drafts, reusing /api/insights/send-email + /api/telegram/send ── */
 function _findNexusAgency(unitCode, agcd) {
@@ -7370,8 +7365,8 @@ function _colBhAgencyTable(ad, drillState, drillUnit) {
     const spark = _colBhSparkline(a.monthData);
     const lastDate = a.last_payment ? String(a.last_payment).slice(0, 10) : '—';
     return `<tr>
-      <td style="max-width:180px">
-        <b style="font-size:12px">${esc(a.ag_name || a.ag_code || '')}</b>
+      <td style="max-width:180px;cursor:pointer" onclick="openAgencyProfile('${esc(a.unit_code||'').replace(/'/g,"\\'")}','${esc(a.ag_code||'').replace(/'/g,"\\'")}','${esc(a.ag_name||a.ag_code||'').replace(/'/g,"\\'")}')" title="View agency profile">
+        <b style="font-size:12px;color:var(--chart-1)">${esc(a.ag_name || a.ag_code || '')}</b>
         <br><small style="color:var(--muted)">${esc(a.ag_code||'')} · ${esc(a.branch_name||'')}</small>
       </td>
       <td style="text-align:center">${_colBhModeTag(a.dominant)}</td>
@@ -11158,8 +11153,8 @@ VIEWS.short_payment = function() {
             }).join('');
             const totDiffShort = ag.tot_diff > 100;
             return `<tr style="${rowBg}">
-              <td style="padding:4px 8px;font-weight:600;position:sticky;left:0;background:${ri%2?'var(--surface-2)':'var(--surface)'};z-index:2;white-space:nowrap">
-                ${esc(ag.ag_name)}<br><span style="font-size:10px;font-weight:400;color:var(--muted)">${ag.ag_code} · ${ag.unit_name}</span>
+              <td style="padding:4px 8px;font-weight:600;position:sticky;left:0;background:${ri%2?'var(--surface-2)':'var(--surface)'};z-index:2;white-space:nowrap;cursor:pointer" onclick="openAgencyProfile('${esc(ag.unit_code||'').replace(/'/g,"\\'")}','${esc(ag.ag_code||'').replace(/'/g,"\\'")}','${esc(ag.ag_name||ag.ag_code||'').replace(/'/g,"\\'")}')" title="View agency profile">
+                <span style="color:var(--chart-1)">${esc(ag.ag_name)}</span><br><span style="font-size:10px;font-weight:400;color:var(--muted)">${ag.ag_code} · ${ag.unit_name}</span>
               </td>
               <td style="padding:4px 8px;white-space:nowrap">${esc(ag.state)}<br><span style="font-size:10px;color:var(--muted)">${esc(ag.zh_name)}</span></td>
               <td style="padding:4px 8px;white-space:nowrap;font-size:10px">${esc(ag.city_name)}</td>
