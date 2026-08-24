@@ -3697,12 +3697,21 @@ VIEWS.command = () => {
   // selection alone drops Cash server-side (agent_only) and the Supply card says so.
   const narrowed  = !!(cf.district || cf.exec_name);
   const naNote    = narrowed ? ' · not filterable by district / executive' : '';
-  const cashNote  = sup && sup.agent_only ? ' · Agent Sale only (hawker Cash sale has no district breakdown)' : '';
+  // Cash Sale is CITY sale — hawker centres carry no district, and only 9 branches run
+  // one at all. So the caption depends on which of those two is true, not on a generic
+  // "unavailable": a district pick genuinely cannot split city sale, whereas a branch
+  // with no centres simply has none to show.
+  const hasCashCentres = !sup || sup.cash_centres == null ? true : sup.cash_centres > 0;
+  const cashNote  = sup && sup.agent_only && hasCashCentres
+    ? ' · Agent Sale only — Cash is city sale, not split by district' : '';
   const cashVal   = sup && sup.cash ? (Number(sup.cash.current) || 0).toLocaleString('en-IN') : null;
+  const supLbl    = !sup || sup._err || sup.no_data ? 'Latest Supply · Agent+Cash'
+    : (!hasCashCentres ? 'Latest Supply · Agent (credit sale branch)'
+      : sup.agent_only ? 'Latest Supply · Agent' : 'Latest Supply · Agent+Cash');
   const strip = [
     { val: sup && !sup._err && !sup.no_data ? (Number(sup.total.current) || 0).toLocaleString('en-IN') : (c._supLoading ? '…' : '—'),
-      lbl: sup && sup.agent_only ? 'Latest Supply · Agent' : 'Latest Supply · Agent+Cash', icon: '📦', color: 'var(--blue)', goto: "go('supply_dash')",
-      sub: sup && !sup._err && !sup.no_data ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + (cashVal != null ? ' · Cash ' + cashVal : '') + ' · ' + sup.data_upto + cashNote : '' },
+      lbl: supLbl, icon: '📦', color: 'var(--blue)', goto: "go('supply_dash')",
+      sub: sup && !sup._err && !sup.no_data ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + (cashVal != null && hasCashCentres ? ' · Cash ' + cashVal : '') + ' · ' + sup.data_upto + cashNote : '' },
     { val: ou && !ou._err ? _cmdFmtC(ou.total_outstanding)      : (c._ouLoading ? '…' : '—'),
       lbl: 'Outstanding · As on Today', icon: '💰', color: 'var(--red)', goto: "go('outstanding')",
       sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies' : '' },
@@ -3728,13 +3737,14 @@ VIEWS.command = () => {
   if (sup && !sup._err && !sup.no_data) {
     const cp = n => (Number(n) || 0).toLocaleString('en-IN');
     const g = sup.total.growth_pct;
-    // sup.cash is null when a district/executive filter is on — hawker_supply has no
-    // district or agency key, so the server returns Agent-only rather than adding a
-    // scoped Agent figure to an unscoped Cash one. Drop the Cash tile in that case.
+    // The Cash tile is dropped in two different situations: sup.cash is null when a
+    // district is selected (city sale has no district split), and cash_centres is 0 for
+    // the ~30 branches that are pure credit sale and have no hawker centre at all.
+    // Showing "Cash 0 cp" in either case would read as a real zero rather than N/A.
     supKpis = [
-      [cp(sup.total.current) + ' cp', (sup.agent_only ? 'Agent Supply · ' : 'Total Supply · ') + sup.data_upto, 'var(--ink)'],
+      [cp(sup.total.current) + ' cp', (sup.agent_only || !hasCashCentres ? 'Agent Supply · ' : 'Total Supply · ') + sup.data_upto, 'var(--ink)'],
       [cp(sup.agent.current) + ' cp', 'Agent Sale (' + (sup.agent_share_pct != null ? sup.agent_share_pct + '%' : '—') + ')', 'var(--blue)'],
-      ...(sup.cash ? [[cp(sup.cash.current) + ' cp', 'Cash Sale (' + (sup.cash_share_pct != null ? sup.cash_share_pct + '%' : '—') + ')', 'var(--gold)']] : []),
+      ...(sup.cash && hasCashCentres ? [[cp(sup.cash.current) + ' cp', 'Cash Sale · city (' + (sup.cash_share_pct != null ? sup.cash_share_pct + '%' : '—') + ')', 'var(--gold)']] : []),
       [(g >= 0 ? '+' : '') + (g != null ? g : 0) + '%', 'Day-over-Day', g >= 0 ? 'var(--grn)' : 'var(--red)'],
     ];
     supFooter = `Prev day <b>${cp(sup.total.previous)}</b> cp · change <b style="color:${sup.total.diff >= 0 ? 'var(--grn)' : 'var(--red)'}">${sup.total.diff >= 0 ? '+' : ''}${cp(sup.total.diff)}</b> · ${sup.cur_label} vs ${sup.prev_label}`;
@@ -3841,7 +3851,7 @@ VIEWS.command = () => {
         badgeColor: 'var(--grn)',
       })}
       ${_cmdModuleCard({
-        icon:'📦', title:'Supply', period:(sup && sup.agent_only ? 'Agent only · ' : 'Agent + Cash · ') + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…') + cashNote,
+        icon:'📦', title:'Supply', period:(sup && (sup.agent_only || !hasCashCentres) ? 'Agent only · ' : 'Agent + Cash · ') + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…') + cashNote,
         onClick:"go('supply_dash')", accent:'var(--blue)',
         kpis: supKpis, footer: supFooter,
         loading: !sup && c._supLoading, error: sup?._err,

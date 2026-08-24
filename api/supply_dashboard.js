@@ -748,10 +748,14 @@ module.exports = function registerSupplyDash(ctx) {
       // Filtering by name on both means an Executive simply shows 0 Cash (they hold no
       // centres) and a Centre Incharge shows 0 Agent (they hold no agencies) — both
       // true, rather than one half silently staying unit-wide.
-      // District is the one filter that still cannot touch Cash: hawker_supply has no
-      // district column and no agency key to reach one, and hawker_master has none
-      // either. So a district selection drops Cash and flags agent_only, rather than
-      // adding a district-scoped Agent figure to a unit-wide Cash figure.
+      // District cannot narrow Cash — and that is the business model, not a data gap.
+      // Cash Sale is CITY sale: hawker centres sit in a city and carry no district at
+      // all. Only 9 units run one (JA0 JO0 KO0 UD0 BI0 BH0 AJ0 SR0 in Rajasthan, IN0 in
+      // MP — KHAJURI BAZAR II and FREEGANJ); every other branch is pure credit sale.
+      // So a district selection drops Cash (agent_only) instead of adding a
+      // district-scoped Agent figure to a city-wide Cash one, and cash_centres tells
+      // the UI whether this scope has any city sale at all — a branch with none shows
+      // plain "Agent" rather than a meaningless "Cash 0".
       const district = (req.query.district || '').trim();
       const execName = (req.query.exec_name || '').trim();
       const agentOnly = !!district;
@@ -763,7 +767,7 @@ module.exports = function registerSupplyDash(ctx) {
       const execP = execName ? [execName] : [];
       const ciCls = execName ? ' AND h.center_incharge_name = ?' : '';
       const ciP   = execName ? [execName] : [];
-      const [agent, cash] = await Promise.all([
+      const [agent, cash, centres] = await Promise.all([
         q(`SELECT SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) cur,
                   SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prv
            FROM supply_data s ${AGENT_JOIN}${execJoin}
@@ -774,14 +778,22 @@ module.exports = function registerSupplyDash(ctx) {
                   SUM(CASE WHEN h.supply_date BETWEEN ? AND ? THEN h.sup_copies ELSE 0 END) prv
            FROM hawker_supply h WHERE h.supply_date IN (?, ?)${Sh}${hsH}${ciCls}`,
           [w.cF, w.cT, w.pF, w.pT, w.cF, w.pF, ...sc2.params, ...(hs || []), ...ciP]),
+        // Does this scope run any city (cash) sale at all? Ignores the person filter so
+        // that picking an Executive still reports "this branch has city sale, they just
+        // do not run it" rather than looking like the branch has none.
+        q(`SELECT COUNT(DISTINCT h.hwk_cent_code) n FROM hawker_supply h
+           WHERE h.supply_date = ?${Sh}${hsH}`,
+          [w.cF, ...sc2.params, ...(hs || [])]),
       ]);
       const aC = N(agent.rows[0] && agent.rows[0].cur), aP = N(agent.rows[0] && agent.rows[0].prv);
       const cC = N(cash.rows[0] && cash.rows[0].cur), cP = N(cash.rows[0] && cash.rows[0].prv);
       const totC = aC + cC;
+      const cashCentres = N(centres.rows[0] && centres.rows[0].n);
       res.json({
         ...winMeta(w), prev_day: w.range ? null : w.prev_label, from: w.range ? w.cF : null, to: w.range ? w.cT : null,
         agent: mkDelta(aC, aP), cash: agentOnly ? null : mkDelta(cC, cP), total: mkDelta(totC, aP + cP),
         agent_only: agentOnly, district: district || null, exec_name: execName || null,
+        cash_centres: cashCentres,
         agent_share_pct: totC ? r1(aC / totC * 100) : null, cash_share_pct: totC ? r1(cC / totC * 100) : null,
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
