@@ -3172,6 +3172,19 @@ window.cmdSetPeriod = p => { _cmdFilterState().period = p; S.live.cmd = {}; rend
 window.cmdSetState = s => { const f = _cmdFilterState(); f.state = s; f.unit_code = ''; f.unit_name = ''; f.district = ''; S.live.cmd = {}; render(); };
 window.cmdSetUnit = (code, name) => { const f = _cmdFilterState(); f.unit_code = code; f.unit_name = name || ''; f.district = ''; S.live.cmd = {}; render(); };
 window.cmdSetDistrict = d => { const f = _cmdFilterState(); f.district = d; S.live.cmd = {}; render(); };
+// Districts are fetched per-unit, on demand (a whole-table version of this query was
+// tried and ran 40s+ under load — see /api/supply-dash/districts/:unit's comment).
+function _cmdLoadDistricts(unitCode) {
+  if (!unitCode) return;
+  S.live.cmdDistrictsByUnit = S.live.cmdDistrictsByUnit || {};
+  const loadKey = '_cmdDistLoading_' + unitCode;
+  if (S.live.cmdDistrictsByUnit[unitCode] || S.live[loadKey]) return;
+  S.live[loadKey] = true;
+  fetch(_cmdBase() + '/api/supply-dash/districts/' + encodeURIComponent(unitCode), { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { S.live.cmdDistrictsByUnit[unitCode] = d.districts || []; S.live[loadKey] = false; if (S.screen === 'command') render(); })
+    .catch(() => { S.live.cmdDistrictsByUnit[unitCode] = []; S.live[loadKey] = false; if (S.screen === 'command') render(); });
+}
 window.cmdResetFilters = () => { S.live.cmdFilters = null; S.live.cmd = {}; render(); };
 window.cmdSearchInput = v => {
   const f = _cmdFilterState();
@@ -3195,8 +3208,8 @@ function _cmdLoadUnits() {
   S.live._cmdUnitsLoading = true;
   fetch(_cmdBase() + '/api/supply-dash/filters', { headers: api.h() })
     .then(r => r.json())
-    .then(d => { S.live.cmdUnits = d.units || []; S.live.cmdStates = d.states || []; S.live.cmdUnitDistricts = d.unit_districts || {}; S.live._cmdUnitsLoading = false; if (S.screen === 'command') render(); })
-    .catch(() => { S.live.cmdUnits = []; S.live.cmdStates = []; S.live.cmdUnitDistricts = {}; S.live._cmdUnitsLoading = false; });
+    .then(d => { S.live.cmdUnits = d.units || []; S.live.cmdStates = d.states || []; S.live._cmdUnitsLoading = false; if (S.screen === 'command') render(); })
+    .catch(() => { S.live.cmdUnits = []; S.live.cmdStates = []; S.live._cmdUnitsLoading = false; });
 }
 
 function _cmdLoad() {
@@ -3683,22 +3696,27 @@ VIEWS.command = () => {
   }
 
   /* ── Top KPI strip data ─────────────────────────────────── */
+  // These 4 sources have no district column at all (Outstanding, Taxi, Survey) or only
+  // partial district data (Supply's Cash/hawker half) — filtering them by district would
+  // either be impossible or silently mix a district-scoped number with a unit-wide one.
+  // Rather than leave them looking broken when a district is picked, say so plainly.
+  const distNote = cf.district ? ' · district filter not available for this figure' : '';
   const strip = [
     { val: sup && !sup._err && !sup.no_data ? (Number(sup.total.current) || 0).toLocaleString('en-IN') : (c._supLoading ? '…' : '—'),
       lbl: 'Latest Supply · Agent+Cash', icon: '📦', color: 'var(--blue)', goto: "go('supply_dash')",
-      sub: sup && !sup._err && !sup.no_data ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + ' · Cash ' + (Number(sup.cash.current) || 0).toLocaleString('en-IN') + ' · ' + sup.data_upto : '' },
+      sub: sup && !sup._err && !sup.no_data ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + ' · Cash ' + (Number(sup.cash.current) || 0).toLocaleString('en-IN') + ' · ' + sup.data_upto + distNote : '' },
     { val: ou && !ou._err ? _cmdFmtC(ou.total_outstanding)      : (c._ouLoading ? '…' : '—'),
       lbl: 'Outstanding · As on Today', icon: '💰', color: 'var(--red)', goto: "go('outstanding')",
-      sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies' : '' },
+      sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies' + distNote : '' },
     { val: co && !co._err ? _cmdFmtC(co.total_collection)        : (c._coLoading ? '…' : '—'),
       lbl: cmdPeriodLabel + ' Collections', icon: '₹',  color: 'var(--grn)', goto: "go('collections')",
       sub: co && !co._err ? (co.total_txn||0).toLocaleString('en-IN') + ' transactions' : '' },
     { val: si && !si._err ? String((si.late?.length||0) + (si.app_not_running?.length||0)) : (c._siLoading ? '…' : '—'),
       lbl: 'Taxi Alerts Today',  icon: '🚕', color: si && !si._err && (si.late?.length||0)+(si.app_not_running?.length||0)>0 ? 'var(--red)' : 'var(--grn)', goto: "go('transport')",
-      sub: si && !si._err ? (si.late?.length||0)+' late · '+(si.app_not_running?.length||0)+' offline' : '' },
+      sub: si && !si._err ? (si.late?.length||0)+' late · '+(si.app_not_running?.length||0)+' offline' + distNote : '' },
     { val: sv && !sv._err ? fmtN(sv.total||0)                   : (c._svLoading ? '…' : '—'),
       lbl: 'Reader Surveys',     icon: '📋', color: 'var(--acc)', goto: "go('survey_dash')",
-      sub: sv && !sv._err ? fmtN(sv.order_count||0) + ' orders booked' : '' },
+      sub: sv && !sv._err ? fmtN(sv.order_count||0) + ' orders booked' + distNote : '' },
   ];
 
   /* ── Pending modules ────────────────────────────────────── */
@@ -3728,7 +3746,8 @@ VIEWS.command = () => {
   const cmdRegionOf = s => { const u = String(s || '').toUpperCase(); return CMD_CORE_STATES.has(u) ? u : 'NATIONAL'; };
   const cmdUnits = S.live.cmdUnits || [];
   const cmdUnitsInState = cf.state ? cmdUnits.filter(u => cmdRegionOf(u.state_name) === cf.state) : cmdUnits;
-  const cmdDistricts = (cf.unit_code && S.live.cmdUnitDistricts && S.live.cmdUnitDistricts[cf.unit_code]) || [];
+  _cmdLoadDistricts(cf.unit_code);
+  const cmdDistricts = (cf.unit_code && S.live.cmdDistrictsByUnit && S.live.cmdDistrictsByUnit[cf.unit_code]) || [];
   const periodBtn = (p, label, edge) => `<button onclick="cmdSetPeriod('${p}')" style="padding:7px 16px;border:1px solid var(--brd);${edge === 'l' ? 'border-radius:8px 0 0 8px;border-right:none' : edge === 'r' ? 'border-radius:0 8px 8px 0' : 'border-left:none;border-right:none'};background:${cf.period === p ? 'var(--navy,#1C2B45)' : 'var(--card)'};color:${cf.period === p ? '#fff' : 'var(--ink)'};font-size:12.5px;font-weight:600;cursor:pointer">${label}</button>`;
   const searchDrop = cf.searchResults != null
     ? (cf.searchResults.length
@@ -3799,7 +3818,7 @@ VIEWS.command = () => {
     <!-- main card grid -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       ${_cmdModuleCard({
-        icon:'💰', title:'Agency Outstanding', period:'Balance as on today',
+        icon:'💰', title:'Agency Outstanding', period:'Balance as on today' + distNote,
         onClick:"go('outstanding')", accent:'var(--red)',
         kpis: ouKpis, footer: ouFooter,
         loading: !ou && !c._ouError, error: ou?._err,
@@ -3815,7 +3834,7 @@ VIEWS.command = () => {
         badgeColor: 'var(--grn)',
       })}
       ${_cmdModuleCard({
-        icon:'📦', title:'Supply', period:'Agent + Cash · ' + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…'),
+        icon:'📦', title:'Supply', period:'Agent + Cash · ' + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…') + distNote,
         onClick:"go('supply_dash')", accent:'var(--blue)',
         kpis: supKpis, footer: supFooter,
         loading: !sup && c._supLoading, error: sup?._err,
@@ -3829,14 +3848,14 @@ VIEWS.command = () => {
         badge: siBadge, badgeColor: siBadgeColor,
       })}
       ${_cmdModuleCard({
-        icon:'📍', title:'Field Intelligence', period: 'DCR activity · ' + cmdPeriodLabel.toLowerCase(),
+        icon:'📍', title:'Field Intelligence', period: 'DCR activity · ' + cmdPeriodLabel.toLowerCase() + distNote,
         onClick:"go('dcr_analytics')", accent: faBadgeColor || 'var(--acc)',
         kpis: faKpis, footer: faFooter,
         loading: !fa, error: fa?._err,
         badge: faBadge, badgeColor: faBadgeColor,
       })}
       ${_cmdModuleCard({
-        icon:'📋', title:'Survey Intelligence', period: 'Reader survey outcomes · ' + cmdPeriodLabel.toLowerCase(),
+        icon:'📋', title:'Survey Intelligence', period: 'Reader survey outcomes · ' + cmdPeriodLabel.toLowerCase() + distNote,
         onClick:"go('survey_dash')", accent:'var(--acc)',
         kpis: svKpis, footer: svFooter,
         loading: !sv && !c._svError, error: sv?._err,

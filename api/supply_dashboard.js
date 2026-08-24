@@ -117,21 +117,47 @@ module.exports = function registerSupplyDash(ctx) {
       // (unit_code, unit_name, state_name) yields one row per state a unit touches —
       // the same unit_code repeated 3-4x with different state_name. Dedupe to one row
       // per unit here and attach its single dominant "home state" instead.
-      const [units, states, execs, uhs, dists] = await Promise.all([
+      const [units, states, execs, uhs] = await Promise.all([
         q(`SELECT DISTINCT unit_code, unit_name FROM supply_data WHERE 1=1${on(sc2, 'unit_code')} ORDER BY unit_name`, sc2.params),
         q(`SELECT DISTINCT state_name FROM supply_data WHERE state_name IS NOT NULL AND state_name<>''${on(sc2, 'unit_code')} ORDER BY state_name`, sc2.params),
         q(`SELECT DISTINCT executive_code, executive_name FROM agency_master
            WHERE executive_name IS NOT NULL${on(sc2, 'unit')} ORDER BY executive_name LIMIT 500`, sc2.params),
         unitHomeState(),
-        // Districts, per unit — drives the Command Centre's Unit -> District cascade.
-        q(`SELECT DISTINCT unit_code, dist_name FROM supply_data WHERE dist_name IS NOT NULL AND dist_name<>''${on(sc2, 'unit_code')} ORDER BY dist_name`, sc2.params),
       ]);
       const unitsDeduped = units.rows.map(u => ({ ...u, state_name: uhs[u.unit_code] || null }));
-      const unitDistricts = {};
-      dists.rows.forEach(r => { (unitDistricts[r.unit_code] = unitDistricts[r.unit_code] || []).push(r.dist_name); });
       const d = await refDates(req);
-      const data = { units: unitsDeduped, states: states.rows, executives: execs.rows, unit_districts: unitDistricts, data_upto: d ? d.cur : null };
+      const data = { units: unitsDeduped, states: states.rows, executives: execs.rows, data_upto: d ? d.cur : null };
       _supdFiltersCache.set(key, { data, exp: now + _SUPD_FILTERS_TTL });
+      res.json(data);
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ════ Districts for one unit — drives the Command Centre's Unit -> District cascade ════
+  // Scoped to a single unit_code (not the whole table): idx_sd_unit alone makes this a
+  // ~1s indexed range scan instead of the 8.3M-row full-table scan a table-wide version
+  // of this query forced (tried it — 40s+ even with a FORCE INDEX hint under load).
+  const _supdDistrictsCache = new Map();
+  const _SUPD_DISTRICTS_TTL = 30 * 60 * 1000;
+  app.get('/api/supply-dash/districts/:unit', async (req, res) => {
+    try {
+      const unit = req.params.unit;
+      const now = Date.now();
+      const hit = _supdDistrictsCache.get(unit);
+      if (hit && hit.exp > now) return res.json(hit.data);
+      // dist_name has two flavours of noise under a unit that otherwise serves one
+      // compact area: (a) years-old rows for a district reassigned since (e.g. a single
+      // "KOTA" row from 2022, none since) — excluded by requiring activity in the last
+      // 90 days; (b) a single ongoing agency whose dist_name was mistagged at the source
+      // and keeps syncing that way every day (e.g. one Jaipur RP agency permanently
+      // tagged "DUNGARPUR") — excluded by requiring at least 2 agencies, since a real
+      // district under a unit is never carried by just one.
+      const { rows } = await q(
+        `SELECT dist_name FROM supply_data
+         WHERE unit_code = ? AND dist_name IS NOT NULL AND dist_name<>'' AND supply_date > DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+         GROUP BY dist_name HAVING COUNT(DISTINCT agcd) >= 2
+         ORDER BY dist_name`, [unit]);
+      const data = { unit_code: unit, districts: rows.map(r => r.dist_name) };
+      _supdDistrictsCache.set(unit, { data, exp: now + _SUPD_DISTRICTS_TTL });
       res.json(data);
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
