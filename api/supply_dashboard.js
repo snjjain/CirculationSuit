@@ -250,7 +250,7 @@ module.exports = function registerSupplyDash(ctx) {
       const searchParams = search ? [`%${search}%`] : [];
 
       const { rows } = await q(`
-        SELECT x.agcd, x.ag_name, x.unit_name, x.city_name,
+        SELECT x.agcd, x.unit_code, x.ag_name, x.unit_name, x.city_name,
                MAX(am.executive_name) executive,
                x.supply, x.prev_supply, (x.supply - x.prev_supply) net_change,
                MAX(ao.cl_amt) outstanding
@@ -273,7 +273,7 @@ module.exports = function registerSupplyDash(ctx) {
       res.json({
         data_upto: d.cur,
         rows: rows.map(r => ({
-          agcd: r.agcd, agent: r.ag_name, branch: r.unit_name, city: r.city_name,
+          agcd: r.agcd, unit_code: r.unit_code, agent: r.ag_name, branch: r.unit_name, city: r.city_name,
           executive: r.executive || null,
           supply: N(r.supply), prev_supply: N(r.prev_supply), net_change: N(r.net_change),
           growth_pct: r1(pct(N(r.supply), N(r.prev_supply))),
