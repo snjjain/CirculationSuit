@@ -3651,7 +3651,7 @@ window.supdUnit = u => {
   ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights'].forEach(k => { st[k] = null; });
   render();
 };
-const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'receipt', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'execBreakdown', 'covidSummary', 'covidAgentStates', 'covidCashStates', 'covidDrillState', 'covidDrillUnit', 'covidDrillUnitName', 'covidSummaryState', 'covidAgentBranches', 'covidCashBranches', 'covidSummaryUnit', 'covidAgentBranch', 'covidCashBranch', 'brStates', 'brBranches', 'brL2'].forEach(k => { st[k] = null; });
+const _supdClearData = (st) => ['kpis', 'branches', 'agents', 'execs', 'trend', 'exceptions', 'insights', 'receipt', 'saleSummary', 'agentStates', 'cashStates', 'drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'drillAgencies', 'execBreakdown', 'covidSummary', 'covidAgentStates', 'covidCashStates', 'covidDrillState', 'covidDrillUnit', 'covidDrillUnitName', 'covidSummaryState', 'covidAgentBranches', 'covidCashBranches', 'covidSummaryUnit', 'covidAgentBranch', 'covidCashBranch', 'brStates', 'brBranches', 'brL2'].forEach(k => { st[k] = null; });
 // State dropdown: cascade the Unit list to that state (data refreshes when Apply is pressed)
 window.supdSetState = (v) => {
   const st = _supdState();
@@ -3927,15 +3927,16 @@ function _supdExceptions(st) {
 const _saleColor = m => m === 'agent' ? 'var(--blue)' : m === 'cash' ? 'var(--gold)' : 'var(--grn)';
 window.supdDrill = (mode, state, unit, unitName) => {
   const st = _supdState();
-  st.drillMode = mode || null; st.drillState = state || ''; st.drillUnit = unit || ''; st.drillUnitName = unitName || ''; st.drillCenter = '';
+  st.drillMode = mode || null; st.drillState = state || ''; st.drillUnit = unit || ''; st.drillUnitName = unitName || ''; st.drillCenter = ''; st.drillDistrict = '';
   if (mode && !st.drillBy) st.drillBy = mode === 'agent' ? 'district' : 'center';
   if (mode === 'agent' && (st.drillBy !== 'district' && st.drillBy !== 'executive')) st.drillBy = 'district';
   if (mode === 'cash' && !['center', 'edition', 'matrix', 'executive'].includes(st.drillBy)) st.drillBy = 'center';
-  ['drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix'].forEach(k => { st[k] = null; });
+  ['drillStates', 'drillBranches', 'drillL2', 'drillHawkers', 'drillMatrix', 'drillAgencies'].forEach(k => { st[k] = null; });
   render();
 };
-window.supdDrillBy = by => { const st = _supdState(); st.drillBy = by; st.drillCenter = ''; st.drillL2 = null; st.drillHawkers = null; st.drillMatrix = null; render(); };
+window.supdDrillBy = by => { const st = _supdState(); st.drillBy = by; st.drillCenter = ''; st.drillDistrict = ''; st.drillL2 = null; st.drillHawkers = null; st.drillMatrix = null; st.drillAgencies = null; render(); };
 window.supdDrillCenter = center => { const st = _supdState(); st.drillCenter = center || ''; st.drillHawkers = null; render(); };
+window.supdDrillDistrict = district => { const st = _supdState(); st.drillDistrict = district || ''; st.drillAgencies = null; render(); };
 
 function _saleKpi(mode, icon, label, data, clickable) {
   const g = data.growth_pct, color = g == null ? 'var(--muted)' : g >= 0 ? 'var(--grn)' : 'var(--red)', arrow = g == null ? '' : g >= 0 ? '▲' : '▼';
@@ -3981,8 +3982,9 @@ function _supdBreadcrumb(st) {
   const link = (txt, fn, active) => `<span onclick="${fn}" style="cursor:pointer;color:${active ? 'var(--ink)' : 'var(--gold-d)'};font-weight:${active ? 700 : 500}">${txt}</span>`;
   const parts = [link('Supply', "supdDrill(null)"), link(modeLabel, `supdDrill('${st.drillMode}')`, !st.drillState)];
   if (st.drillState) parts.push(link(esc(st.drillState), `supdDrill('${st.drillMode}','${esc(st.drillState)}')`, !st.drillUnit));
-  if (st.drillUnit) parts.push(link(esc(st.drillUnitName || st.drillUnit), st.drillCenter ? "supdDrillCenter('')" : '', !st.drillCenter));
+  if (st.drillUnit) parts.push(link(esc(st.drillUnitName || st.drillUnit), st.drillCenter ? "supdDrillCenter('')" : st.drillDistrict ? "supdDrillDistrict('')" : '', !st.drillCenter && !st.drillDistrict));
   if (st.drillCenter) parts.push(link(esc(st.drillCenter), '', true));
+  if (st.drillDistrict) parts.push(link(esc(st.drillDistrict), '', true));
   return `<div style="font-size:12.5px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${parts.join('<span style="color:var(--muted)">›</span>')}</div>`;
 }
 function _supdDrillTable(dd, firstCol, cellFn, mode, total) {
@@ -4042,6 +4044,12 @@ function _supdSaleDrill(st) {
     _supdFetch('drillHawkers', `/api/supply-dash/cash/branch/${encodeURIComponent(st.drillUnit)}?by=hawker&center=${encodeURIComponent(st.drillCenter)}${dqs}`);
     const dd = st.drillHawkers;
     body = !dd ? _cmdSkel() : _supdDrillTable(dd, 'Hawker', r => `<td>${esc(r.label)}</td>`, mode, dd.total);
+  } else if (mode === 'agent' && st.drillDistrict) {
+    // Agent Level 3: agency-wise within a district
+    const dqs = qs ? '&' + qs.slice(1) : '';
+    _supdFetch('drillAgencies', `/api/supply-dash/agent/branch/${encodeURIComponent(st.drillUnit)}?by=agency&district=${encodeURIComponent(st.drillDistrict)}${dqs}`);
+    const dd = st.drillAgencies;
+    body = !dd ? _cmdSkel() : _supdDrillTable(dd, 'Agency', r => `<td>${esc(r.label)}</td>`, mode, dd.total);
   } else {
     const opts = mode === 'agent'
       ? [['district', '📍 District Wise'], ['executive', '👔 Executive Wise']]
@@ -4056,9 +4064,11 @@ function _supdSaleDrill(st) {
       _supdFetch('drillL2', `/api/supply-dash/${mode}/branch/${encodeURIComponent(st.drillUnit)}?by=${st.drillBy}${dqs}`);
       const dd = st.drillL2;
       const colName = st.drillBy === 'district' ? 'District' : st.drillBy === 'center' ? 'Center' : st.drillBy === 'edition' ? 'Edition' : 'Executive';
-      // Cash Center Wise: each center drills into its hawkers
+      // Cash Center Wise: each center drills into its hawkers; Agent District Wise: each district drills into its agencies
       const cellFn = (mode === 'cash' && st.drillBy === 'center')
         ? r => `<td><span onclick="supdDrillCenter('${esc(r.label).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.label)}</span></td>`
+        : (mode === 'agent' && st.drillBy === 'district')
+        ? r => `<td><span onclick="supdDrillDistrict('${esc(r.label).replace(/'/g, "\\'")}')" style="cursor:pointer;color:var(--gold-d);font-weight:600">${esc(r.label)}</span></td>`
         : r => `<td>${esc(r.label)}</td>`;
       body = toggle + (!dd ? _cmdSkel() : _supdDrillTable(dd, colName, cellFn, mode, dd.total));
     }

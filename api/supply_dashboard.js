@@ -755,9 +755,23 @@ module.exports = function registerSupplyDash(ctx) {
       const unit = req.params.unit;
       const sc2 = await scopeUnits(req);
       if (sc2.clause === ' AND 1=0') return res.json({ rows: [] });
-      const by = req.query.by === 'executive' ? 'executive' : 'district';
+      const by = req.query.by === 'executive' ? 'executive' : req.query.by === 'agency' ? 'agency' : 'district';
+      const district = (req.query.district || '').trim();
       let rows;
-      if (by === 'district') {
+      if (by === 'agency') {
+        // Level 3: agency-wise within a specific district of this unit
+        const distCls = district ? ' AND COALESCE(s.dist_name,\'—\') = ?' : '';
+        const distP = district ? [district] : [];
+        ({ rows } = await q(`
+          SELECT s.agcd, MAX(s.ag_name) ag_name,
+                 SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) supply,
+                 SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prev_supply
+          FROM supply_data s ${AGENT_JOIN}
+          WHERE ${AGENT_WHERE} AND s.unit_code = ? AND s.supply_date IN (?, ?)${distCls}
+          GROUP BY s.agcd ORDER BY supply DESC`,
+          [w.cF, w.cT, w.pF, w.pT, unit, w.cF, w.pF, ...distP]));
+        rows = rows.map(r => ({ ...r, label: r.ag_name || r.agcd, agents: 1 }));
+      } else if (by === 'district') {
         ({ rows } = await q(`
           SELECT COALESCE(s.dist_name,'—') label,
                  SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) supply,
@@ -782,7 +796,7 @@ module.exports = function registerSupplyDash(ctx) {
       }
       const total = rows.reduce((a, r) => a + N(r.supply), 0);
       res.json({
-        ...winMeta(w), unit_code: unit, by, total,
+        ...winMeta(w), unit_code: unit, by, district: district || null, total,
         rows: rows.map(r => ({
           label: r.label, agents: N(r.agents), supply: N(r.supply), prev_supply: N(r.prev_supply),
           net_change: N(r.supply) - N(r.prev_supply), growth_pct: r1(pct(N(r.supply), N(r.prev_supply))),
