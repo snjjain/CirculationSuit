@@ -257,8 +257,23 @@ module.exports = function registerCompetitor({ app, q }) {
 
   // ════ POST /api/competitor/upload ════
   // Frontend sends raw xlsx bytes as application/octet-stream
+  // The master template carries one row per hawker/agency, so a real workbook is big:
+  // ~2.4 MB for a single large unit and ~6 MB for all units, before the user has typed
+  // anything. The old 10 MB ceiling was within reach of a filled all-units hawker file,
+  // and body-parser signals that overflow by THROWING — which express renders as an
+  // HTML error page, so the browser's res.json() died on "<!DOCTYPE" instead of showing
+  // a real message. Ceiling raised, and the throw is converted to JSON below.
   app.post('/api/competitor/upload',
-    express.raw({ type: ['application/octet-stream', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'], limit: '10mb' }),
+    express.raw({ type: ['application/octet-stream', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'], limit: '64mb' }),
+    (err, req, res, next) => {
+      if (!err) return next();
+      const tooBig = err.type === 'entity.too.large' || /too large/i.test(err.message || '');
+      res.status(tooBig ? 413 : 400).json({
+        detail: tooBig
+          ? 'File is too large to upload. Download the template for a single Unit Code instead of all units, fill that, and upload it.'
+          : `Could not read the uploaded file: ${err.message}`,
+      });
+    },
     async (req, res) => {
       try {
         const compType  = req.query.type === 'hawker' ? 'hawker' : 'agency';

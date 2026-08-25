@@ -11949,7 +11949,20 @@ window.cmpDoUpload = async () => {
     const r = await fetch(`${api.base}/api/competitor/upload?type=${st.tab}&entered_by=${enteredBy}`, {
       method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/octet-stream' }, body: buf,
     });
-    const d = await r.json();
+    // A size limit anywhere in the chain (this app, or a reverse proxy in front of it)
+    // answers with an HTML error page, not JSON. Parsing that blindly used to surface
+    // as 'Unexpected token "<"', which told the user nothing. Read the body as text and
+    // only treat it as JSON when it actually is.
+    const raw = await r.text();
+    let d = null;
+    try { d = JSON.parse(raw); } catch (_) {}
+    if (!d) {
+      const mb = (file.size / 1048576).toFixed(1);
+      errEl.textContent = r.status === 413 || /too large/i.test(raw)
+        ? `File too large (${mb} MB) — the server rejected it. Download the template for a single Unit Code, fill that, and upload it.`
+        : `Server returned an unexpected response (HTTP ${r.status}). The upload did not go through.`;
+      return;
+    }
     if (!r.ok) { errEl.textContent = d.detail || 'Upload failed'; return; }
     closeModals();
     toast(`✓ ${d.inserted} records saved (${d.skipped} skipped)`);
