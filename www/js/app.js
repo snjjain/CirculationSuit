@@ -5,9 +5,9 @@
 const DASH_MENU = [
   ["command",          "Command Centre",              "📊"],
   ["ai_nexus",         "Strategic AI Nexus",          "🧭"],
-  ["supply_dash",      "Supply Dashboard",            "📦"],
+  ["supply_dash",      "Supply",                      "📦"],
   ["collections",      "Collections",                 "₹"],
-  ["outstanding",      "Agency Outstanding",          "💰"],
+  ["outstanding",      "Outstanding",                 "💰"],
   ["exec_perf",        "Executive Performance",       "👤"],
   ["dcr_analytics",    "DCR - Field Visit Analysis",  "📍"],
   ["agency_rating",    "Agency Rating Engine",        "⭐"],
@@ -19,9 +19,24 @@ const DASH_MENU = [
   ["survey_dash",      "Survey Intelligence",         "📊"],
 ];
 
-// Administration-section screens — visible only to isAdmin users (see [[project auth]]).
+/* How the DASH_MENU screens are grouped in the sidebar. DASH_MENU stays the flat list
+   because the rights machinery keys off it (navScreens defaults + the Manage Rights
+   "Visible Dashboard Screens" checklist); this only controls presentation, so a screen
+   can be regrouped without touching anyone's saved permissions. Any DASH_MENU id not
+   listed here still renders, under the last section — so adding a screen can never
+   make it silently disappear from the menu. */
+const DASH_SECTIONS = [
+  ["⌂ Dashboard",             ["command", "ai_nexus"]],
+  ["◈ Business Intelligence", ["supply_dash", "collections", "outstanding", "agency_rating"]],
+  ["◉ Field & Performance",   ["exec_perf", "dcr_analytics", "survey_dash", "transport"]],
+];
+
+// Admin-gated screens — visible only to isAdmin users (see [[project auth]]).
 // A "limited admin" (isAdmin=true but hierarchyLevel>1) sees only the ones granted via
 // their navScreens override; a real Level-1 admin always sees all of them.
+// This stays ONE list because it is what Manage Rights' "Visible Administration
+// Screens" checklist grants against — the sidebar splits it across two sections below
+// purely for readability, which does not change who may open what.
 const ADMIN_MENU = [
   ["user_mgmt",       "User Management",  "👥"],
   ["manage_rights",   "Manage Rights",    "🔐"],
@@ -30,6 +45,9 @@ const ADMIN_MENU = [
   ["competitor_data", "Competitor Data",  "📊"],
   ["exec_targets",    "Monthly Targets",  "🎯"],
 ];
+// Planning screens are admin-gated like the rest of ADMIN_MENU, but read as planning
+// work rather than system administration, so they get their own heading.
+const PLANNING_IDS = ["exec_targets", "competitor_data"];
 
 const APP_MENU = {
   agent:  { label: "Agent App",   icon: "🏢", tint: "var(--red-l)",   desc: "Agency management — supply, billing, collections and complaints.",
@@ -14185,37 +14203,59 @@ VIEWS.survey_dash = () => {
 /* ═══════════ RENDER ═══════════ */
 function navGroups() {
   const u = S.user, groups = [], hl = u.hierarchyLevel || 99;
+  const push = (label, items) => { if (items.length) groups.push({ label, items }); };
+
   if (u.dashboard) {
     const fieldIds = ["routes", "collections", "complaints", "partners"];
     // mgmtIds are always shown to hl≤4 regardless of saved navScreens (handles screens added after a user's navScreens was last saved)
     const mgmtIds  = ["command", "ai_nexus", "supply_dash", "exec_perf", "agency_rating"];
-    const items = DASH_MENU
+    const allowed = DASH_MENU
       .filter(([id]) => (hl <= 4 && mgmtIds.includes(id)) || (u.navScreens ? u.navScreens.includes(id) : (hl <= 4 || fieldIds.includes(id))))
-      .filter(([id]) => permAllows(id, 'view') !== false)   // explicit rights-matrix deny hides the screen
-      .map(([id, l, ic]) => ({ id, label: l, icon: ic, badge: id === "approvals" ? APPROVALS.length : 0 }));
-    groups.push({ label: "Dashboard — Vitran OS", items });
+      .filter(([id]) => permAllows(id, 'view') !== false);  // explicit rights-matrix deny hides the screen
+    const mk = ([id, l, ic]) => ({ id, label: l, icon: ic, badge: id === "approvals" ? APPROVALS.length : 0 });
+    const placed = new Set(DASH_SECTIONS.flatMap(([, ids]) => ids));
+    DASH_SECTIONS.forEach(([label, ids], i) => {
+      // Last section also sweeps up anything not assigned to a section, so a newly
+      // added DASH_MENU screen shows up rather than vanishing from the menu.
+      const isLast = i === DASH_SECTIONS.length - 1;
+      const inSection = allowed.filter(([id]) => ids.includes(id) || (isLast && !placed.has(id)));
+      // Order within a section follows the section's own id list, not DASH_MENU order,
+      // so the menu reads exactly as declared above. Unassigned strays sort last.
+      inSection.sort((a, b) => {
+        const ia = ids.indexOf(a[0]), ib = ids.indexOf(b[0]);
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+      });
+      push(label, inSection.map(mk));
+    });
   }
+
   if (u.modules.includes('survey')) {
-    groups.push({ label: "Reader Intelligence", items: [
-      { id: "readers_connect", label: "Readers Connect", icon: "📍", badge: 0 }
-    ]});
+    push("◈ Reader Intelligence", [{ id: "readers_connect", label: "Readers Connect", icon: "📍", badge: 0 }]);
   }
+
   const apps = u.modules.filter(k => permAllows(k, 'view') !== false).map(k => ({ key: k, ...APP_MENU[k] }));
   const SHOW_FIELD_APPS_NAV = false; // hidden per request 2026-08-24 — not deleted, re-enable when ready to surface these
   if (SHOW_FIELD_APPS_NAV && apps.length) groups.push({ label: "Field Apps", apps });
-  if (u.isAdmin) {
-    // Real Level-1 admins always see every Administration screen; a "limited admin"
-    // (isAdmin granted at a lower hierarchy level) sees only what their navScreens
-    // override includes — same pattern as the Dashboard section above.
-    const adminItems = ADMIN_MENU
-      .filter(([id]) => hl === 1 || !u.navScreens || u.navScreens.includes(id))
-      .filter(([id]) => permAllows(id, 'view') !== false)
-      .map(([id, l, ic]) => ({ id, label: l, icon: ic }));
-    if (adminItems.length) groups.push({ label: "Administration", items: adminItems });
+
+  // Admin-gated screens, split for readability into Planning vs Administration.
+  // Gate is unchanged: real Level-1 admins see all; a limited admin sees only what
+  // their navScreens override grants.
+  const adminAllowed = !u.isAdmin ? [] : ADMIN_MENU
+    .filter(([id]) => hl === 1 || !u.navScreens || u.navScreens.includes(id))
+    .filter(([id]) => permAllows(id, 'view') !== false)
+    .map(([id, l, ic]) => ({ id, label: l, icon: ic }));
+
+  const planning = adminAllowed.filter(x => PLANNING_IDS.includes(x.id));
+  // Competitor Data has always been reachable by hl 2–3 data-entry users who are NOT
+  // admins (it used to sit in its own "Data Entry" group). Regrouping must not quietly
+  // take that away, so it is re-added here for them.
+  if (!u.isAdmin && hl > 1 && hl <= 3 && permAllows('competitor_data', 'view') !== false) {
+    planning.push({ id: "competitor_data", label: "Competitor Data", icon: "📊" });
   }
-  if (hl > 1 && hl <= 3) groups.push({ label: "Data Entry", items: [
-    { id: "competitor_data", label: "Competitor Data",  icon: "📊" },
-  ]});
+  planning.sort((a, b) => PLANNING_IDS.indexOf(a.id) - PLANNING_IDS.indexOf(b.id));
+  push("◎ Planning & Targets", planning);
+  push("⚙ Administration", adminAllowed.filter(x => !PLANNING_IDS.includes(x.id)));
+
   return groups;
 }
 
