@@ -87,11 +87,38 @@ async function resolveIncharge(conn, execName) {
   };
 }
 
-function telegramText(v, inchargeName) {
+// The executive who owns the territory is the one who can act on this, so they are
+// addressed directly; the Circulation Incharge gets the same audit for oversight.
+// NOTE: exec_master.mobile_no / email_id are empty for all 269 active executives in
+// the current Oracle sync, so this almost always falls through to app_users — the only
+// place executive contact details actually exist today. Until those numbers are filled
+// in (in either source) the executive copy cannot be delivered; runNotify logs that
+// explicitly rather than failing quietly.
+async function resolveExecutive(conn, execName) {
+  const [em] = await conn.query(
+    `SELECT executive_code, mobile_no, email_id FROM exec_master
+     WHERE executive_desc = ? AND is_active_pli = 'Y' ORDER BY exec_designation='EXEC' DESC LIMIT 1`,
+    [execName]);
+  let mobile = em[0]?.mobile_no || null, email = em[0]?.email_id || null;
+  if (!mobile && !email) {
+    const [au] = await conn.query(
+      `SELECT mobile, email FROM app_users
+       WHERE UPPER(TRIM(name)) = UPPER(TRIM(?)) AND is_active = 1 LIMIT 1`, [execName]);
+    mobile = au[0]?.mobile || null;
+    email  = au[0]?.email  || null;
+  }
+  if (!em.length && !mobile && !email) return null;
+  return { code: em[0]?.executive_code || null, name: execName, mobile, email };
+}
+
+function telegramText(v, toName, forSelf) {
   const L = [];
   L.push(`🗞 राजस्थान पत्रिका — टूर प्लान AI ऑडिट`);
-  L.push(`प्रिय ${inchargeName},`);
-  L.push(`कार्यकारी: ${v.exec_name} (${v.unit_name}) · दिनांक: ${v.date}`);
+  L.push(`प्रिय ${toName},`);
+  L.push(forSelf
+    ? `दिनांक: ${v.date} · ${v.unit_name}`
+    : `कार्यकारी: ${v.exec_name} (${v.unit_name}) · दिनांक: ${v.date}`);
+  L.push(`आपके प्लान में ${v.submitted_count} एजेंसी — प्राथमिकता मिलान ${v.overlap_pct}%`);
   L.push('');
   L.push(v.hindi_message);
   return L.join('\n');
@@ -111,36 +138,49 @@ async function runNotify(opts = {}) {
     const verdicts = await computeVerdictsForDate(q, date);
     onLog(`[tour-plan-notify] ${verdicts.length} executive(s) with a submitted plan`);
 
-    let notified = 0, skipped = 0, failed = 0;
+    let notified = 0, skipped = 0, failed = 0, noExecContact = 0;
     for (const v of verdicts) {
       const actionable = v.missing.length > 0 || v.nearby_gaps.length > 0;
       if (!actionable) { skipped++; continue; }
 
-      const incharge = await resolveIncharge(conn, v.exec_name);
-      if (!incharge) {
-        onLog(`  [skip] ${v.exec_name}: no Circulation Incharge found in exec_hierarchy_mapping`);
+      // Executive first — it is their plan and their route to change. Incharge still
+      // gets a copy so the shortfall is visible up the line.
+      const executive = await resolveExecutive(conn, v.exec_name);
+      const incharge  = await resolveIncharge(conn, v.exec_name);
+      if (!executive && !incharge) {
+        onLog(`  [skip] ${v.exec_name}: no contact found in exec_master or exec_hierarchy_mapping`);
         skipped++; continue;
       }
 
       if (dryRun) {
-        onLog(`  [dry-run] would notify ${incharge.name} about ${v.exec_name}'s plan (${v.missing.length} missing, ${v.nearby_gaps.length} nearby gaps)`);
+        onLog(`  [dry-run] ${v.exec_name} (${v.missing.length} missing, ${v.nearby_gaps.length} nearby, route "${v.route_label || '—'}") -> exec:${executive ? (executive.mobile || 'no-mobile') : 'none'} incharge:${incharge ? incharge.name : 'none'}`);
         continue;
       }
 
-      const text = telegramText(v, incharge.name);
       let sentAny = false;
-      if (incharge.mobile) {
-        const tg = await sendTelegram(conn, incharge.mobile, text);
-        if (tg.ok) { sentAny = true; onLog(`  [telegram] sent to ${incharge.name} (re: ${v.exec_name})`); }
-        else onLog(`  [telegram] failed for ${incharge.name}: ${tg.reason}`);
-      }
-      if (incharge.email) {
-        const em = await sendEmail(incharge.email, `टूर प्लान AI ऑडिट — ${v.exec_name} (${v.date})`, text);
-        if (em.ok) { sentAny = true; onLog(`  [email] sent to ${incharge.email} (re: ${v.exec_name})`); }
+      const targets = [];
+      if (executive && (executive.mobile || executive.email)) targets.push({ who: executive, self: true });
+      else noExecContact++;
+      if (incharge)  targets.push({ who: incharge,  self: false });
+
+      for (const { who, self } of targets) {
+        const text = telegramText(v, who.name, self);
+        if (who.mobile) {
+          const tg = await sendTelegram(conn, who.mobile, text);
+          if (tg.ok) { sentAny = true; onLog(`  [telegram] sent to ${self ? 'executive' : 'incharge'} ${who.name} (re: ${v.exec_name})`); }
+          else onLog(`  [telegram] failed for ${who.name}: ${tg.reason}`);
+        }
+        if (who.email) {
+          const em = await sendEmail(who.email, `टूर प्लान AI ऑडिट — ${v.exec_name} (${v.date})`, text);
+          if (em.ok) { sentAny = true; onLog(`  [email] sent to ${who.email} (re: ${v.exec_name})`); }
+        }
       }
       if (sentAny) notified++; else failed++;
     }
-    onLog(`[tour-plan-notify] Complete — notified: ${notified}, skipped(no action/no incharge): ${skipped}, failed: ${failed}`);
+    if (noExecContact) {
+      onLog(`[tour-plan-notify] NOTE: ${noExecContact} executive(s) had no mobile/email on record, so only their Incharge was alerted. Executive alerts need exec_master.mobile_no (currently empty for all 269 active execs) or a matching app_users row, plus that number linked in Telegram.`);
+    }
+    onLog(`[tour-plan-notify] Complete — notified: ${notified}, skipped(no action/no contact): ${skipped}, failed: ${failed}`);
     return { date, total: verdicts.length, notified, skipped, failed };
   } finally {
     await conn.end();

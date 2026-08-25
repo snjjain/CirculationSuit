@@ -2449,26 +2449,35 @@ function _dcrATourPlanCheckTab() {
     const col = v.is_correct ? 'var(--grn)' : v.overlap_pct >= 25 ? '#f59e0b' : 'var(--red)';
     const verdict = v.is_correct ? '✓ On target' : v.overlap_pct >= 25 ? '△ Partly right' : '✗ Needs rework';
 
-    const missList = (v.missing || []).map((a, i) => {
+    // The suggested plan is the whole recommended trip in stop order, with the stops
+    // the executive already had marked — so it reads as "here is the day", not just a
+    // list of misses. Falls back to the missing-only list on older API responses.
+    const route = (v.suggested_route && v.suggested_route.length) ? v.suggested_route : (v.missing || []);
+    const missList = route.map((a, i) => {
       const bits = [];
       if (a.outstanding > 0) bits.push('outstanding ' + money(a.outstanding));
       if (a.fup_amt > 0) bits.push('promised ' + money(a.fup_amt));
       bits.push(a.days_since_visit == null ? 'never visited' : a.days_since_visit + 'd since visit');
-      return `<tr onclick="openAgencyProfile('${esc(a.unit_code||v.unit_code||'').replace(/'/g,"\\'")}','${esc(a.agcd).replace(/'/g,"\\'")}','${esc(a.ag_name||'').replace(/'/g,"\\'")}')" style="cursor:pointer" title="View agency profile">
-        <td style="color:var(--ink-2);width:22px">${i + 1}</td>
-        <td><b style="font-size:12px">${esc(a.ag_name)}</b>${a.city ? `<br><span style="font-size:10px;color:var(--ink-2)">${esc(a.city)}</span>` : ''}</td>
+      const where = a.station_name || a.city;
+      return `<tr onclick="openAgencyProfile('${esc(a.unit_code||v.unit_code||'').replace(/'/g,"\\'")}','${esc(a.agcd).replace(/'/g,"\\'")}','${esc(a.ag_name||'').replace(/'/g,"\\'")}')" style="cursor:pointer${a.in_plan ? ';opacity:.6' : ''}" title="View agency profile">
+        <td style="color:var(--ink-2);width:22px">${a.stop_no || i + 1}</td>
+        <td><b style="font-size:12px">${esc(a.ag_name)}</b>${a.in_plan ? ' <span style="font-size:9px;background:var(--grn);color:#fff;border-radius:8px;padding:1px 6px">in plan</span>' : ''}${where ? `<br><span style="font-size:10px;color:var(--ink-2)">${esc(where)}</span>` : ''}</td>
         <td style="font-size:11px;color:var(--ink-2)">${bits.join(' · ')}</td>
         <td class="r" style="font-weight:700;color:${a.outstanding > 0 ? 'var(--red)' : 'var(--ink)'}">${money(a.outstanding)}</td>
       </tr>`;
     }).join('');
+    const routeHdr = v.route_label
+      ? `<div style="font-size:11px;color:var(--ink-2);margin-bottom:8px">Grouped on the <b>${esc(v.route_label)}</b> route${v.route_total_km ? ` · about ${v.route_total_km} km end to end` : ''} — stops are in travel order.</div>`
+      : '';
 
     const nearList = (v.nearby_gaps || []).map(a =>
       `<li style="margin-bottom:3px">${esc(a.ag_name)} — <span style="color:var(--ink-2)">${a.distance_km} km from ${esc(a.near_agency)} on the plan</span></li>`).join('');
 
     const detail = !open ? '' : `<div style="border-top:1px solid var(--brd2);padding:12px 14px;background:var(--bg)">
-      ${missList ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--red);margin-bottom:6px">Should have planned instead (${(v.missing||[]).length})</div>
+      ${missList ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--red);margin-bottom:6px">Suggested plan for the day — ${(v.missing||[]).length} of these were missed</div>
+        ${routeHdr}
         <div style="overflow-x:auto;margin-bottom:12px"><table class="tbl" style="font-size:12px;min-width:520px">
-          <thead><tr><th></th><th style="text-align:left">Agency</th><th style="text-align:left">Why it ranks higher</th><th class="r">Outstanding</th></tr></thead>
+          <thead><tr><th>Stop</th><th style="text-align:left">Agency</th><th style="text-align:left">Why it ranks higher</th><th class="r">Outstanding</th></tr></thead>
           <tbody>${missList}</tbody></table></div>` : ''}
       ${nearList ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#f59e0b;margin-bottom:6px">Nearby, could be added to the same trip</div>
         <ul style="font-size:12px;margin:0 0 12px 16px;padding:0">${nearList}</ul>` : ''}

@@ -47,10 +47,19 @@ async function buildAiRecommendation(q, execName, unitCode) {
   const uAg = unitCode ? ' AND unit=?' : '';   // agency_master's column is `unit`, not `unit_code`
   const uP  = unitCode ? [unitCode] : [];
   const [agR, visitR, osR, supR] = await Promise.all([
-    q(`SELECT agcd, ag_name, COALESCE(city_name, dist_name) city_name, unit AS unit_code, unit_name
-       FROM agency_master
-       WHERE executive_name=? AND CAST(dpcd AS UNSIGNED)=1${uAg}
-         AND (supply_stop_flag IS NULL OR supply_stop_flag!='Y') AND suspend_date IS NULL
+    // drop_points_master carries the real distribution route for a station, plus its
+    // GPS — that is what makes a suggested day's plan followable rather than a list of
+    // scattered stops. Coverage is partial (~37% route, ~36% GPS), so station_name is
+    // kept as a near-universal (97%) locality fallback for grouping.
+    q(`SELECT am.agcd, am.ag_name, COALESCE(am.city_name, am.dist_name) city_name,
+              am.unit AS unit_code, am.unit_name, am.station_name,
+              dp.route_name, dp.sub_route_name,
+              CAST(dp.latitude AS DECIMAL(10,6)) lat, CAST(dp.longitude AS DECIMAL(10,6)) lng
+       FROM agency_master am
+       LEFT JOIN drop_points_master dp
+         ON dp.unit_code = am.unit AND dp.drop_point_code = am.station_code
+       WHERE am.executive_name=? AND CAST(am.dpcd AS UNSIGNED)=1${uAg ? ' AND am.unit=?' : ''}
+         AND (am.supply_stop_flag IS NULL OR am.supply_stop_flag!='Y') AND am.suspend_date IS NULL
        LIMIT 150`, [execName, ...uP]),
     q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, MAX(followup_amount) fup_amt, MAX(followup_date) fup_date
        FROM dcr_agency_visit
@@ -83,15 +92,98 @@ async function buildAiRecommendation(q, execName, unitCode) {
     const os = osMap[ag.agcd] || 0;
     const days = v.last_visit ? Math.floor((Date.now() - new Date(v.last_visit)) / 86400000) : 999;
     const avgSup = supMap[ag.agcd] || 0;
+    const lat = ag.lat == null ? null : N(ag.lat), lng = ag.lng == null ? null : N(ag.lng);
     return {
       agcd: ag.agcd, ag_name: ag.ag_name, city: ag.city_name || '', unit_code: ag.unit_code, unit_name: ag.unit_name,
+      station_name: ag.station_name || '', route_name: ag.route_name || null, sub_route_name: ag.sub_route_name || null,
+      lat: (lat && lat >= 8 && lat <= 38) ? lat : null,
+      lng: (lng && lng >= 68 && lng <= 98) ? lng : null,
       outstanding: os, days_since_visit: days === 999 ? null : days,
       fup_amt: N(v.fup_amt), fup_date: v.fup_date || null, avg_supply: avgSup,
       score: (os / 10000) + (days >= 999 ? 15 : Math.min(days / 3, 20)) + (v.fup_amt > 0 ? 20 : 0),
     };
   }).sort((a, b) => b.score - a.score);
 
-  return list.slice(0, TOP_N);
+  return routeCluster(list);
+}
+
+// ── Turn a scored candidate list into ONE followable day's route ─────────────
+// A plain top-N by score scatters an executive across the whole territory, which is
+// not a plan anyone can actually run. Stops are grouped by the real distribution route
+// (drop_points_master.route_name), falling back to the station's locality where the
+// route is unknown, and the single best-value cluster is chosen. The result is then
+// ordered nearest-neighbour from the highest-priority stop so it reads as a trip.
+function localityOf(a) {
+  if (a.route_name) return 'R:' + String(a.route_name).trim().toUpperCase();
+  // "SIROHI(SAVLI)" and "SIROHI(GOYLI)" are the same town, different drop points.
+  const st = String(a.station_name || a.city || '').trim().toUpperCase();
+  const base = st.split('(')[0].trim();
+  return base ? 'S:' + base : 'U:UNKNOWN';
+}
+function routeCluster(list) {
+  if (list.length <= 1) return list.map((a, i) => ({ ...a, stop_no: i + 1 }));
+
+  const groups = new Map();
+  list.forEach(a => {
+    const k = localityOf(a);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(a);
+  });
+
+  // Value a cluster by what its best TOP_N stops are worth — a tight cluster of
+  // high-outstanding agencies beats a sprawl containing one big name.
+  let best = null;
+  for (const [key, members] of groups.entries()) {
+    if (key === 'U:UNKNOWN') continue;               // ungrouped: never a route on its own
+    const top = members.slice(0, TOP_N);
+    const value = top.reduce((s, a) => s + a.score, 0);
+    if (!best || value > best.value) best = { key, members, value };
+  }
+  // No usable grouping at all — fall back to the old plain top-N.
+  if (!best) return list.slice(0, TOP_N).map((a, i) => ({ ...a, stop_no: i + 1 }));
+
+  let chosen = best.members.slice(0, TOP_N);
+  // Small cluster: top up with the nearest high-priority stops from elsewhere so the
+  // day is still full, preferring ones with GPS close to this cluster.
+  if (chosen.length < TOP_N) {
+    const anchor = chosen.find(a => a.lat != null);
+    const rest = list.filter(a => !chosen.includes(a));
+    const ranked = anchor
+      ? rest.map(a => ({ a, d: a.lat != null ? haversineKm(anchor.lat, anchor.lng, a.lat, a.lng) : 9999 }))
+          .sort((x, y) => (x.d - y.d) || (y.a.score - x.a.score)).map(x => x.a)
+      : rest;
+    chosen = chosen.concat(ranked.slice(0, TOP_N - chosen.length));
+  }
+
+  // Order as a trip: start at the highest-priority stop, then repeatedly hop to the
+  // nearest unvisited one. Stops with no GPS keep score order at the end.
+  const withGps = chosen.filter(a => a.lat != null);
+  const noGps   = chosen.filter(a => a.lat == null);
+  const ordered = [];
+  if (withGps.length) {
+    let cur = withGps.reduce((m, a) => (a.score > m.score ? a : m), withGps[0]);
+    const pool = withGps.filter(a => a !== cur);
+    ordered.push(cur);
+    while (pool.length) {
+      let bi = 0, bd = Infinity;
+      pool.forEach((a, i) => { const d = haversineKm(cur.lat, cur.lng, a.lat, a.lng); if (d < bd) { bd = d; bi = i; } });
+      cur = pool.splice(bi, 1)[0];
+      ordered.push(cur);
+    }
+  }
+  const finalList = ordered.concat(noGps);
+
+  // Total travel along the ordered route — lets the UI say how tight the day is.
+  let km = 0;
+  for (let i = 1; i < finalList.length; i++) {
+    const p = finalList[i - 1], c = finalList[i];
+    if (p.lat != null && c.lat != null) km += haversineKm(p.lat, p.lng, c.lat, c.lng);
+  }
+  const label = best.key.startsWith('R:') ? best.key.slice(2) : best.key.slice(2) + ' area';
+  return finalList.map((a, i) => ({
+    ...a, stop_no: i + 1, route_label: label,
+    route_total_km: Math.round(km * 10) / 10,
+  }));
 }
 
 // ── Submitted plan for one executive+date, grouped by AGENCY OWNERSHIP ──────
@@ -187,15 +279,24 @@ async function computeVerdict(q, execName, unitCode, unitName, date) {
   lines.push(isCorrect
     ? `आपके द्वारा बनाया गया टूर प्लान सही है — ${overlapPct}% प्राथमिकता वाली एजेंसियां कवर हो रही हैं।`
     : `आपके द्वारा बनाया गया टूर प्लान सुधार चाहता है — केवल ${overlapPct}% प्राथमिकता वाली एजेंसियां कवर हो रही हैं।`);
+  // The suggested plan is the WHOLE recommended route in stop order, not just the
+  // agencies that were missed — an executive needs a trip they can follow end to end,
+  // with the ones already in their plan marked so they know what changes.
   if (missing.length) {
+    const routeLabel = recommendation.find(r => r.route_label)?.route_label || null;
+    const km = recommendation.find(r => r.route_total_km != null)?.route_total_km;
     lines.push('');
-    lines.push('इसके स्थान पर आपका आज का टूर प्लान ये होना चाहिए:');
-    missing.forEach((a, i) => {
+    lines.push(routeLabel
+      ? `सुझाया गया आज का टूर प्लान — ${routeLabel} रूट${km ? ` (लगभग ${km} किमी)` : ''}:`
+      : 'इसके स्थान पर आपका आज का टूर प्लान ये होना चाहिए:');
+    recommendation.forEach((a, i) => {
       const bits = [];
       if (a.outstanding > 0) bits.push(`बकाया ${fmtINR(a.outstanding)}`);
       if (a.fup_amt > 0) bits.push(`वादा की गई राशि ${fmtINR(a.fup_amt)}`);
       bits.push(a.days_since_visit == null ? 'कभी भ्रमण नहीं हुआ' : `${a.days_since_visit} दिन से भ्रमण नहीं`);
-      lines.push(`${i + 1}. ${a.ag_name}${a.city ? ' (' + a.city + ')' : ''} — ${bits.join(', ')}`);
+      const already = submittedAgcds.has(a.agcd) ? ' ✓ (आपके प्लान में है)' : '';
+      const where = a.station_name || a.city;
+      lines.push(`${i + 1}. ${a.ag_name}${where ? ' (' + where + ')' : ''} — ${bits.join(', ')}${already}`);
     });
   }
   if (nearbyGaps.length) {
@@ -211,6 +312,11 @@ async function computeVerdict(q, execName, unitCode, unitName, date) {
     exec_name: execName, unit_code: unitCode, unit_name: unitName, date,
     is_correct: isCorrect, overlap_pct: overlapPct,
     matched, missing, low_priority: lowPriority, nearby_gaps: nearbyGaps,
+    // The full suggested trip in stop order, each flagged with whether it is already
+    // in the executive's own plan — this is what the screen and the alert both show.
+    suggested_route: recommendation.map(a => ({ ...a, in_plan: submittedAgcds.has(a.agcd) })),
+    route_label: recommendation.find(r => r.route_label)?.route_label || null,
+    route_total_km: recommendation.find(r => r.route_total_km != null)?.route_total_km ?? null,
     submitted_count: submittedRows.length, recommended_count: recommendation.length,
     hindi_message: lines.join('\n'),
   };
