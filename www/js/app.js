@@ -4110,341 +4110,273 @@ function _cmdViewLegacy() {
 /* ── Command Centre — NEW design (work in progress). Starts as an exact copy of
    the current dashboard so the redesign begins from something that already works;
    change this freely, the stable version above is unaffected. ── */
+/* ═══════════ Circulation Command Centre — state-wise management view ═══════════
+   Built to the Circulation Dashboard Redesign brief: compare states first, surface
+   risk and opportunity, then drill. Every number on this screen comes from ONE
+   endpoint (/api/command/state-performance) so the cards, the alerts and the market
+   share can never disagree with each other. */
+
+function _ccState() {
+  return S.live.cc || (S.live.cc = { asOn: '', compare: 'prev_day', state: '', unit: '', district: '', data: null, _loading: false, drill: null });
+}
+window.ccSet = (k, v) => {
+  const st = _ccState();
+  st[k] = v;
+  if (k === 'state') { st.unit = ''; st.district = ''; }
+  if (k === 'unit') st.district = '';
+  st.data = null; st._loading = false;
+  render();
+};
+window.ccReset = () => { S.live.cc = null; render(); };
+window.ccDrill = (screen, stateKey) => {
+  // Hand the destination dashboard the same state the card was showing, so the
+  // drill lands already filtered instead of dumping the user at an all-India view.
+  try {
+    if (screen === 'supply_dash') { const s = _supdState(); s.state = stateKey; s.unit = ''; _supdClearData(s); }
+    else if (screen === 'collections') { const s = colState(); s.filters.state = stateKey; s.filters.branch = ''; s.kpis = null; }
+    else if (screen === 'outstanding') { const s = ouState(); s.filters.state = _ccOsCode(stateKey); s.filters.unit_code = ''; if (typeof ouClearCache === 'function') ouClearCache(); }
+    else if (screen === 'dcr_analytics') { _dcrA.state = _ccDcrName(stateKey); _dcrA.unit_code = ''; _dcrA.summary = _dcrA.execs = _dcrA.analysis = _dcrA.coverage = null; }
+  } catch (_) {}
+  go(screen);
+};
+const _ccOsCode  = k => ({ 'RAJASTHAN': 'RPPL', 'MADHYA PRADESH': 'MP', 'CHHATTISGARH': 'CG' }[k] || 'NATIONAL');
+const _ccDcrName = k => ({ 'RAJASTHAN': 'Rajasthan', 'MADHYA PRADESH': 'Madhya Pradesh', 'CHHATTISGARH': 'Chhattisgarh' }[k] || 'National');
+
+function _ccLoad() {
+  const st = _ccState();
+  if (st._loading || st.data) return;
+  st._loading = true;
+  const p = new URLSearchParams();
+  if (st.asOn) p.set('as_on', st.asOn);
+  if (st.compare) p.set('compare', st.compare);
+  if (st.unit) p.set('unit_code', st.unit);
+  fetch(`${location.origin}/api/command/state-performance?${p}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.data = d; st._loading = false; if (S.screen === 'command') render(); })
+    .catch(() => { st.data = { _err: true }; st._loading = false; if (S.screen === 'command') render(); });
+}
+
+/* ── small formatters ── */
+const _ccINR = v => { const n = Number(v) || 0, a = Math.abs(n);
+  return a >= 1e7 ? `₹${(n / 1e7).toFixed(2)} Cr` : a >= 1e5 ? `₹${(n / 1e5).toFixed(2)} L` : `₹${Math.round(n).toLocaleString('en-IN')}`; };
+const _ccN = v => (Number(v) || 0).toLocaleString('en-IN');
+const _CC_STATUS = {
+  healthy:  { bg: '#dcfce7', fg: '#15803d', label: 'Healthy' },
+  watch:    { bg: '#fef3c7', fg: '#b45309', label: 'Watch' },
+  critical: { bg: '#fee2e2', fg: '#b91c1c', label: 'Critical' },
+};
+const _CC_PRI = {
+  critical: { bg: '#fef2f2', bar: '#dc2626', fg: '#b91c1c', label: 'Critical' },
+  high:     { bg: '#fff7ed', bar: '#ea580c', fg: '#c2410c', label: 'High' },
+  medium:   { bg: '#fffbeb', bar: '#d97706', fg: '#b45309', label: 'Medium' },
+  low:      { bg: '#eff6ff', bar: '#2563eb', fg: '#1d4ed8', label: 'Low' },
+};
+function _ccTrend(pct, invert) {
+  if (pct == null) return `<span style="color:var(--muted);font-size:11px">—</span>`;
+  const up = pct >= 0, good = invert ? !up : up;
+  const col = pct === 0 ? 'var(--muted)' : good ? '#15803d' : '#b91c1c';
+  return `<span style="color:${col};font-weight:700;font-size:11.5px;white-space:nowrap">${pct === 0 ? '' : up ? '▲' : '▼'} ${up && pct !== 0 ? '+' : ''}${pct}%</span>`;
+}
+function _ccBar(pctVal, color) {
+  const w = Math.max(0, Math.min(100, Number(pctVal) || 0));
+  return `<div style="height:6px;background:#eef2f7;border-radius:4px;overflow:hidden;margin-top:5px">
+    <div style="height:100%;width:${w}%;background:${color};border-radius:4px"></div></div>`;
+}
+
+/* ── one KPI row inside a state card ── */
+function _ccKpiRow(label, value, sub, trendHtml, barPct, barColor, onClick) {
+  return `<div onclick="${onClick}" style="cursor:pointer;padding:8px 0;border-top:1px solid #eef2f7"
+      onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">
+      <span style="font-size:11px;font-weight:700;color:#64748b;letter-spacing:.02em">${label}</span>
+      ${trendHtml}
+    </div>
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-top:2px">
+      <span style="font-size:16px;font-weight:800;color:#0f172a;font-variant-numeric:tabular-nums">${value}</span>
+      <span style="font-size:10.5px;color:#94a3b8;text-align:right">${sub || ''}</span>
+    </div>
+    ${barPct != null ? _ccBar(barPct, barColor) : ''}
+  </div>`;
+}
+
+/* ── state performance card ── */
+function _ccStateCard(s) {
+  const st = _CC_STATUS[s.supply.status] || _CC_STATUS.watch;
+  // Card-level status is the worst of the four, so a card can never look calm while
+  // one of its KPIs is critical.
+  const rank = { healthy: 0, watch: 1, critical: 2 };
+  const worst = [s.supply.status, s.collection.status, s.os.status, s.dcr.status]
+    .reduce((a, b) => (rank[b] > rank[a] ? b : a), 'healthy');
+  const w = _CC_STATUS[worst];
+  const q = v => String(v).replace(/'/g, "\\'");
+
+  return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;display:flex;flex-direction:column">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px">
+      <div style="min-width:0">
+        <div onclick="ccDrill('supply_dash','${q(s.key)}')" style="cursor:pointer;font-size:16px;font-weight:800;color:#1e3a8a">${esc(s.name)}</div>
+        <div style="font-size:11px;color:#64748b;margin-top:1px">${s.head ? esc(s.head) : 'State Head —'}</div>
+      </div>
+      <span style="flex:none;background:${w.bg};color:${w.fg};font-size:10.5px;font-weight:800;padding:3px 10px;border-radius:11px">${w.label}</span>
+    </div>
+
+    ${_ccKpiRow('SUPPLY', _ccN(s.supply.current) + ' cp',
+      `Agent ${_ccN(s.supply.agent)} · Cash ${_ccN(s.supply.cash)}`,
+      _ccTrend(s.supply.growth_pct),
+      null, null, `ccDrill('supply_dash','${q(s.key)}')`)}
+
+    ${_ccKpiRow('COLLECTION', _ccINR(s.collection.current),
+      `of ${_ccINR(s.collection.prev_month_billing)} billed ${esc(s.collection.prev_month_label || '')}`,
+      `<span style="font-size:11.5px;font-weight:800;color:${s.collection.collection_pct >= 85 ? '#15803d' : s.collection.collection_pct >= 60 ? '#b45309' : '#b91c1c'}">${s.collection.collection_pct == null ? '—' : s.collection.collection_pct + '%'}</span>`,
+      s.collection.collection_pct, s.collection.collection_pct >= 85 ? '#22c55e' : s.collection.collection_pct >= 60 ? '#f59e0b' : '#ef4444',
+      `ccDrill('collections','${q(s.key)}')`)}
+
+    ${_ccKpiRow('OUTSTANDING', _ccINR(s.os.current),
+      `${_ccN(s.os.critical_agencies)} agencies above ₹1 L`,
+      _ccTrend(s.os.growth_pct, true),
+      null, null, `ccDrill('outstanding','${q(s.key)}')`)}
+
+    ${_ccKpiRow('DCR — FIELD VISITS', _ccN(s.dcr.current),
+      `${_ccN(s.dcr.agencies_visited)} of ${_ccN(s.dcr.agencies_total)} agencies`,
+      `<span style="font-size:11.5px;font-weight:800;color:${s.dcr.coverage_pct >= 5 ? '#15803d' : s.dcr.coverage_pct >= 2 ? '#b45309' : '#b91c1c'}">${s.dcr.coverage_pct == null ? '—' : s.dcr.coverage_pct + '%'}</span>`,
+      s.dcr.coverage_pct, s.dcr.coverage_pct >= 5 ? '#22c55e' : s.dcr.coverage_pct >= 2 ? '#f59e0b' : '#ef4444',
+      `ccDrill('dcr_analytics','${q(s.key)}')`)}
+  </div>`;
+}
+
+function _ccAlertCard(a, idx) {
+  const p = _CC_PRI[a.priority] || _CC_PRI.medium;
+  const q = v => String(v).replace(/'/g, "\\'");
+  return `<div onclick="ccDrill('${a.drill.screen}','${q(a.drill.state)}')"
+      style="cursor:pointer;background:${p.bg};border-left:4px solid ${p.bar};border-radius:8px;padding:10px 13px;margin-bottom:8px">
+    <div style="display:flex;align-items:baseline;gap:8px">
+      <span style="flex:none;width:19px;height:19px;border-radius:50%;background:${p.bar}22;color:${p.fg};font-size:10.5px;font-weight:800;display:inline-flex;align-items:center;justify-content:center">${idx + 1}</span>
+      <div style="min-width:0;flex:1">
+        <div style="font-size:13px;font-weight:700;color:${p.fg}">${esc(a.title)}</div>
+        <div style="font-size:11.5px;color:#475569;margin-top:2px">${esc(a.impact)}</div>
+        <div style="font-size:11px;color:#64748b;margin-top:3px"><b>Action:</b> ${esc(a.action)}</div>
+      </div>
+      <span style="flex:none;font-size:9.5px;font-weight:800;color:${p.fg};background:#fff;border:1px solid ${p.bar}44;padding:2px 7px;border-radius:9px">${p.label}</span>
+    </div>
+  </div>`;
+}
+
+function _ccOppCard(o, idx) {
+  const q = v => String(v).replace(/'/g, "\\'");
+  return `<div onclick="ccDrill('${o.drill.screen}','${q(o.drill.state)}')"
+      style="cursor:pointer;background:#f0fdf4;border-left:4px solid #16a34a;border-radius:8px;padding:10px 13px;margin-bottom:8px">
+    <div style="display:flex;align-items:baseline;gap:8px">
+      <span style="flex:none;width:19px;height:19px;border-radius:50%;background:#16a34a22;color:#15803d;font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center">✓</span>
+      <div style="min-width:0;flex:1">
+        <div style="font-size:13px;font-weight:700;color:#15803d">${esc(o.title)}</div>
+        <div style="font-size:11.5px;color:#475569;margin-top:2px">${esc(o.impact)}</div>
+        <div style="font-size:11px;color:#64748b;margin-top:3px"><b>Action:</b> ${esc(o.action)}</div>
+      </div>
+      <span style="flex:none;font-size:9.5px;font-weight:800;color:#15803d;background:#fff;border:1px solid #16a34a44;padding:2px 7px;border-radius:9px">${esc(o.type)}</span>
+    </div>
+  </div>`;
+}
+
 function _cmdViewNew() {
-  _cmdLoad();
-  const c = S.live.cmd || {};
-  const ou = c.ou, co = c.co, si = c.si, sv = c.sv, sup = c.sup, fa = c.fa, dcr = c.dcr;
-  const cf = _cmdFilterState();
-  const cmdPeriodLabel = { today: 'Today', yesterday: 'Yesterday', month: 'This Month', last_month: 'Last Month', quarter: 'Quarter' }[cf.period] || 'This Month';
-  const cmdPeriod = _cmdPeriodRange(cf.period);
-
-  // Header subtitle: Supply/Collections/Field Intelligence are Oracle-synced overnight, so
-  // they reflect through yesterday (D-1), not today — labeling that "Live · <today>" reads
-  // as same-day data when it isn't. Outstanding is a genuine point-in-time snapshot (already
-  // says "As on Today" on its own card) and Taxi tracks in near-real-time, so only note the
-  // exception rather than pretend everything lags.
-  const _cmdFmtDate = iso => {
-    if (!iso) return '';
-    const [y, m, dd] = String(iso).slice(0, 10).split('-').map(Number);
-    return new Date(y, m - 1, dd).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-  };
-  const cmdDataDate = (sup && !sup._err && !sup.no_data && sup.data_upto) ? _cmdFmtDate(sup.data_upto) : null;
-  const cmdSubtitle = cmdDataDate
-    ? `Data as of ${cmdDataDate} · Outstanding &amp; Taxi update in real-time`
-    : 'Loading latest data…';
-
-  /* ── Agency Outstanding — point-in-time balance, never a period sum ── */
-  let ouKpis, ouFooter;
-  if (ou && !ou._err) {
-    ouKpis = [
-      [_cmdFmtC(ou.total_outstanding),                      'Current Outstanding · As on Today', 'var(--red)'],
-      [_cmdFmtC(ou.current_outstanding),                    'Ageing < 31 days',     'var(--gold)'],
-      [_cmdFmtC(ou.overdue_outstanding),                    'Overdue (31+ days)',   'var(--red)'],
-      [_cmdFmtC(ou.critical_outstanding),                   'Critical (₹2L+)',      'var(--red)'],
-      [(ou.total_agencies||0).toLocaleString('en-IN'),      'Total Agencies',       'var(--ink)'],
-      [(ou.agencies_with_outstanding||0).toLocaleString('en-IN'), 'With Outstanding','var(--ink)'],
-      [(ou.overdue_ag_count||0).toLocaleString('en-IN'),    'Overdue Agencies',    'var(--gold)'],
-      [(ou.critical_count||0).toLocaleString('en-IN'),      'Critical Agencies',   'var(--red)'],
-    ];
-    ouFooter = `Snapshot balance as on <b>${TODAY}</b> — collection activity is shown separately in the Collections card`;
-  }
-
-  /* ── Collections ────────────────────────────────────────── */
-  let coKpis, coFooter;
-  if (co && !co._err) {
-    const cashAmt = co.cash_collection || 0, digAmt = co.digital_collection || 0;
-    const cashPct = co.total_collection > 0 ? (cashAmt / co.total_collection * 100).toFixed(0) : 0;
-    const digPct  = co.total_collection > 0 ? (digAmt  / co.total_collection * 100).toFixed(0) : 0;
-    coKpis = [
-      [_cmdFmtC(co.total_collection),                       cmdPeriodLabel + ' Total', 'var(--grn)'],
-      [_cmdFmtC(co.mtd_collection||0),                      'MTD Collection',      'var(--ink)'],
-      [(co.total_txn||0).toLocaleString('en-IN'),           'Transactions',        'var(--ink)'],
-      [(co.agencies_paid||0).toLocaleString('en-IN'),       'Agencies Paid',       'var(--ink)'],
-      [_cmdFmtC(digAmt),                                    `Digital · ${digPct}%`,'var(--acc)'],
-      [_cmdFmtC(cashAmt),                                   `Cash · ${cashPct}%`,  'var(--gold)'],
-      [_cmdFmtC(co.avg_per_agency||0),                      'Avg / Agency',        'var(--ink)'],
-      [_cmdFmtC(co.highest_collection||0),                  'Highest Single',      'var(--ink)'],
-    ];
-    coFooter = `Cash share: <b>${cashPct}%</b> &nbsp;·&nbsp; Digital: <b>${_cmdFmtC(digAmt)}</b> &nbsp;·&nbsp; Last payment: <b>${co.last_date||'—'}</b>`;
-  }
-
-  /* ── Taxi Deliveries ────────────────────────────────────── */
-  let siKpis, siFooter, siBadge, siBadgeColor;
-  if (si && !si._err) {
-    const lateCount = si.late?.length || 0, missedCount = si.app_not_running?.length || 0;
-    const dateLabel = si.dates?.length ? si.dates[si.dates.length - 1] : '—';
-    const totalIssues = lateCount + missedCount;
-    siKpis = [
-      [String(lateCount),   'Late (after 6 AM)', lateCount   > 0 ? 'var(--red)'  : 'var(--grn)'],
-      [String(missedCount), 'App Not Running',   missedCount > 0 ? 'var(--gold)' : 'var(--grn)'],
-      [dateLabel,           'Latest Date',       'var(--ink)'],
-    ];
-    siFooter = totalIssues > 0
-      ? `<span style="color:var(--red);font-weight:600">${totalIssues} issue${totalIssues !== 1 ? 's' : ''} today</span> · <a href="#" onclick="go('transport');return false" style="color:var(--acc)">View alerts →</a>`
-      : `<span style="color:var(--grn)">✓ All taxis on time today</span>`;
-    siBadge = totalIssues > 0 ? totalIssues + ' issues' : '✓ All clear';
-    siBadgeColor = totalIssues > 0 ? 'var(--red)' : 'var(--grn)';
-  }
-
-  /* ── Survey Intelligence ────────────────────────────────── */
-  let svKpis, svFooter;
-  if (sv && !sv._err) {
-    const total  = sv.total  || 0;
-    const orders = sv.order_count || 0;
-    const fups   = sv.followup_pending || 0;
-    const rpRdr  = sv.by_reason?.RP_READER || 0;
-    const notInt = sv.by_reason?.NOT_INTERESTED || 0;
-    const convPct = total > 0 ? (orders / total * 100).toFixed(1) : '0.0';
-    svKpis = [
-      [fmtN(total),                   'Total Surveys',    'var(--ink)'],
-      [fmtN(orders),                  'Orders Booked',    'var(--grn)'],
-      [fmtN(rpRdr),                   'RP Readers',       '#2E7D32'],
-      [fmtN(notInt),                  'Not Interested',   'var(--red)'],
-      [fmtN(fups),                    'Follow-ups Due',   'var(--gold)'],
-      [String(sv.surveyors || 0),     'Active Surveyors', 'var(--acc)'],
-    ];
-    svFooter = `Conversion: <b style="color:var(--grn)">${convPct}%</b> &nbsp;·&nbsp; Surveyors: <b>${sv.surveyors||0}</b> &nbsp;·&nbsp; Areas covered: <b>${sv.areas||0}</b>
-      ${_cmdBar(parseFloat(convPct), 'var(--grn)')}`;
-  }
-
-  /* ── Field Intelligence (DCR Activity) ─────────────────── */
-  let faKpis, faFooter, faBadge, faBadgeColor;
-  if (fa && !fa._err) {
-    const dcrData    = dcr && !dcr._err ? dcr : null;
-    const activeToday = fa.active_today  || 0;
-    const totalExecs  = fa.total_execs   || 0;
-    const activePct   = totalExecs > 0 ? Math.round(activeToday / totalExecs * 100) : 0;
-    const totalVisits = dcrData?.total_visits  || 0;
-    const execsActive = dcrData?.execs_active  || 0;
-    const pctColor    = activePct >= 80 ? 'var(--grn)' : activePct >= 50 ? 'var(--gold)' : 'var(--red)';
-    const noVisit     = (fa.alerts || []).find(a => a.key === 'no_visit_today');
-    const neverVis    = (fa.alerts || []).find(a => a.key === 'never_visited');
-    const declining   = (fa.alerts || []).find(a => a.key === 'supply_declining');
-    const osAlert     = (fa.alerts || []).find(a => a.key === 'os_outstanding');
-    faKpis = [
-      [activeToday + ' / ' + totalExecs,                                       'Active in Field (Prev Day)',   pctColor],
-      [activePct + '%',                                                          'Team Coverage',               pctColor],
-      [(totalVisits||0).toLocaleString('en-IN'),                                 'Agency Visits This Month',    'var(--ink)'],
-      [(execsActive||0).toLocaleString('en-IN'),                                 'Execs with Visits',           'var(--acc)'],
-      [noVisit  ? String(noVisit.count)  : '0',  'Not in Field Prev Day',        noVisit?.count  > 0 ? 'var(--red)'  : 'var(--grn)'],
-      [neverVis ? String(neverVis.count) : '0',  'Agencies Never Visited',       neverVis?.count > 0 ? 'var(--red)'  : 'var(--grn)'],
-    ];
-    const parts = [];
-    if (declining) parts.push(`<b style="color:var(--red)">${declining.count} execs</b> with supply decline`);
-    if (osAlert  ) parts.push(`<b style="color:var(--gold)">${osAlert.count} agencies</b> with outstanding`);
-    faFooter = parts.length
-      ? parts.join(' &nbsp;·&nbsp; ')
-      : `<span style="color:var(--grn)">✓ No critical field activity alerts</span>`;
-    faBadge      = activeToday + ' / ' + totalExecs + ' active';
-    faBadgeColor = pctColor;
-  }
-
-  /* ── Top KPI strip data ─────────────────────────────────── */
-  // Supply, Outstanding and Collections all honour District / Executive-CI now. Two
-  // sources still genuinely cannot: Reader Surveys (survey_data has neither column) and
-  // Taxi Alerts (a today-only vehicle snapshot with no agency dimension at all) — they
-  // say so rather than sitting there looking stuck. Cash supply is filterable by Centre
-  // Incharge but NOT by district (hawker data has no district anywhere), so a district
-  // selection alone drops Cash server-side (agent_only) and the Supply card says so.
-  const narrowed  = !!(cf.district || cf.exec_name);
-  const naNote    = narrowed ? ' · not filterable by district / executive' : '';
-  // Cash Sale is CITY sale — hawker centres carry no district, and only 9 branches run
-  // one at all. So the caption depends on which of those two is true, not on a generic
-  // "unavailable": a district pick genuinely cannot split city sale, whereas a branch
-  // with no centres simply has none to show.
-  const hasCashCentres = !sup || sup.cash_centres == null ? true : sup.cash_centres > 0;
-  const cashNote  = sup && sup.agent_only && hasCashCentres
-    ? ' · Agent Sale only — Cash is city sale, not split by district' : '';
-  const cashVal   = sup && sup.cash ? (Number(sup.cash.current) || 0).toLocaleString('en-IN') : null;
-  const supHead   = 'Supply · ' + cmdPeriodLabel;
-  const supLbl    = !sup || sup._err || sup.no_data ? supHead
-    : (!hasCashCentres ? supHead + ' · Agent (credit sale branch)'
-      : sup.agent_only ? supHead + ' · Agent' : supHead + ' · Agent+Cash');
-  // Supply syncs overnight, so "Today" has no row until it lands. Say that rather than
-  // falling back to the last synced day under a "Today" heading.
-  const supPending = sup && !sup._err && sup.no_data;
-  // Outstanding is a balance: as_on is null for the live CURRENT snapshot, else the
-  // month-end date of the snapshot actually used (server decides and reports back).
-  const ouAsOn    = ou && !ou._err && ou.as_on ? _cmdD(ou.as_on) : null;
-  const strip = [
-    { val: sup && !sup._err && !sup.no_data ? (Number(sup.total.current) || 0).toLocaleString('en-IN') : (c._supLoading ? '…' : (supPending ? '—' : '—')),
-      lbl: supLbl, icon: '📦', color: 'var(--blue)', goto: "go('supply_dash')",
-      sub: supPending ? 'Not synced yet for this period — supply loads overnight'
-        : (sup && !sup._err ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + (cashVal != null && hasCashCentres ? ' · Cash ' + cashVal : '') + ' · ' + sup.data_upto + cashNote : '') },
-    { val: ou && !ou._err ? _cmdFmtC(ou.total_outstanding)      : (c._ouLoading ? '…' : '—'),
-      lbl: 'Outstanding · ' + (ouAsOn ? 'As on ' + ouAsOn : 'As on Today'), icon: '💰', color: 'var(--red)', goto: "go('outstanding')",
-      sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies'
-        + (!ouAsOn && (cf.period === 'today' || cf.period === 'yesterday') ? ' · live balance, no daily history' : '') : '' },
-    { val: co && !co._err ? _cmdFmtC(co.total_collection)        : (c._coLoading ? '…' : '—'),
-      lbl: cmdPeriodLabel + ' Collections', icon: '₹',  color: 'var(--grn)', goto: "go('collections')",
-      sub: co && !co._err ? (co.total_txn||0).toLocaleString('en-IN') + ' transactions' : '' },
-    { val: si && !si._err ? String((si.late?.length||0) + (si.app_not_running?.length||0)) : (c._siLoading ? '…' : '—'),
-      lbl: 'Taxi Alerts Today',  icon: '🚕', color: si && !si._err && (si.late?.length||0)+(si.app_not_running?.length||0)>0 ? 'var(--red)' : 'var(--grn)', goto: "go('transport')",
-      sub: si && !si._err ? (si.late?.length||0)+' late · '+(si.app_not_running?.length||0)+' offline' + naNote : '' },
-    { val: sv && !sv._err ? fmtN(sv.total||0)                   : (c._svLoading ? '…' : '—'),
-      lbl: 'Reader Surveys',     icon: '📋', color: 'var(--acc)', goto: "go('survey_dash')",
-      sub: sv && !sv._err ? fmtN(sv.order_count||0) + ' orders booked' + naNote : '' },
-  ];
-
-  /* ── Pending modules ────────────────────────────────────── */
-  const pending = [
-    { icon:'🛵', title:'Hawker Operations',      desc:'Route coverage, reader database, earnings, missed drops' },
-    { icon:'🚚', title:'Vehicle Tracking',       desc:'Delays, breakdowns, real-time location, compliance' },
-  ];
-
-  /* ── Supply (Agent + Cash), current vs previous business day ─────────── */
-  let supKpis, supFooter, supBadge;
-  if (sup && !sup._err && !sup.no_data) {
-    const cp = n => (Number(n) || 0).toLocaleString('en-IN');
-    const g = sup.total.growth_pct;
-    // The Cash tile is dropped in two different situations: sup.cash is null when a
-    // district is selected (city sale has no district split), and cash_centres is 0 for
-    // the ~30 branches that are pure credit sale and have no hawker centre at all.
-    // Showing "Cash 0 cp" in either case would read as a real zero rather than N/A.
-    supKpis = [
-      [cp(sup.total.current) + ' cp', (sup.agent_only || !hasCashCentres ? 'Agent Supply · ' : 'Total Supply · ') + sup.data_upto, 'var(--ink)'],
-      [cp(sup.agent.current) + ' cp', 'Agent Sale (' + (sup.agent_share_pct != null ? sup.agent_share_pct + '%' : '—') + ')', 'var(--blue)'],
-      ...(sup.cash && hasCashCentres ? [[cp(sup.cash.current) + ' cp', 'Cash Sale · city (' + (sup.cash_share_pct != null ? sup.cash_share_pct + '%' : '—') + ')', 'var(--gold)']] : []),
-      [(g >= 0 ? '+' : '') + (g != null ? g : 0) + '%', 'Day-over-Day', g >= 0 ? 'var(--grn)' : 'var(--red)'],
-    ];
-    supFooter = `Prev day <b>${cp(sup.total.previous)}</b> cp · change <b style="color:${sup.total.diff >= 0 ? 'var(--grn)' : 'var(--red)'}">${sup.total.diff >= 0 ? '+' : ''}${cp(sup.total.diff)}</b> · ${sup.cur_label} vs ${sup.prev_label}`;
-    supBadge = cp(sup.total.current) + ' copies';
-  }
-
-  /* ── Filter bar ──────────────────────────────────────────── */
-  const CMD_STATE_OPTS = [['RAJASTHAN','Rajasthan'],['MADHYA PRADESH','Madhya Pradesh'],['CHHATTISGARH','Chhattisgarh'],['NATIONAL','National']];
-  const CMD_CORE_STATES = new Set(['RAJASTHAN','MADHYA PRADESH','CHHATTISGARH']);
-  const cmdRegionOf = s => { const u = String(s || '').toUpperCase(); return CMD_CORE_STATES.has(u) ? u : 'NATIONAL'; };
+  const st = _ccState();
+  _ccLoad();
+  const d = st.data;
   const cmdUnits = S.live.cmdUnits || [];
-  const cmdUnitsInState = cf.state ? cmdUnits.filter(u => cmdRegionOf(u.state_name) === cf.state) : cmdUnits;
-  _cmdLoadCascade(cf.unit_code);
-  const cmdDistricts = (cf.unit_code && S.live.cmdDistrictsByUnit && S.live.cmdDistrictsByUnit[cf.unit_code]) || [];
-  const cmdExecs     = (cf.unit_code && S.live.cmdExecsByUnit     && S.live.cmdExecsByUnit[cf.unit_code])     || [];
-  const periodBtn = (p, label, edge) => `<button onclick="cmdSetPeriod('${p}')" style="padding:7px 16px;border:1px solid var(--brd);${edge === 'l' ? 'border-radius:8px 0 0 8px;border-right:none' : edge === 'r' ? 'border-radius:0 8px 8px 0' : 'border-left:none;border-right:none'};background:${cf.period === p ? 'var(--navy,#1C2B45)' : 'var(--card)'};color:${cf.period === p ? '#fff' : 'var(--ink)'};font-size:12.5px;font-weight:600;cursor:pointer">${label}</button>`;
-  const filterBar = `<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;padding:12px 0 18px;border-bottom:1px solid var(--brd);margin-bottom:18px">
+  _cmdLoadUnits();
+
+  const sel = (label, key, value, opts, placeholder) => `<div>
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">${label}</div>
+    <select onchange="ccSet('${key}',this.value)" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#0f172a;font-size:12.5px;min-width:150px">
+      <option value="">${placeholder}</option>
+      ${opts.map(([v, l]) => `<option value="${esc(v)}" ${value === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+    </select></div>`;
+
+  const stateOpts = (d && d.states || []).map(s => [s.key, s.name]);
+  const unitOpts = cmdUnits
+    .filter(u => !st.state || String(u.state_name || '').toUpperCase() === st.state
+      || (st.state === 'NATIONAL' && !['RAJASTHAN','MADHYA PRADESH','CHHATTISGARH'].includes(String(u.state_name || '').toUpperCase())))
+    .map(u => [u.unit_code, u.unit_name || u.unit_code]);
+
+  const filters = `<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;margin-bottom:16px">
     <div>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Period</div>
-      <div style="display:flex">${periodBtn('today', 'Today', 'l')}${periodBtn('yesterday', 'Yesterday')}${periodBtn('month', 'This month')}${periodBtn('last_month', 'Last month')}${periodBtn('quarter', 'Quarter', 'r')}</div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">As on</div>
+      <input type="date" value="${esc(st.asOn || (d && d.as_on) || '')}" onchange="ccSet('asOn',this.value)"
+        style="padding:6px 9px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#0f172a;font-size:12.5px">
     </div>
-    <div>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">State</div>
-      <select onchange="cmdSetState(this.value)" style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;min-width:150px">
-        <option value="">All States</option>
-        ${CMD_STATE_OPTS.map(([v, l]) => `<option value="${v}" ${cf.state === v ? 'selected' : ''}>${l}</option>`).join('')}
-      </select>
+    ${sel('Compare with', 'compare', st.compare, [['prev_day','Previous Day'],['prev_week','Previous Week'],['prev_month','Previous Month']], 'Previous Day')}
+    ${sel('State', 'state', st.state, stateOpts, 'All States')}
+    ${sel('Unit', 'unit', st.unit, unitOpts, 'All Units')}
+    <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+      ${d && !d._err ? `<span style="font-size:11px;color:#64748b">Showing <b style="color:#0f172a">${esc(d.as_on)}</b> vs <b style="color:#0f172a">${esc(d.previous)}</b></span>` : ''}
+      <button onclick="ccReset()" style="padding:7px 13px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#64748b;font-size:12px;cursor:pointer">Reset</button>
     </div>
-    <div>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Unit</div>
-      <select onchange="cmdSetUnit(this.value, this.selectedOptions[0].dataset.name||'')" style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;min-width:170px">
-        <option value="">All Units</option>
-        ${cmdUnitsInState.map(u => `<option value="${esc(u.unit_code)}" data-name="${esc(u.unit_name || u.unit_code)}" ${cf.unit_code === u.unit_code ? 'selected' : ''}>${esc(u.unit_name || u.unit_code)}</option>`).join('')}
-      </select>
-    </div>
-    <div>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">District</div>
-      <select onchange="cmdSetDistrict(this.value)" ${!cf.unit_code ? 'disabled' : ''} style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;min-width:150px${!cf.unit_code ? ';opacity:.55;cursor:not-allowed' : ''}">
-        <option value="">${cf.unit_code ? 'All Districts' : 'Pick a unit first'}</option>
-        ${cmdDistricts.map(d => `<option value="${esc(d)}" ${cf.district === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}
-      </select>
-    </div>
-    <div>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Executive / Centre Incharge</div>
-      <select onchange="cmdSetExec(this.value)" ${!cf.unit_code ? 'disabled' : ''} style="padding:7px 10px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px;min-width:230px${!cf.unit_code ? ';opacity:.55;cursor:not-allowed' : ''}">
-        <option value="">${cf.unit_code ? 'All Executives & CIs' : 'Pick a unit first'}</option>
-        ${(() => {
-          // Executives run credit-sale agencies (Agent supply); Centre Incharges run
-          // hawker centres (Cash supply). Grouped and CI-suffixed so it is obvious which
-          // half of the business a name will narrow — see /executives/:unit.
-          const grp = (role, label, cnt) => {
-            const list = cmdExecs.filter(e => e.role === role);
-            if (!list.length) return '';
-            return `<optgroup label="${label} (${list.length})">` + list.map(e =>
-              `<option value="${esc(e.name)}" ${cf.exec_name === e.name ? 'selected' : ''}>${esc(e.name)}${role === 'CI' ? ' · CI' : ''}${cnt(e) ? ` (${cnt(e)})` : ''}</option>`).join('') + `</optgroup>`;
-          };
-          return grp('EXEC', 'Executives', e => e.agencies)
-               + grp('CI',   'Centre Incharges', e => e.hawkers);
-        })()}
-      </select>
-    </div>
-    ${cf.state || cf.unit_code || cf.district || cf.exec_name || cf.period !== 'month' ? `<button onclick="cmdResetFilters()" style="padding:7px 14px;border:1px solid var(--brd);border-radius:8px;background:var(--card);color:var(--muted);font-size:12px;cursor:pointer">✕ Reset filters</button>` : ''}
   </div>`;
 
-  return pagehead('Command Centre', cmdSubtitle) + _cmdDesignSwitch('new') + filterBar + `
-    <style>
-      ._cmd-card{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:16px 18px;transition:box-shadow .15s,border-color .15s}
-      ._cmd-card[onclick]:hover{box-shadow:0 4px 20px rgba(0,0,0,.11);border-color:var(--acc)}
-      ._cmd-strip-item{background:var(--card);border:1px solid var(--brd);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px}
-      @keyframes _cmdPulse{0%,100%{opacity:1}50%{opacity:.45}}
-    </style>
+  if (st._loading || !d) return pagehead('Circulation Command Centre', 'State-wise performance, risk and opportunity')
+    + _cmdDesignSwitch('new') + filters + _cmdSkel() + _cmdSkel();
+  if (d._err || d.detail) return pagehead('Circulation Command Centre', 'State-wise performance, risk and opportunity')
+    + _cmdDesignSwitch('new') + filters
+    + `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:18px;color:#b91c1c">Could not load state performance.</div>`;
 
-    <!-- Top KPI summary strip -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px;margin-bottom:14px">
-      ${strip.map(s => `
-        <div class="_cmd-strip-item" style="border-left:4px solid ${s.color}${s.goto ? ';cursor:pointer' : ''}"
-          ${s.goto ? `onclick="${s.goto}" role="button" tabindex="0" title="Open ${s.lbl}"` : ''}>
-          <div style="display:flex;align-items:center;gap:6px">
-            <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.lbl}</span>
-          </div>
-          <div style="font-size:24px;font-weight:800;color:${s.color};line-height:1.1;font-variant-numeric:tabular-nums;margin-top:2px">${s.val}</div>
-          ${s.sub ? `<div style="font-size:11px;color:var(--muted);margin-top:1px">${s.sub}</div>` : '<div style="height:14px"></div>'}
-        </div>
-      `).join('')}
+  const shown = (d.states || []).filter(s => !st.state || s.key === st.state);
+
+  const cards = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:12px;margin-bottom:18px">
+    ${shown.map(_ccStateCard).join('')}
+  </div>`;
+
+  const alerts = (d.alerts || []).filter(a => !st.state || a.state === st.state);
+  const opps   = (d.opportunities || []).filter(o => !st.state || o.state === st.state);
+
+  const twoCol = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+      <div style="font-size:15px;font-weight:800;color:#b91c1c;margin-bottom:2px">Key Alerts &amp; Critical Risks</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:11px">Auto-derived from the ${esc(String(d.compare_label || '').toLowerCase())} comparison · click to drill down</div>
+      ${alerts.length ? alerts.map(_ccAlertCard).join('')
+        : `<div style="font-size:12.5px;color:#15803d;background:#f0fdf4;border-radius:8px;padding:14px">No alerts triggered for this selection.</div>`}
     </div>
-
-    <!-- main card grid -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
-      ${_cmdModuleCard({
-        icon:'💰', title:'Agency Outstanding', period: ouAsOn ? 'Month-end balance as on ' + ouAsOn : 'Balance as on today',
-        onClick:"go('outstanding')", accent:'var(--red)',
-        kpis: ouKpis, footer: ouFooter,
-        loading: !ou && !c._ouError, error: ou?._err,
-        badge: ou && !ou._err ? _cmdFmtC(ou.total_outstanding) + ' outstanding' : null,
-        badgeColor: 'var(--red)',
-      })}
-      ${_cmdModuleCard({
-        icon:'₹', title:'Collections', period: cmdPeriodLabel + ' (' + cmdPeriod.from + ' to ' + cmdPeriod.to + ') · ' + (co && !co._err ? (co.total_txn||0).toLocaleString('en-IN') : '…') + ' transactions',
-        onClick:"go('collections')", accent:'var(--grn)',
-        kpis: coKpis, footer: coFooter,
-        loading: !co && !c._coError, error: co?._err,
-        badge: co && !co._err ? _cmdFmtC(co.total_collection) + ' collected' : null,
-        badgeColor: 'var(--grn)',
-      })}
-      ${_cmdModuleCard({
-        icon:'📦', title:'Supply', period: supPending ? cmdPeriodLabel + ' · not synced yet (supply loads overnight)'
-          : (sup && (sup.agent_only || !hasCashCentres) ? 'Agent only · ' : 'Agent + Cash · ') + (sup && !sup._err && !sup.no_data ? sup.data_upto : '…') + cashNote,
-        onClick:"go('supply_dash')", accent:'var(--blue)',
-        kpis: supKpis, footer: supFooter,
-        loading: !sup && c._supLoading, error: sup?._err,
-        badge: supBadge, badgeColor: 'var(--blue)',
-      })}
-      ${_cmdModuleCard({
-        icon:'🚕', title:'Taxi Deliveries', period:"Today's supply alerts",
-        onClick:"go('transport')", accent: siBadgeColor || 'var(--gold)',
-        kpis: siKpis, footer: siFooter,
-        loading: !si && !c._siError, error: si?._err,
-        badge: siBadge, badgeColor: siBadgeColor,
-      })}
-      ${_cmdModuleCard({
-        icon:'📍', title:'Field Intelligence', period: 'DCR activity · ' + cmdPeriodLabel.toLowerCase() + naNote,
-        onClick:"go('dcr_analytics')", accent: faBadgeColor || 'var(--acc)',
-        kpis: faKpis, footer: faFooter,
-        loading: !fa, error: fa?._err,
-        badge: faBadge, badgeColor: faBadgeColor,
-      })}
-      ${_cmdModuleCard({
-        icon:'📋', title:'Survey Intelligence', period: 'Reader survey outcomes · ' + cmdPeriodLabel.toLowerCase() + naNote,
-        onClick:"go('survey_dash')", accent:'var(--acc)',
-        kpis: svKpis, footer: svFooter,
-        loading: !sv && !c._svError, error: sv?._err,
-        badge: sv && !sv._err ? fmtN(sv.total||0) + ' surveyed' : null,
-        badgeColor: 'var(--acc)',
-      })}
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+      <div style="font-size:15px;font-weight:800;color:#15803d;margin-bottom:2px">Key Opportunities</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:11px">Growth and recovery with estimated impact · click to drill down</div>
+      ${opps.length ? opps.map(_ccOppCard).join('')
+        : `<div style="font-size:12.5px;color:#64748b;background:#f8fafc;border-radius:8px;padding:14px">No opportunities flagged for this selection.</div>`}
     </div>
+  </div>
+  <style>@media(max-width:900px){.cc-two{grid-template-columns:1fr!important}}</style>`;
 
-    ${_cmdAnalyticsSection(c)}`;
-    /* Pending Oracle Sync cards (Hawker Operations, Vehicle Tracking) hidden
-       until those syncs go live — restore by re-adding the pending.map block */
+  const ms = (d.market_share || []).filter(m => !st.state || m.state === st.state);
+  const topGain = ms.slice().sort((a, b) => (b.change_pp ?? -99) - (a.change_pp ?? -99))[0];
+  const topLose = ms.slice().sort((a, b) => (a.change_pp ?? 99) - (b.change_pp ?? 99))[0];
+  const market = `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+    <div style="font-size:15px;font-weight:800;color:#1e3a8a;margin-bottom:2px">Market Share Intelligence</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:12px">Share of total circulation · movement vs ${esc(String(d.compare_label || '').toLowerCase())}</div>
+    ${ms.length > 1 && topGain && topLose && topGain.state !== topLose.state ? `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+      <div style="flex:1;min-width:180px;background:#f0fdf4;border-radius:8px;padding:9px 12px">
+        <div style="font-size:10px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:.04em">Top gaining</div>
+        <div style="font-size:14px;font-weight:800;color:#0f172a">${esc(topGain.state_name)} <span style="color:#15803d">${topGain.change_pp >= 0 ? '+' : ''}${topGain.change_pp} pp</span></div>
+      </div>
+      <div style="flex:1;min-width:180px;background:#fef2f2;border-radius:8px;padding:9px 12px">
+        <div style="font-size:10px;font-weight:700;color:#b91c1c;text-transform:uppercase;letter-spacing:.04em">Losing ground</div>
+        <div style="font-size:14px;font-weight:800;color:#0f172a">${esc(topLose.state_name)} <span style="color:#b91c1c">${topLose.change_pp >= 0 ? '+' : ''}${topLose.change_pp} pp</span></div>
+      </div>
+    </div>` : ''}
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:420px">
+      <thead><tr style="color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em">
+        <th style="text-align:left;padding:6px 8px">Rank</th><th style="text-align:left;padding:6px 8px">State</th>
+        <th style="text-align:right;padding:6px 8px">Copies</th><th style="text-align:right;padding:6px 8px">Share</th>
+        <th style="text-align:right;padding:6px 8px">Movement</th></tr></thead>
+      <tbody>${ms.map(m => `<tr onclick="ccDrill('supply_dash','${String(m.state).replace(/'/g, "\\'")}')" style="cursor:pointer;border-top:1px solid #eef2f7">
+        <td style="padding:7px 8px;color:#94a3b8;font-weight:700">#${m.rank}</td>
+        <td style="padding:7px 8px;font-weight:700;color:#1e3a8a">${esc(m.state_name)}</td>
+        <td style="padding:7px 8px;text-align:right;font-variant-numeric:tabular-nums">${_ccN(m.copies)}</td>
+        <td style="padding:7px 8px;text-align:right;font-weight:800">${m.share_pct}%</td>
+        <td style="padding:7px 8px;text-align:right">${_ccTrend(m.change_pp)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+  </div>`;
+
+  const sub = `${shown.length} state${shown.length === 1 ? '' : 's'} · ${d.as_on} vs ${d.previous} (${d.compare_label})`;
+  return pagehead('Circulation Command Centre', sub) + _cmdDesignSwitch('new') + filters + cards + twoCol + market;
 }
+
 
 /* Which Command Centre a user sees. Persisted per browser, defaults to the current
    design, and only offered to admins — so the redesign can be previewed against live
