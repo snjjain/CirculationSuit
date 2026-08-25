@@ -117,7 +117,7 @@ a{color:var(--gold-d)}
    typographic scale; hierarchy comes from weight and colour, not from a smaller
    font. Left padding (17px) equals a nav-item's 8px margin + 9px padding, so headings
    and their screens share one left edge. */
-.sb-lbl{font-size:13.5px;font-weight:800;letter-spacing:.01em;text-transform:uppercase;color:var(--muted);padding:15px 10px 5px 17px}
+.sb-lbl{font-size:13.5px;font-weight:700;letter-spacing:.01em;color:var(--ink-2);padding:15px 10px 5px 17px}
 /* Collapsible section header. The toggle affordance only shows on hover/focus.
    Gaps are tight because the longest heading plus its collapsed count badge and
    chevron only just clear the 262px sidebar. */
@@ -133,9 +133,14 @@ a{color:var(--gold-d)}
 .nav-item{display:flex;align-items:center;gap:10px;width:calc(100% - 16px);margin:0 8px 2px;text-align:left;padding:8px 9px;border-radius:var(--r-sm);color:var(--ink);font-weight:500;font-size:13.5px}
 .nav-item:hover{background:var(--surf2)}
 .nav-item.on{background:var(--gold-l);color:var(--gold-d);font-weight:700}
-.nav-item .nico{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex:none;background:var(--navy-l);color:var(--navy);font-size:14px}
-:root[data-theme="dark"] .nav-item .nico{color:var(--ink)}
-.nav-item.on .nico{background:var(--gold);color:#fff}
+/* Sidebar glyphs are plain, not coloured tiles: no chip background, and grayscale()
+   desaturates the emoji themselves (which carry their own colour and cannot be
+   restyled otherwise). The active row is already marked by .nav-item.on's background,
+   so the icon does not need to signal state too. */
+.nav-item .nico{width:22px;height:22px;border-radius:0;display:flex;align-items:center;justify-content:center;flex:none;background:none;color:var(--muted);font-size:15px;filter:grayscale(1);opacity:.62}
+:root[data-theme="dark"] .nav-item .nico{color:var(--muted)}
+.nav-item:hover .nico{opacity:.85}
+.nav-item.on .nico{background:none;color:var(--gold-d);opacity:1}
 .nav-item .cnt{margin-left:auto;font-size:10.5px;background:var(--red-l);color:var(--red);border-radius:9px;padding:1px 7px;font-weight:800}
 .nav-item .chev{margin-left:auto;color:var(--muted);font-size:11px;transition:transform .15s}
 .nav-item .chev.open{transform:rotate(90deg)}

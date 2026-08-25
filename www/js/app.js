@@ -3567,9 +3567,11 @@ function _cmdModuleCard({ icon, title, period, onClick, kpis, footer, error, loa
   else if (error)   body = `<p style="color:var(--red);font-size:13px;margin:8px 0">Failed to load. <a href="#" onclick="S.live.cmd=null;render();return false" style="color:var(--acc)">Retry</a></p>`;
   else if (kpis)    body = _cmdKpiGrid(kpis) + (footer ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">${footer}</div>` : '');
   else              body = `<p style="color:var(--muted);font-size:13px;margin:8px 0 4px">${period||''}</p>`;
+  // No leading emoji — the coloured accent bar already identifies the card, and the
+  // section reads cleaner without it. `icon` stays in the signature so call sites
+  // are untouched.
   return `<div class="_cmd-card" ${clickAttr}>
     <div style="display:flex;align-items:flex-start;gap:11px;margin-bottom:10px">
-      <span style="font-size:22px;line-height:1;flex-shrink:0;margin-top:2px">${icon}</span>
       <div style="min-width:0;flex:1">
         <div style="font-weight:700;font-size:15px;color:var(--ink)">${title}</div>
         <div style="font-size:12px;color:var(--muted);margin-top:1px">${period||''}</div>
@@ -3657,7 +3659,6 @@ function _cmdChartCard(o) {
   else                body = tab === 'data' && o.data ? o.data : o.chart;
   return `<div class="_cmd-card" style="${o.span ? 'grid-column:1/-1' : ''}">
     <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px;flex-wrap:wrap">
-      <span style="font-size:17px;line-height:1">${o.icon}</span>
       <div style="min-width:0;flex:1">
         <div style="font-weight:700;font-size:13.5px;color:var(--ink)">${o.title}</div>
         ${o.sub ? `<div style="font-size:11px;color:var(--muted)">${o.sub}</div>` : ''}
@@ -4039,7 +4040,6 @@ VIEWS.command = () => {
         <div class="_cmd-strip-item" style="border-left:4px solid ${s.color}${s.goto ? ';cursor:pointer' : ''}"
           ${s.goto ? `onclick="${s.goto}" role="button" tabindex="0" title="Open ${s.lbl}"` : ''}>
           <div style="display:flex;align-items:center;gap:6px">
-            <span style="font-size:15px;line-height:1">${s.icon}</span>
             <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.lbl}</span>
           </div>
           <div style="font-size:24px;font-weight:800;color:${s.color};line-height:1.1;font-variant-numeric:tabular-nums;margin-top:2px">${s.val}</div>
@@ -4164,8 +4164,10 @@ function vzKpi(o) {
     pill = `<span class="vz-pill ${good ? 'up' : 'down'}">${up ? '▲' : '▼'} ${VZ.fmt(Math.abs(o.delta))}${o.pct != null ? ` · ${Math.abs(o.pct)}%` : ''}</span>`;
   } else if (o.delta === 0) pill = `<span class="vz-pill flat">—</span>`;
   const clickAttrs = o.onclick ? ` onclick="${esc(o.onclick)}" title="Click to drill down"` : '';
+  // KPI cards are label + number only — the icon is accepted and ignored so the ~90
+  // existing call sites keep working unchanged.
   return `<div class="vz-kpi" style="--kpi-c:${c}${o.onclick ? ';cursor:pointer' : ''}"${clickAttrs} ${o.tip ? `data-tip="${esc(o.tip)}"` : ''}>
-    <span class="kl">${o.icon || ''} ${esc(o.label)}</span>
+    <span class="kl">${esc(o.label)}</span>
     <div class="kv num">${o.value}</div>
     <div class="kd">${pill}${o.sub ? `<small style="color:var(--muted)">${o.sub}</small>` : ''}</div>
     ${o.spark && o.spark.length > 1 ? vzSpark(o.spark, c) : ''}
@@ -4345,9 +4347,9 @@ window.supdCSV = key => {
 };
 
 const _errCard = (msg) => `<div class="card pad" style="color:var(--muted)">${esc(msg || 'No data.')}</div>`;
-function _supdKpiCard(icon, label, value, sub, color) {
+function _supdKpiCard(icon, label, value, sub, color) {   // icon accepted, not rendered
   return `<div class="_cmd-strip-item" style="${color ? `border-left:4px solid ${color}` : ''}">
-    <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">${icon} ${label}</span>
+    <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">${label}</span>
     <div style="font-size:21px;font-weight:800">${value}</div>
     ${sub ? `<small style="color:var(--muted);font-size:10.5px">${sub}</small>` : ''}</div>`;
 }
@@ -11405,7 +11407,6 @@ VIEWS.short_payment = function() {
 
   // ── Management Summary KPI strip ──
   const kpiCard = (icon, label, val, sub, clr) => `<div class="card" style="padding:12px 14px;flex:1;min-width:130px">
-    <div style="font-size:16px">${icon}</div>
     <div style="font-size:20px;font-weight:800;color:${clr||'var(--text)'};line-height:1.1">${val}</div>
     <div style="font-size:10px;font-weight:700;color:var(--ink-2);text-transform:uppercase;letter-spacing:.04em">${label}</div>
     ${sub?`<div style="font-size:10px;color:var(--muted)">${sub}</div>`:''}
