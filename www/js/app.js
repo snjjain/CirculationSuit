@@ -381,9 +381,10 @@ function kpi(label, value, delta, cls, icoBg, ico, drillMetric) {
     <div class="lbl">${label}</div><div class="v num">${value}</div>${delta ? `<div class="d ${cls || "fl"}">${delta}</div>` : ""}</div>`;
 }
 function pagehead(title, sub, actions) {
-  const u = S.user;
-  const crumb = `${u.roleLabel}${u.scopeLabel ? " · " + u.scopeLabel : ""} · ${TODAY}`;
-  return `<div class="pagehead"><div><div class="crumbs">${crumb}</div>
+  // The old "Admin — Board View · PAN India · <date>" crumb is gone: the role already
+  // sits in the header account chip and the date now sits in the top bar, so it was
+  // repeating both on every screen.
+  return `<div class="pagehead"><div>
     <h2>${title}</h2>${sub ? `<div class="sub">${sub}</div>` : ""}</div>${actions || ""}</div>`;
 }
 function table(cols, rows) {
@@ -4184,6 +4185,114 @@ function _ccBar(pctVal, color) {
     <div style="height:100%;width:${w}%;background:${color};border-radius:4px"></div></div>`;
 }
 
+/* ── Right-side flyout for an alert / opportunity ──
+   Opening a card used to jump to another dashboard, which lost the context of WHY it
+   was flagged. The flyout keeps the user on the Command Centre and pulls the actual
+   rows behind the headline, with a link out only if they want the full screen. */
+window.ccFly = (kind, idx) => {
+  const st = _ccState();
+  const src = kind === 'alert' ? (st.data && st.data.alerts) : (st.data && st.data.opportunities);
+  const item = (src || [])[idx];
+  if (!item) return;
+  st.fly = { kind, item, rows: null, loading: true };
+  render();
+  const p = new URLSearchParams({ kpi: item.kpi || item.type || '', state: item.state || '' });
+  if (st.asOn) p.set('as_on', st.asOn);
+  if (st.compare) p.set('compare', st.compare);
+  fetch(`${location.origin}/api/command/alert-detail?${p}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { if (st.fly) { st.fly.rows = d.rows || []; st.fly.columns = d.columns || []; st.fly.loading = false; } if (S.screen === 'command') render(); })
+    .catch(() => { if (st.fly) { st.fly.rows = []; st.fly.loading = false; } if (S.screen === 'command') render(); });
+};
+window.ccFlyClose = () => { const st = _ccState(); st.fly = null; render(); };
+
+function _ccFlyout() {
+  const st = _ccState();
+  const f = st.fly;
+  if (!f) return '';
+  const it = f.item;
+  const isAlert = f.kind === 'alert';
+  const accent = isAlert ? (_CC_PRI[it.priority] || _CC_PRI.medium).bar : '#16a34a';
+  const q = v => String(v).replace(/'/g, "\\'");
+  const num = v => (Number(v) || 0).toLocaleString('en-IN');
+  const money = v => _ccINR(v);
+
+  const body = f.loading
+    ? `<div style="padding:26px;text-align:center;color:#64748b;font-size:13px">Loading detail…</div>`
+    : !(f.rows || []).length
+      ? `<div style="padding:20px;color:#64748b;font-size:13px">No supporting rows found for this item.</div>`
+      : `<table style="width:100%;border-collapse:collapse;font-size:12.5px">
+          <thead><tr style="color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.05em">
+            ${(f.columns || []).map((c, i) => `<th style="text-align:${i === 0 ? 'left' : 'right'};padding:6px 8px;position:sticky;top:0;background:#f8fafc">${esc(c)}</th>`).join('')}
+          </tr></thead>
+          <tbody>${f.rows.map(r => {
+            const cells = r.amount != null
+              ? [`<b>${esc(r.label)}</b>`, esc(r.unit_name || r.unit_code || ''), esc(r.exec || '—'), `<b style="color:#b91c1c">${money(r.amount)}</b>`]
+              : [`<b>${esc(r.label)}</b>`, num(r.a), num(r.b),
+                 `<b style="color:${r.delta < 0 ? '#b91c1c' : '#15803d'}">${r.delta > 0 ? '+' : ''}${num(r.delta)}</b>`];
+            return `<tr style="border-top:1px solid #eef2f7">${cells.map((c, i) =>
+              `<td style="padding:7px 8px;text-align:${i === 0 ? 'left' : 'right'};${i === 0 ? 'max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' : 'font-variant-numeric:tabular-nums'}">${c}</td>`).join('')}</tr>`;
+          }).join('')}</tbody></table>`;
+
+  return `<div onclick="ccFlyClose()" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:300"></div>
+  <aside role="dialog" aria-modal="true" style="position:fixed;top:0;right:0;bottom:0;width:min(560px,94vw);background:#fff;z-index:301;box-shadow:-8px 0 30px rgba(15,23,42,.18);display:flex;flex-direction:column;animation:ccSlide .18s ease-out">
+    <div style="border-top:4px solid ${accent};padding:14px 18px 12px;border-bottom:1px solid #e2e8f0">
+      <div style="display:flex;align-items:flex-start;gap:12px">
+        <div style="min-width:0;flex:1">
+          <div style="font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:${accent}">
+            ${isAlert ? esc((_CC_PRI[it.priority] || _CC_PRI.medium).label) + ' · ' + esc(it.kpi || '') : esc(it.type || 'Opportunity')}
+          </div>
+          <div style="font-size:16px;font-weight:800;color:#0f172a;margin-top:3px">${esc(it.title)}</div>
+        </div>
+        <button onclick="ccFlyClose()" aria-label="Close"
+          style="flex:none;width:30px;height:30px;border-radius:8px;border:1px solid #e2e8f0;background:#fff;color:#64748b;font-size:17px;line-height:1;cursor:pointer">×</button>
+      </div>
+      <div style="font-size:12px;color:#475569;margin-top:8px">${esc(it.impact)}</div>
+      <div style="font-size:12px;color:#0f172a;background:#f8fafc;border-radius:7px;padding:8px 10px;margin-top:9px"><b>Recommended action:</b> ${esc(it.action)}</div>
+    </div>
+    <div style="flex:1;overflow:auto;padding:12px 14px">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:7px">Behind this number</div>
+      ${body}
+    </div>
+    <div style="border-top:1px solid #e2e8f0;padding:11px 16px;display:flex;gap:9px;justify-content:flex-end">
+      <button onclick="ccFlyClose()" style="padding:8px 15px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font-size:12.5px;cursor:pointer">Close</button>
+      <button onclick="ccFlyClose();ccDrill('${it.drill.screen}','${q(it.drill.state)}')"
+        style="padding:8px 15px;border:none;border-radius:8px;background:#1e3a8a;color:#fff;font-size:12.5px;font-weight:600;cursor:pointer">Open full dashboard →</button>
+    </div>
+  </aside>
+  <style>@keyframes ccSlide{from{transform:translateX(100%)}to{transform:translateX(0)}}
+  @media(prefers-reduced-motion:reduce){aside[role=dialog]{animation:none}}</style>`;
+}
+
+/* ── Grouped bar chart: base FY vs current FY, by quarter ──
+   Inline SVG so it needs no chart library and prints/exports cleanly. */
+function _ccQuarterChart(rows, baseLabel, curLabel, fmt, color) {
+  const max = Math.max(1, ...rows.flatMap(r => [Number(r.base) || 0, Number(r.current) || 0]));
+  const W = 100, gap = 3, bw = (W / rows.length - gap) / 2;
+  const bars = rows.map((r, i) => {
+    const x = i * (W / rows.length) + gap / 2;
+    const hb = Math.max(0, (Number(r.base) || 0) / max * 100);
+    const hc = Math.max(0, (Number(r.current) || 0) / max * 100);
+    return `<g>
+      <rect x="${x}" y="${100 - hb}" width="${bw}" height="${hb}" fill="#cbd5e1" rx="0.6"></rect>
+      <rect x="${x + bw + 0.4}" y="${100 - hc}" width="${bw}" height="${hc}" fill="${color}" rx="0.6"></rect>
+    </g>`;
+  }).join('');
+  return `<div>
+    <div style="display:flex;gap:14px;font-size:11px;color:#64748b;margin-bottom:7px">
+      <span><i style="display:inline-block;width:9px;height:9px;background:#cbd5e1;border-radius:2px;margin-right:5px"></i>${esc(baseLabel)}</span>
+      <span><i style="display:inline-block;width:9px;height:9px;background:${color};border-radius:2px;margin-right:5px"></i>${esc(curLabel)}</span>
+    </div>
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:150px;display:block">${bars}</svg>
+    <div style="display:grid;grid-template-columns:repeat(${rows.length},1fr);margin-top:5px">
+      ${rows.map(r => `<div style="text-align:center">
+        <div style="font-size:11px;font-weight:700;color:#0f172a">${r.q}</div>
+        <div style="font-size:10px;color:#94a3b8">${fmt(r.current)}</div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
 /* ── headline card for the all-India strip ──
    The coloured top rule is what separates one card from the next; no icons, per the
    "simple and clear" direction. Every card states the window it covers, because they
@@ -4263,8 +4372,7 @@ function _ccStateCard(s) {
 
 function _ccAlertCard(a, idx) {
   const p = _CC_PRI[a.priority] || _CC_PRI.medium;
-  const q = v => String(v).replace(/'/g, "\\'");
-  return `<div onclick="ccDrill('${a.drill.screen}','${q(a.drill.state)}')"
+  return `<div onclick="ccFly('alert',${idx})"
       style="cursor:pointer;background:${p.bg};border-left:4px solid ${p.bar};border-radius:8px;padding:10px 13px;margin-bottom:8px">
     <div style="display:flex;align-items:baseline;gap:8px">
       <span style="flex:none;width:19px;height:19px;border-radius:50%;background:${p.bar}22;color:${p.fg};font-size:10.5px;font-weight:800;display:inline-flex;align-items:center;justify-content:center">${idx + 1}</span>
@@ -4279,8 +4387,7 @@ function _ccAlertCard(a, idx) {
 }
 
 function _ccOppCard(o, idx) {
-  const q = v => String(v).replace(/'/g, "\\'");
-  return `<div onclick="ccDrill('${o.drill.screen}','${q(o.drill.state)}')"
+  return `<div onclick="ccFly('opp',${idx})"
       style="cursor:pointer;background:#f0fdf4;border-left:4px solid #16a34a;border-radius:8px;padding:10px 13px;margin-bottom:8px">
     <div style="display:flex;align-items:baseline;gap:8px">
       <span style="flex:none;width:19px;height:19px;border-radius:50%;background:#16a34a22;color:#15803d;font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center">✓</span>
@@ -4298,42 +4405,29 @@ function _cmdViewNew() {
   const st = _ccState();
   _ccLoad();
   const d = st.data;
-  const cmdUnits = S.live.cmdUnits || [];
-  _cmdLoadUnits();
 
-  const sel = (label, key, value, opts, placeholder) => `<div>
+  const sel = (label, key, value, opts) => `<div>
     <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">${label}</div>
     <select onchange="ccSet('${key}',this.value)" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#0f172a;font-size:12.5px;min-width:150px">
-      <option value="">${placeholder}</option>
       ${opts.map(([v, l]) => `<option value="${esc(v)}" ${value === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}
     </select></div>`;
 
-  const stateOpts = (d && d.states || []).map(s => [s.key, s.name]);
-  const unitOpts = cmdUnits
-    .filter(u => !st.state || String(u.state_name || '').toUpperCase() === st.state
-      || (st.state === 'NATIONAL' && !['RAJASTHAN','MADHYA PRADESH','CHHATTISGARH'].includes(String(u.state_name || '').toUpperCase())))
-    .map(u => [u.unit_code, u.unit_name || u.unit_code]);
-
-  const filters = `<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;margin-bottom:16px">
-    <div>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">As on</div>
-      <input type="date" value="${esc(st.asOn || (d && d.as_on) || '')}" onchange="ccSet('asOn',this.value)"
-        style="padding:6px 9px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#0f172a;font-size:12.5px">
+  /* The old filter strip is gone. Only the date range remains, floated top-right as a
+     single control — state and unit are reached by clicking a state card instead, which
+     is the drill path the dashboard is built around. Snapshot date sits beside it so the
+     figures are always dated without a separate crumb line. */
+  const bar = `<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+    <div style="font-size:12px;color:#64748b">
+      ${d && !d._err ? `Snapshot: <b style="color:#0f172a">${esc(d.as_on)}</b> · compared with <b style="color:#0f172a">${esc(d.previous)}</b>` : ''}
+      ${st.state ? ` · <b style="color:#1e3a8a">${esc(st.state)}</b> <a onclick="ccSet('state','')" style="cursor:pointer;color:#64748b;text-decoration:underline">clear</a>` : ''}
     </div>
-    ${sel('Compare with', 'compare', st.compare, [['prev_day','Previous Day'],['prev_week','Previous Week'],['prev_month','Previous Month']], 'Previous Day')}
-    ${sel('State', 'state', st.state, stateOpts, 'All States')}
-    ${sel('Unit', 'unit', st.unit, unitOpts, 'All Units')}
-    <div style="margin-left:auto;display:flex;align-items:flex-end;gap:10px">
-      ${d && !d._err ? `<span style="font-size:11px;color:#64748b;padding-bottom:7px">Showing <b style="color:#0f172a">${esc(d.as_on)}</b> vs <b style="color:#0f172a">${esc(d.previous)}</b></span>` : ''}
-      ${sel('Date range', 'range', st.range, [['today','Today'],['mtd','This Month'],['last_month','Last Month'],['fytd','Current FY (YTD)'],['last_90','Last 90 Days']], 'This Month')}
-      <button onclick="ccReset()" style="padding:7px 13px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#64748b;font-size:12px;cursor:pointer">Reset</button>
+    <div style="display:flex;align-items:flex-end;gap:9px">
+      ${sel('Date range', 'range', st.range, [['today','Today'],['mtd','This Month'],['last_month','Last Month'],['fytd','Current FY (YTD)'],['last_90','Last 90 Days']])}
     </div>
   </div>`;
 
-  if (st._loading || !d) return pagehead('Circulation Command Centre', 'State-wise performance, risk and opportunity')
-    + _cmdDesignSwitch('new') + filters + _cmdSkel() + _cmdSkel();
-  if (d._err || d.detail) return pagehead('Circulation Command Centre', 'State-wise performance, risk and opportunity')
-    + _cmdDesignSwitch('new') + filters
+  if (st._loading || !d) return _cmdDesignSwitch('new') + bar + _cmdSkel() + _cmdSkel();
+  if (d._err || d.detail) return _cmdDesignSwitch('new') + bar
     + `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:18px;color:#b91c1c">Could not load state performance.</div>`;
 
   const shown = (d.states || []).filter(s => !st.state || s.key === st.state);
@@ -4342,7 +4436,9 @@ function _cmdViewNew() {
   const t = d.totals || {};
   const q = v => String(v).replace(/'/g, "\\'");
   const anyState = st.state || (shown[0] && shown[0].key) || 'RAJASTHAN';
-  const topStrip = !t.supply ? '' : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(196px,1fr));gap:11px;margin-bottom:16px">
+  // Fixed 4 columns so the eight cards read as a balanced 4-over-4 block rather than
+  // auto-fitting into a ragged 5/3 split at common widths.
+  const topStrip = !t.supply ? '' : `<div class="cc-strip" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:18px">
     ${_ccTopCard({ label: st.state ? esc(shown[0] ? shown[0].name : '') + ' Supply' : 'Total Supply', color: '#3b82f6',
       value: _ccN(t.supply.value) + ' <span style="font-size:12px;font-weight:600;color:#64748b">cp</span>',
       trend: _ccTrend(t.supply.growth_pct), sub: `Agent + Cash · ${esc(t.supply.window)}`,
@@ -4373,6 +4469,23 @@ function _cmdViewNew() {
       value: (t.coverage.pct == null ? '—' : t.coverage.pct + '%'),
       sub: `${_ccN(t.coverage.value)} of ${_ccN(t.coverage.of)} agencies · ${esc(t.coverage.window)}`,
       barPct: t.coverage.pct, onClick: `ccDrill('dcr_analytics','${q(anyState)}')` })}
+  </div>
+  <style>@media(max-width:1180px){.cc-strip{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+  @media(max-width:560px){.cc-strip{grid-template-columns:1fr!important}}</style>`;
+
+  // ── Quarterly base-vs-current charts ──
+  const Q = d.quarterly;
+  const charts = !Q ? '' : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+      <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Collection</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(Q.fy_base)} (Base) vs ${esc(Q.fy_current)} · receipts banked</div>
+      ${_ccQuarterChart(Q.collection, Q.fy_base, Q.fy_current, _ccINR, '#22c55e')}
+    </div>
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+      <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Supply</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(Q.fy_base)} (Base) vs ${esc(Q.fy_current)} · average copies per day</div>
+      ${_ccQuarterChart(Q.supply, Q.fy_base, Q.fy_current, v => _ccN(v) + ' cp', '#3b82f6')}
+    </div>
   </div>`;
 
   const cards = `<div style="font-size:11px;font-weight:800;letter-spacing:.06em;color:#64748b;text-transform:uppercase;margin:0 0 8px 2px">State-wise Performance</div>
@@ -4430,8 +4543,8 @@ function _cmdViewNew() {
     </table></div>
   </div>`;
 
-  const sub = `${shown.length} state${shown.length === 1 ? '' : 's'} · ${d.as_on} vs ${d.previous} (${d.compare_label})`;
-  return pagehead('Circulation Command Centre', sub) + _cmdDesignSwitch('new') + filters + topStrip + cards + twoCol + market;
+  // No pagehead — the sidebar already names the screen, and the snapshot bar dates it.
+  return _cmdDesignSwitch('new') + bar + topStrip + cards + charts + twoCol + market + _ccFlyout();
 }
 
 
@@ -14827,6 +14940,7 @@ function render() {
       <button class="menu-btn" onclick="toggleSide()" aria-label="Menu">☰</button>
       <div class="brand"><img src="assets/patrika-logo.png" alt="Patrika"><div class="bt"><b>Patrika Vitran</b><small>Circulation Suite</small></div></div>
       <div class="top-sp"></div>
+      <span class="top-date" title="Today">${TODAY}</span>
       <button class="iconbtn" onclick="toggleTheme()" title="Toggle theme">◐</button>
       <button class="iconbtn" onclick="toast('3 notifications — vehicle delay, SLA risk, settlement ready')" title="Notifications">🔔<span class="dot"></span></button>
       <button class="me" onclick="userMenu()" title="Account"><span class="av">${S.user.avatar}</span>

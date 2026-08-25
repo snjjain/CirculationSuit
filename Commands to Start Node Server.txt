@@ -1,0 +1,16 @@
+Run these one at a time in PowerShell:
+
+Step 1 — Find the PID on port 8001:
+netstat -ano | findstr :8001
+
+Step 2 — Kill it (replace 12345 with the PID from step 1):
+taskkill /PID 12345 /F
+
+Step 3 — Start the API server:
+node "E:\PatrikaAI\Patrika Apps\patrika-app\api\server.js"
+
+Step 4 — In a second PowerShell window, start the frontend server:
+node "E:\PatrikaAI\Patrika Apps\patrika-app\api\www_server.js"
+
+How to find PID (Process Id)
+netstat -ano | findstr ":8001"

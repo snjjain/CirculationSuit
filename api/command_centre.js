@@ -89,6 +89,54 @@ module.exports = function installCommandCentre({ app, q }) {
     }
   }
 
+  /* Quarterly Collection and Supply, current FY vs the one before — the "base vs
+     achieved" comparison management reads first. Quarters are Indian FY quarters
+     (Q1 Apr-Jun ... Q4 Jan-Mar), so Q1 of FY 2026-27 is Apr-Jun 2026. Supply is a
+     daily count, so a quarter's figure is its DAILY AVERAGE, not a sum — summing
+     copies over 90 days would produce a number nobody has a use for and would swing
+     purely on how many days happened to sync. */
+  async function quarterly(asOn, unitScope) {
+    const y = Number(asOn.slice(0, 4)), m = Number(asOn.slice(5, 7));
+    const fy = m >= 4 ? y : y - 1;                 // current FY start year
+    const span = fyy => ({ from: `${fyy}-04-01`, to: `${fyy + 1}-03-31` });
+    const cur = span(fy), base = span(fy - 1);
+    const uC = unitScope ? ' AND unit_code = ?' : '';
+    const uP = unitScope ? [unitScope] : [];
+
+    const [coll, sup] = await Promise.all([
+      q(`SELECT YEAR(coll_date) y, QUARTER(coll_date) q, -COALESCE(SUM(amount),0) amt
+         FROM agency_collection
+         WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uC}
+         GROUP BY y, q`, [base.from, cur.to, ...uP]),
+      q(`SELECT YEAR(supply_date) y, QUARTER(supply_date) q,
+                SUM(sup_copy) copies, COUNT(DISTINCT supply_date) days
+         FROM supply_data
+         WHERE supply_date BETWEEN ? AND ?${uC}
+         GROUP BY y, q`, [base.from, cur.to, ...uP]),
+    ]);
+    // Calendar quarter -> FY quarter. Calendar Q2 (Apr-Jun) is FY Q1, and calendar
+    // Q1 (Jan-Mar) belongs to the PREVIOUS financial year's Q4.
+    const toFy = (yy, cq) => (cq === 1 ? { fy: yy - 1, q: 4 } : { fy: yy, q: cq - 1 });
+    const mk = () => [1, 2, 3, 4].map(q => ({ q: 'Q' + q, base: 0, current: 0 }));
+    const collOut = mk(), supOut = mk();
+    coll.rows.forEach(r => {
+      const f = toFy(N(r.y), N(r.q));
+      const slot = collOut[f.q - 1]; if (!slot) return;
+      if (f.fy === fy) slot.current += N(r.amt); else if (f.fy === fy - 1) slot.base += N(r.amt);
+    });
+    sup.rows.forEach(r => {
+      const f = toFy(N(r.y), N(r.q));
+      const slot = supOut[f.q - 1]; if (!slot) return;
+      const avg = N(r.days) ? Math.round(N(r.copies) / N(r.days)) : 0;
+      if (f.fy === fy) slot.current += avg; else if (f.fy === fy - 1) slot.base += avg;
+    });
+    return {
+      fy_current: `FY ${fy}-${String(fy + 1).slice(2)}`,
+      fy_base: `FY ${fy - 1}-${String(fy).slice(2)}`,
+      collection: collOut, supply: supOut,
+    };
+  }
+
   // Collection receipts + field visits over an arbitrary window, all-India.
   async function rangeTotals(win, unitScope) {
     const uC = unitScope ? ' AND unit_code = ?' : '';
@@ -315,6 +363,7 @@ module.exports = function installCommandCentre({ app, q }) {
         stateHeads(),
         rangeTotals(win, unitScope),
       ]);
+      const qtr = await quarterly(asOn, unitScope);
 
       const states = STATES.map(s => {
         const k = s.key;
@@ -385,11 +434,90 @@ module.exports = function installCommandCentre({ app, q }) {
         range: win.key, range_label: win.label, range_from: win.from, range_to: win.to,
         unit_code: unitScope,
         totals,
+        quarterly: qtr,
         states,
         alerts: buildAlerts(states),
         opportunities: buildOpportunities(states),
         market_share: buildMarketShare(states),
       });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  /* ── Detail behind one alert / opportunity ──────────────────────────────────
+     Fetched only when a card is opened, so the dashboard's first paint stays fast.
+     Returns the actual rows responsible for the headline, which is what makes the
+     flyout worth opening instead of bouncing the user to another dashboard. */
+  app.get('/api/command/alert-detail', async (req, res) => {
+    try {
+      const kpi = String(req.query.kpi || '').toLowerCase();
+      const stateKey = String(req.query.state || '').toUpperCase();
+      const asOnQ = await resolveDates(req.query.as_on, req.query.compare);
+      const { asOn, prev } = asOnQ;
+      const osCode = { 'RAJASTHAN': 'RPPL', 'MADHYA PRADESH': 'MP', 'CHHATTISGARH': 'CG' }[stateKey] || 'NATIONAL';
+      const isNat = stateKey === 'NATIONAL';
+      const coreList = ['RAJASTHAN', 'MADHYA PRADESH', 'CHHATTISGARH'];
+
+      if (kpi === 'supply') {
+        // Which branches lost the copies — the first question after "supply is down".
+        const stCl = isNat ? `COALESCE(NULLIF(s.state_name,''),'OTHER') NOT IN (?,?,?)` : `s.state_name = ?`;
+        const stP  = isNat ? coreList : [stateKey];
+        const { rows } = await q(
+          `SELECT s.unit_code, MAX(s.unit_name) unit_name,
+                  SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
+                  SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
+           FROM supply_data s
+           JOIN (SELECT DISTINCT unit, agcd FROM agency_master
+                 WHERE ag_class_name='CREDIT SALE' AND COALESCE(supply_stop_flag,'N')='N'
+                   AND (suspend_date IS NULL OR suspend_date > CURDATE())) cm
+             ON cm.unit = s.unit_code AND cm.agcd = s.agcd
+           WHERE s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')
+             AND s.supply_date IN (?, ?) AND ${stCl}
+           GROUP BY s.unit_code ORDER BY (SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) -
+                                          SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END)) ASC LIMIT 12`,
+          [asOn, prev, asOn, prev, ...stP, asOn, prev]);
+        return res.json({ kpi, state: stateKey, as_on: asOn, previous: prev,
+          columns: ['Branch', 'Now', 'Previous', 'Change'],
+          rows: rows.map(r => ({ label: r.unit_name || r.unit_code, unit_code: r.unit_code,
+            a: N(r.cur), b: N(r.prv), delta: N(r.cur) - N(r.prv) })) });
+      }
+
+      if (kpi === 'outstanding' || kpi === 'collection') {
+        // Biggest dues in the state — the recovery worklist behind both alerts.
+        const { rows } = await q(
+          `SELECT ag_code, MAX(ag_name) ag_name, MAX(unit_code) unit_code, MAX(unit_name) unit_name,
+                  MAX(exec_name) exec_name, SUM(cl_amt) os, SUM(bill_amt) billed
+           FROM agency_outstanding
+           WHERE period_label='CURRENT' AND group_unit_name = ? AND cl_amt > 0
+           GROUP BY ag_code ORDER BY os DESC LIMIT 15`, [osCode]);
+        return res.json({ kpi, state: stateKey,
+          columns: ['Agency', 'Branch', 'Executive', 'Outstanding'],
+          rows: rows.map(r => ({ label: r.ag_name || r.ag_code, agcd: r.ag_code,
+            unit_code: r.unit_code, unit_name: r.unit_name, exec: r.exec_name, amount: N(r.os) })) });
+      }
+
+      if (kpi === 'dcr') {
+        // Branches with the most agencies still unvisited.
+        const abbr = { 'RAJASTHAN': ['RJ', 'RAJASTHAN'], 'MADHYA PRADESH': ['MP'], 'CHHATTISGARH': ['CG'] }[stateKey];
+        const [book, seen] = await Promise.all([
+          q(`SELECT unit, MAX(unit_name) unit_name, COUNT(DISTINCT agcd) agencies
+             FROM agency_master
+             WHERE CAST(dpcd AS UNSIGNED)=1 AND COALESCE(supply_stop_flag,'N')='N'
+               AND (suspend_date IS NULL OR suspend_date > CURDATE())
+               ${abbr ? `AND unit_state_nm IN (${abbr.map(() => '?').join(',')})` : `AND COALESCE(unit_state_nm,'') NOT IN ('RJ','RAJASTHAN','MP','CG')`}
+             GROUP BY unit`, abbr || []),
+          q(`SELECT unit_code, COUNT(DISTINCT visit_to_main_code) visited
+             FROM dcr_agency_visit WHERE mark_attn_date BETWEEN DATE_SUB(?, INTERVAL 30 DAY) AND ?
+             GROUP BY unit_code`, [asOn, asOn]),
+        ]);
+        const seenMap = {}; seen.rows.forEach(r => { seenMap[r.unit_code] = N(r.visited); });
+        const rows = book.rows.map(r => ({
+          label: r.unit_name || r.unit, unit_code: r.unit,
+          a: seenMap[r.unit] || 0, b: N(r.agencies), delta: (seenMap[r.unit] || 0) - N(r.agencies),
+        })).sort((x, y) => (x.a / (x.b || 1)) - (y.a / (y.b || 1))).slice(0, 12);
+        return res.json({ kpi, state: stateKey, columns: ['Branch', 'Visited (30d)', 'Agencies', 'Uncovered'], rows });
+      }
+
+      res.json({ kpi, state: stateKey, columns: [], rows: [] });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 

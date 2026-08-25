@@ -99,6 +99,10 @@ a{color:var(--gold-d)}
 .brand .bt b{font-family:Georgia,serif;font-size:16.5px;letter-spacing:.01em;display:block;white-space:nowrap}
 .brand .bt small{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;opacity:.65;display:block;white-space:nowrap}
 .top-sp{flex:1}
+/* Today's date in the top bar — replaces the per-screen crumb line. Hidden on
+   narrow screens where the bar has no room to spare. */
+.top-date{flex:none;font-size:12.5px;font-weight:600;color:rgba(255,255,255,.92);background:rgba(255,255,255,.12);border-radius:9px;padding:5px 12px;white-space:nowrap}
+@media(max-width:720px){.top-date{display:none}}
 .iconbtn{position:relative;width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.85);flex:none}
 .iconbtn:hover{background:rgba(255,255,255,.1)}
 .iconbtn .dot{position:absolute;top:7px;right:7px;width:7px;height:7px;border-radius:50%;background:#E0B34B}
