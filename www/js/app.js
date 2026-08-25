@@ -11,7 +11,10 @@ const DASH_MENU = [
   ["exec_perf",        "Executive Performance",       "👤"],
   ["dcr_analytics",    "DCR - Field Visit Analysis",  "📍"],
   ["agency_rating",    "Agency Rating Engine",        "⭐"],
-  ["short_payment",    "Short Payment",               "📋"],
+  // "short_payment" is deliberately NOT listed here — it lives as a tab inside the
+  // Collections dashboard, which renders the very same VIEWS.short_payment via
+  // colShortPayTab(). The screen and its route stay registered so that tab (and any
+  // saved deep link) keeps working; only the duplicate sidebar entry is gone.
   ["transport",        "Taxi Dashboard",              "🚕"],
   ["survey_dash",      "Survey Intelligence",         "📊"],
 ];
