@@ -114,6 +114,16 @@ a{color:var(--gold-d)}
 .side::-webkit-scrollbar{width:4px}
 .side::-webkit-scrollbar-thumb{background:var(--brd);border-radius:2px}
 .sb-lbl{font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:16px 16px 6px}
+/* Collapsible section header. Reuses .sb-lbl's typography so an expanded menu looks
+   exactly as before — the affordance only shows on hover/focus. */
+.sb-grp{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;cursor:pointer;text-align:left;font-family:inherit}
+.sb-grp:hover{color:var(--ink)}
+.sb-grp:focus-visible{outline:2px solid var(--gold);outline-offset:-2px;border-radius:6px}
+.sb-grp .chev{margin-left:auto;font-size:11px;color:var(--muted);transition:transform .15s}
+.sb-grp .chev.open{transform:rotate(90deg)}
+/* Item count shown only while a section is collapsed, so nothing looks lost. */
+.sb-cnt{font-size:10px;font-weight:800;background:var(--surf2);color:var(--muted);border-radius:9px;padding:1px 7px;letter-spacing:0}
+@media (prefers-reduced-motion:reduce){.sb-grp .chev{transition:none}}
 .nav-item{display:flex;align-items:center;gap:10px;width:calc(100% - 16px);margin:0 8px 2px;text-align:left;padding:8px 9px;border-radius:var(--r-sm);color:var(--ink);font-weight:500;font-size:13.5px}
 .nav-item:hover{background:var(--surf2)}
 .nav-item.on{background:var(--gold-l);color:var(--gold-d);font-weight:700}

@@ -306,6 +306,27 @@ function onAuthExpired() {
 }
 function toggleSide() { S.sideOpen = !S.sideOpen; paintSide(); }
 function toggleGroup(g) { S.openGroups[g] = !S.openGroups[g]; render(); }
+
+/* Sidebar section collapse. Persisted in its own localStorage key (not the session
+   store) so the layout a user settles on survives logout and reload — a menu that
+   re-expands every visit is worse than one that never collapsed. Sections are OPEN by
+   default: only an explicit collapse is recorded, so adding a new section later shows
+   it rather than hiding it behind a stale preference. */
+const NAV_COLLAPSE_KEY = 'patrika_nav_collapsed';
+function navCollapsedMap() {
+  try { return JSON.parse(localStorage.getItem(NAV_COLLAPSE_KEY)) || {}; } catch { return {}; }
+}
+window.toggleNavSection = (label) => {
+  const m = navCollapsedMap();
+  if (m[label]) delete m[label]; else m[label] = 1;
+  try { localStorage.setItem(NAV_COLLAPSE_KEY, JSON.stringify(m)); } catch (_) {}
+  // Repaint only the sidebar. paintSide() just toggles the drawer classes, and a full
+  // render() would rebuild the main view — needlessly re-running its fetches and
+  // losing scroll position — for what is purely a menu change.
+  const side = document.getElementById('side');
+  if (side) { const y = side.scrollTop; side.innerHTML = sideHTML(); side.scrollTop = y; }
+  else render();
+};
 function toggleTheme() {
   const cur = document.documentElement.dataset.theme ||
     (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
@@ -14262,8 +14283,20 @@ function navGroups() {
 function sideHTML() {
   const groups = navGroups();
   let html = `<button class="nav-item ${S.screen === "home" ? "on" : ""}" onclick="go('home')" style="margin-top:10px"><span class="nico">🏠</span><span>Home — My Modules</span></button>`;
+  const collapsed = navCollapsedMap();
   for (const g of groups) {
-    html += `<div class="sb-lbl">${g.label}</div>`;
+    // A collapsed section still expands itself while it holds the current screen, so
+    // the highlighted item can never be hidden from the user who is standing on it.
+    const hasActive = (g.items || []).some(i => i.id === S.screen)
+      || (g.apps || []).some(a => S.screen === 'app_' + a.key || String(S.screen).indexOf(a.key + '_') === 0);
+    const open = !collapsed[g.label] || hasActive;
+    const count = (g.items || g.apps || []).length;
+    html += `<button class="sb-lbl sb-grp" onclick="toggleNavSection('${String(g.label).replace(/'/g, "\\'")}')"
+      aria-expanded="${open}" title="${open ? 'Collapse' : 'Expand'} ${esc(g.label)}">
+      <span>${g.label}</span>
+      ${!open && count ? `<span class="sb-cnt">${count}</span>` : ''}
+      <span class="chev ${open ? 'open' : ''}">▸</span></button>`;
+    if (!open) continue;
     if (g.items) html += g.items.map(i => `<button class="nav-item ${S.screen === i.id ? "on" : ""}" onclick="go('${i.id}')">
       <span class="nico">${i.icon}</span><span>${i.label}</span>${i.badge ? `<span class="cnt num">${i.badge}</span>` : ""}</button>`).join("");
     if (g.apps) html += g.apps.map(a => {
