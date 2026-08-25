@@ -10752,11 +10752,24 @@ const AR_GRADE_BG = {
   BBB: '#eff6ff', BB: '#fffbeb', B: '#fff7ed',
   C: '#fef2f2', 'High Risk': '#FEE2E2',
 };
+// Plain-language name for each grade, so "BBB" does not have to be decoded from the
+// threshold list. Ladder descends with the score bands set in agency_rating.js
+// (AAA 90+, AA 80+, A 70+, BBB 60+, BB 50+, B 40+, C 28+).
+const AR_GRADE_NAME = {
+  AAA: 'Excellent', AA: 'Very Good', A: 'Good',
+  BBB: 'Satisfactory', BB: 'Moderate', B: 'Weak',
+  C: 'Poor', 'High Risk': 'High Risk',
+};
+const arGradeName = g => AR_GRADE_NAME[g] || '';
 
-function arGradeBadge(g) {
+// withName: show the plain-language name beside the code. Off by default so dense
+// tables stay narrow — there the name rides along as the hover title instead.
+function arGradeBadge(g, withName) {
   const c = AR_GRADE_COLOR[g] || '#6B7280';
   const bg = AR_GRADE_BG[g] || '#F3F4F6';
-  return `<span style="display:inline-block;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:800;letter-spacing:.5px;background:${bg};color:${c};border:1px solid ${c}40">${g}</span>`;
+  const nm = arGradeName(g);
+  const tip = nm && nm !== g ? ` title="${esc(g + ' — ' + nm)}"` : '';
+  return `<span${tip} style="display:inline-flex;align-items:baseline;gap:5px;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:800;letter-spacing:.5px;background:${bg};color:${c};border:1px solid ${c}40">${g}${withName && nm && nm !== g ? `<span style="font-weight:600;letter-spacing:0;opacity:.85">${esc(nm)}</span>` : ''}</span>`;
 }
 
 function arBar(value, color, max) {
@@ -10933,6 +10946,8 @@ function arMainView() {
                  border-radius:8px;padding:10px 12px;cursor:pointer;text-align:left;
                  transition:all .15s">
           <div style="font-size:11px;font-weight:700;color:${col};letter-spacing:.5px">${c.grade}</div>
+          ${arGradeName(c.grade) && arGradeName(c.grade) !== c.grade
+            ? `<div style="font-size:10px;color:var(--muted);font-weight:600;margin-top:1px">${esc(arGradeName(c.grade))}</div>` : ''}
           <div style="font-size:20px;font-weight:800;color:var(--fg);margin:3px 0 1px">${c.count.toLocaleString('en-IN')}</div>
           <div style="font-size:10px;color:var(--muted)">agencies</div>
           <div style="font-size:11px;color:${col};margin-top:4px;font-weight:600">${arInrLakh(c.outstanding)}</div>
@@ -10972,7 +10987,7 @@ function arMainView() {
         <div style="display:flex;flex-direction:column;gap:5px">
           ${['AAA','AA','A','BBB','BB','B','C'].map(g => `
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-              ${arGradeBadge(g)}
+              ${arGradeBadge(g, true)}
               <input type="number" value="${thr[g] || 0}" min="0" max="100"
                 onchange="arThrChange('${g}',this.value)"
                 style="width:58px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;text-align:right;background:var(--input-bg,var(--card-bg));color:var(--fg)">
@@ -11116,7 +11131,7 @@ function arDetailView() {
       <div style="flex:1;min-width:200px">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <div style="font-size:20px;font-weight:900">${esc(ag.ag_name || drill.ag_name || ag.ag_code)}</div>
-          ${arGradeBadge(rat.grade || '—')}
+          ${arGradeBadge(rat.grade || '—', true)}
           <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${statusColor}20;color:${statusColor};font-weight:600">${esc(ag.status || 'Active')}</span>
           ${cpct != null ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${cpct >= 80 ? '#D1FAE5' : cpct < 50 ? '#FEE2E2' : '#FEF3C7'};color:${cpct >= 80 ? '#059669' : cpct < 50 ? '#DC2626' : '#D97706'};font-weight:600">${cpct >= 80 ? '● Low' : cpct < 50 ? '● High' : '● Medium'} · ${arR1(cpct)}%</span>` : ''}
         </div>
