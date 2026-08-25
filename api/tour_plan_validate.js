@@ -40,24 +40,37 @@ const TOP_N = 8; // same "top 8 agencies" scope as next-day-plan
 // ── AI recommendation for one executive (same logic/weights as dcr_analytics's
 //    next-day-plan Tier-3 rule engine — kept independent here since the daily
 //    cron notifier must run standalone, without the API server up) ───────────
-async function buildAiRecommendation(q, execName) {
+// unitCode scopes every lookup: agcd is unique only WITHIN a unit (agency_master's real
+// key is unit+agcd), so an unscoped agcd match can pull an unrelated same-coded agency
+// from another unit into an executive's recommendation.
+async function buildAiRecommendation(q, execName, unitCode) {
+  const uAg = unitCode ? ' AND unit=?' : '';   // agency_master's column is `unit`, not `unit_code`
+  const uP  = unitCode ? [unitCode] : [];
   const [agR, visitR, osR, supR] = await Promise.all([
-    q(`SELECT agcd, ag_name, COALESCE(city_name, dist_name) city_name, unit_code, unit_name
+    q(`SELECT agcd, ag_name, COALESCE(city_name, dist_name) city_name, unit AS unit_code, unit_name
        FROM agency_master
-       WHERE executive_name=? AND CAST(dpcd AS UNSIGNED)=1
+       WHERE executive_name=? AND CAST(dpcd AS UNSIGNED)=1${uAg}
          AND (supply_stop_flag IS NULL OR supply_stop_flag!='Y') AND suspend_date IS NULL
-       LIMIT 150`, [execName]),
+       LIMIT 150`, [execName, ...uP]),
     q(`SELECT visit_to_main_code ag_code, MAX(mark_attn_date) last_visit, MAX(followup_amount) fup_amt, MAX(followup_date) fup_date
-       FROM dcr_agency_visit WHERE executive_name=? AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
-       GROUP BY visit_to_main_code`, [execName]),
+       FROM dcr_agency_visit
+       WHERE executive_name=? AND mark_attn_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+         ${unitCode ? 'AND unit_code=?' : ''}
+       GROUP BY visit_to_main_code`, [execName, ...uP]),
     q(`SELECT ao.ag_code, ao.cl_amt FROM agency_outstanding ao
-       JOIN agency_master am ON am.agcd=ao.ag_code AND CAST(am.dpcd AS UNSIGNED)=1
+       JOIN agency_master am ON am.agcd=ao.ag_code AND am.unit=ao.unit_code AND CAST(am.dpcd AS UNSIGNED)=1
        WHERE am.executive_name=? AND ao.period_label='CURRENT' AND ao.cl_amt>0
-       GROUP BY ao.ag_code`, [execName]),
-    q(`SELECT agcd, AVG(sup_copy) avg_sup FROM supply_data
-       WHERE supply_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-         AND agcd IN (SELECT agcd FROM agency_master WHERE executive_name=? AND CAST(dpcd AS UNSIGNED)=1)
-       GROUP BY agcd`, [execName]),
+         ${unitCode ? 'AND ao.unit_code=?' : ''}
+       GROUP BY ao.ag_code`, [execName, ...uP]),
+    // Whole-unit 7-day average, narrowed to this executive's agencies in JS below.
+    // Joining agency_master here instead made the optimizer drive off idx_sd_agcd and
+    // scan every historical row per agency — 30s. Scoped to one unit with the
+    // (supply_date, unit_code) index it is ~300ms even for the largest unit.
+    unitCode
+      ? q(`SELECT s.agcd, AVG(s.sup_copy) avg_sup FROM supply_data s FORCE INDEX (idx_sd_dateunit)
+           WHERE s.unit_code = ? AND s.supply_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+           GROUP BY s.agcd`, [unitCode])
+      : Promise.resolve({ rows: [] }),
   ]);
   const vMap = {}, osMap = {}, supMap = {};
   visitR.rows.forEach(r => { vMap[r.ag_code] = r; });
@@ -100,7 +113,7 @@ async function attachOwnerAndGroup(q, submittedRows) {
   if (!agcds.length) return new Map();
   const ph = agcds.map(() => '?').join(',');
   const { rows: owners } = await q(
-    `SELECT agcd, unit_code, executive_name, unit_name FROM agency_master
+    `SELECT agcd, unit AS unit_code, executive_name, unit_name FROM agency_master
      WHERE agcd IN (${ph}) AND CAST(dpcd AS UNSIGNED)=1`, agcds);
   const ownerMap = new Map(owners.map(o => [`${o.unit_code}|${o.agcd}`, o]));
 
@@ -140,7 +153,7 @@ const TAG_HI = { high: 'उच्च', medium: 'मध्यम', low: 'सा�
 // ── Core: verdict for one executive on one date ──────────────────────────────
 async function computeVerdict(q, execName, unitCode, unitName, date) {
   const [recommendation, gps] = await Promise.all([
-    buildAiRecommendation(q, execName),
+    buildAiRecommendation(q, execName, unitCode),
     gpsMapFor(q, unitCode),
   ]);
   const submittedRows = (await getSubmittedPlan(q, date)).filter(r => r.unit_code === unitCode);
@@ -203,13 +216,19 @@ async function computeVerdict(q, execName, unitCode, unitName, date) {
   };
 }
 
+// Placeholder owners in agency_master — unassigned markers, not people to advise.
+const PLACEHOLDER_EXEC = new Set(['N/A', '#N/A', 'NA', 'NOT APPLICABLE', 'NAEXECUTIVE', 'NONE', '']);
+const isPlaceholderExec = n => PLACEHOLDER_EXEC.has(String(n || '').trim().toUpperCase());
+
 // ── Daily sweep: every executive with a submitted plan for `date` ───────────
 // Used by both the on-demand "all executives today" API and the cron notifier.
-async function computeVerdictsForDate(q, date) {
+async function computeVerdictsForDate(q, date, unitCode) {
   const submittedRows = await getSubmittedPlan(q, date);
   const byExec = await attachOwnerAndGroup(q, submittedRows);
   const results = [];
   for (const { exec_name, unit_code, unit_name } of byExec.values()) {
+    if (isPlaceholderExec(exec_name)) continue;
+    if (unitCode && unit_code !== unitCode) continue;
     try {
       results.push(await computeVerdict(q, exec_name, unit_code, unit_name, date));
     } catch (e) { /* one exec's failure shouldn't sink the sweep */ }
@@ -238,8 +257,20 @@ module.exports = function registerTourPlanValidate(ctx) {
   app.get('/api/tour-plan-validation', async (req, res) => {
     try {
       const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : new Date().toISOString().slice(0, 10);
-      const results = await computeVerdictsForDate(q, date);
-      res.json({ date, count: results.length, results });
+      const unitCode = (req.query.unit_code || '').trim() || null;
+      const results = await computeVerdictsForDate(q, date, unitCode);
+      // Roll-up for the screen's header: how many executives planned, and how well.
+      const n = results.length;
+      const correct = results.filter(r => r.is_correct).length;
+      const summary = {
+        executives: n,
+        plans_correct: correct,
+        plans_need_work: n - correct,
+        avg_overlap_pct: n ? Math.round(results.reduce((s, r) => s + r.overlap_pct, 0) / n) : null,
+        planned_visits: results.reduce((s, r) => s + r.submitted_count, 0),
+        missed_priority: results.reduce((s, r) => s + r.missing.length, 0),
+      };
+      res.json({ date, unit_code: unitCode, count: n, summary, results });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 };

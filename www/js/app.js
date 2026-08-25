@@ -2071,6 +2071,21 @@ function _dcrALoadCoverage(force) {
     .then(r => r.json()).then(d => { _dcrA.coverage = d; _dcrA._loadCov = false; if (S.screen === 'dcr_analytics') render(); })
     .catch(() => { _dcrA.coverage = { _err: true }; _dcrA._loadCov = false; if (S.screen === 'dcr_analytics') render(); });
 }
+/* Tour Plan Analysis — verdict on each executive's submitted plan for one date.
+   Keyed by date+unit so switching either refetches; the sweep runs one executive at a
+   time server-side (~0.3s each), so a full 45-executive day takes a few seconds. */
+window.dcrATpDate = v => { _dcrA.tpDate = v; _dcrA.tourPlanChk = null; _dcrA._loadTpc = false; _dcrA.tpOpen = ''; render(); };
+window.dcrATpToggle = k => { _dcrA.tpOpen = (_dcrA.tpOpen === k ? '' : k); render(); };
+function _dcrALoadTourPlanCheck(force) {
+  const date = _dcrA.tpDate || todayISO();
+  const key  = date + '|' + (_dcrA.unit_code || '');
+  if (_dcrA._loadTpc || (_dcrA.tourPlanChk && _dcrA._tpcKey === key && !force)) return;
+  _dcrA._loadTpc = true; _dcrA.tourPlanChk = null; _dcrA._tpcKey = key;
+  const qs = 'date=' + encodeURIComponent(date) + (_dcrA.unit_code ? '&unit_code=' + encodeURIComponent(_dcrA.unit_code) : '');
+  fetch(`${location.origin}/api/tour-plan-validation?${qs}`, { headers: api.h() })
+    .then(r => r.json()).then(d => { _dcrA.tourPlanChk = d; _dcrA._loadTpc = false; if (S.screen === 'dcr_analytics') render(); })
+    .catch(() => { _dcrA.tourPlanChk = { _err: true }; _dcrA._loadTpc = false; if (S.screen === 'dcr_analytics') render(); });
+}
 function _dcrALoadRemarks(force) {
   if (_dcrA._loadRem || (_dcrA.remarks && !force)) return;
   _dcrA._loadRem = true; _dcrA.remarks = null; _dcrA.aiResults = null;
@@ -2246,6 +2261,7 @@ VIEWS.dcr_analytics = () => {
     <button class="${tab==='analysis'?'on':''}" onclick="dcrASetTab('analysis')">📈 Visit Analysis</button>
     <button class="${tab==='coverage'?'on':''}" onclick="dcrASetTab('coverage')">⚠️ Agency Coverage</button>
     <button class="${tab==='remarks'?'on':''}"  onclick="dcrASetTab('remarks')">💬 AI Remarks</button>
+    <button class="${tab==='tpcheck'?'on':''}"  onclick="dcrASetTab('tpcheck')">🧭 Tour Plan Analysis</button>
     <button class="${tab==='plan'?'on':''}"     onclick="dcrASetTab('plan')">📋 Next Day Plan</button>
     <button class="${tab==='weekplan'?'on':''}" onclick="dcrASetTab('weekplan')">📅 7-Day Tour Plan</button>
   </div>`;
@@ -2259,6 +2275,7 @@ VIEWS.dcr_analytics = () => {
   else if (tab === 'analysis') body = _dcrAAnalysisTab();
   else if (tab === 'coverage') body = _dcrACoverageTab();
   else if (tab === 'remarks') body = _dcrARemarksTab();
+  else if (tab === 'tpcheck') body = _dcrATourPlanCheckTab();
   else if (tab === 'plan') body = _dcrANextPlanTab();
   else if (tab === 'weekplan') body = _dcrAWeekPlanTab();
 
@@ -2370,6 +2387,109 @@ function _dcrAAnalysisTab() {
 }
 
 /* ── Agency Coverage tab ── */
+/* ── Tour Plan Analysis ──────────────────────────────────────────────────────
+   Was the plan the executive submitted the right one, and what should it have been?
+   Scores the submitted plan against the same outstanding / follow-up / visit-recency
+   ranking the Next Day Plan uses, then lists the priority agencies left out. Plans are
+   attributed by AGENCY OWNERSHIP, not by who keyed the entry — an Incharge often files
+   on an executive's behalf, but the territory still belongs to the agency's owner. */
+function _dcrATourPlanCheckTab() {
+  const date = _dcrA.tpDate || todayISO();
+  _dcrALoadTourPlanCheck();
+  const d = _dcrA.tourPlanChk;
+
+  const picker = `<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px">
+    <label style="font-size:12px;color:var(--ink-2)">Plan date</label>
+    <input type="date" value="${esc(date)}" onchange="dcrATpDate(this.value)"
+      style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--ink)">
+    <button class="btn sm" onclick="_dcrALoadTourPlanCheck(true);render()">↻ Re-check</button>
+    <span style="font-size:11px;color:var(--ink-2)">Plans are matched to the executive who <b>owns</b> the agency, not whoever keyed them in.</span>
+  </div>`;
+
+  if (_dcrA._loadTpc) return picker + '<div style="color:var(--ink-2);padding:40px 0;text-align:center">⏳ Checking submitted tour plans…</div>';
+  if (!d) return picker + '<div style="color:var(--ink-2);padding:40px 0;text-align:center">Pick a date to analyse.</div>';
+  if (d._err || d.detail) return picker + `<div style="color:var(--red);padding:20px 0">Could not load tour plan analysis.</div>`;
+
+  const rows = d.results || [], s = d.summary || {};
+  if (!rows.length) return picker + `<div style="background:var(--surface-2);border-radius:10px;padding:26px;text-align:center">
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px">No tour plan submitted for ${esc(date)}</div>
+      <div style="font-size:12px;color:var(--ink-2)">Nothing was filed for this date${_dcrA.unit_code ? ' in the selected unit' : ''}, so there is nothing to score.</div>
+    </div>`;
+
+  const kpis = `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+    ${[[s.executives, 'Executives Planned', 'var(--ink)'],
+       [s.plans_correct, 'Plan On Target', 'var(--grn)'],
+       [s.plans_need_work, 'Needs Rework', 'var(--red)'],
+       [(s.avg_overlap_pct == null ? '—' : s.avg_overlap_pct + '%'), 'Avg Priority Match', '#f59e0b'],
+       [s.planned_visits, 'Visits Planned', 'var(--blue)'],
+       [s.missed_priority, 'Priority Agencies Missed', 'var(--red)']].map(([v, l, c]) =>
+      `<div style="flex:1;min-width:120px;background:var(--surface-2);border-radius:10px;padding:12px 14px">
+        <div style="font-size:10px;font-weight:700;color:var(--ink-2);text-transform:uppercase">${l}</div>
+        <div style="font-size:24px;font-weight:800;color:${c};margin-top:2px">${v}</div>
+      </div>`).join('')}
+  </div>`;
+
+  const money = v => { const n = Number(v) || 0; return n >= 1e7 ? '₹' + (n/1e7).toFixed(2) + ' Cr' : n >= 1e5 ? '₹' + (n/1e5).toFixed(2) + ' L' : '₹' + Math.round(n).toLocaleString('en-IN'); };
+
+  const cards = rows.slice().sort((a, b) => a.overlap_pct - b.overlap_pct).map(v => {
+    const k = (v.unit_code || '') + '|' + (v.exec_name || '');
+    const open = _dcrA.tpOpen === k;
+    const col = v.is_correct ? 'var(--grn)' : v.overlap_pct >= 25 ? '#f59e0b' : 'var(--red)';
+    const verdict = v.is_correct ? '✓ On target' : v.overlap_pct >= 25 ? '△ Partly right' : '✗ Needs rework';
+
+    const missList = (v.missing || []).map((a, i) => {
+      const bits = [];
+      if (a.outstanding > 0) bits.push('outstanding ' + money(a.outstanding));
+      if (a.fup_amt > 0) bits.push('promised ' + money(a.fup_amt));
+      bits.push(a.days_since_visit == null ? 'never visited' : a.days_since_visit + 'd since visit');
+      return `<tr onclick="openAgencyProfile('${esc(a.unit_code||v.unit_code||'').replace(/'/g,"\\'")}','${esc(a.agcd).replace(/'/g,"\\'")}','${esc(a.ag_name||'').replace(/'/g,"\\'")}')" style="cursor:pointer" title="View agency profile">
+        <td style="color:var(--ink-2);width:22px">${i + 1}</td>
+        <td><b style="font-size:12px">${esc(a.ag_name)}</b>${a.city ? `<br><span style="font-size:10px;color:var(--ink-2)">${esc(a.city)}</span>` : ''}</td>
+        <td style="font-size:11px;color:var(--ink-2)">${bits.join(' · ')}</td>
+        <td class="r" style="font-weight:700;color:${a.outstanding > 0 ? 'var(--red)' : 'var(--ink)'}">${money(a.outstanding)}</td>
+      </tr>`;
+    }).join('');
+
+    const nearList = (v.nearby_gaps || []).map(a =>
+      `<li style="margin-bottom:3px">${esc(a.ag_name)} — <span style="color:var(--ink-2)">${a.distance_km} km from ${esc(a.near_agency)} on the plan</span></li>`).join('');
+
+    const detail = !open ? '' : `<div style="border-top:1px solid var(--brd2);padding:12px 14px;background:var(--bg)">
+      ${missList ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--red);margin-bottom:6px">Should have planned instead (${(v.missing||[]).length})</div>
+        <div style="overflow-x:auto;margin-bottom:12px"><table class="tbl" style="font-size:12px;min-width:520px">
+          <thead><tr><th></th><th style="text-align:left">Agency</th><th style="text-align:left">Why it ranks higher</th><th class="r">Outstanding</th></tr></thead>
+          <tbody>${missList}</tbody></table></div>` : ''}
+      ${nearList ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#f59e0b;margin-bottom:6px">Nearby, could be added to the same trip</div>
+        <ul style="font-size:12px;margin:0 0 12px 16px;padding:0">${nearList}</ul>` : ''}
+      ${(v.low_priority || []).length ? `<div style="font-size:11px;color:var(--ink-2);margin-bottom:10px"><b>${v.low_priority.length}</b> planned visit${v.low_priority.length > 1 ? 's are' : ' is'} not in the current priority list — fine if there is a specific reason, otherwise consider swapping.</div>` : ''}
+      ${v.hindi_message ? `<div style="background:var(--surface-2);border-radius:8px;padding:10px 12px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin-bottom:5px">Message for the executive (Hindi)</div>
+        <div style="font-size:12px;white-space:pre-wrap;line-height:1.55">${esc(v.hindi_message)}</div>
+      </div>` : ''}
+    </div>`;
+
+    return `<div style="border:1px solid var(--brd2);border-left:4px solid ${col};border-radius:10px;margin-bottom:10px;overflow:hidden">
+      <div onclick="dcrATpToggle('${esc(k).replace(/'/g,"\\'")}')" style="cursor:pointer;padding:12px 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
+        <div style="min-width:200px">
+          <div style="font-weight:700;font-size:13px">${esc(v.exec_name)}</div>
+          <div style="font-size:11px;color:var(--ink-2)">${esc(v.unit_name || v.unit_code || '')}</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:11px">
+          <div><span style="color:var(--ink-2)">Planned</span> <b>${v.submitted_count}</b></div>
+          <div><span style="color:var(--ink-2)">Priority match</span> <b style="color:${col}">${v.overlap_pct}%</b></div>
+          <div><span style="color:var(--ink-2)">Missed</span> <b style="color:var(--red)">${(v.missing||[]).length}</b></div>
+          <span style="background:${col};color:#fff;border-radius:10px;padding:2px 9px;font-weight:700">${verdict}</span>
+          <span style="color:var(--ink-2);font-size:14px">${open ? '▲' : '▼'}</span>
+        </div>
+      </div>
+      ${detail}
+    </div>`;
+  }).join('');
+
+  return picker + kpis
+    + `<div style="font-size:11px;color:var(--ink-2);margin-bottom:8px">Ranked worst match first · tap a row to see what should have been planned instead.</div>`
+    + cards;
+}
+
 function _dcrACoverageTab() {
   _dcrALoadCoverage();
   const d = _dcrA.coverage;
