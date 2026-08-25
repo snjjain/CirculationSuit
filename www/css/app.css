@@ -113,16 +113,22 @@ a{color:var(--gold-d)}
 .side{grid-row:2;background:var(--surf);border-right:1px solid var(--brd);overflow-y:auto;display:flex;flex-direction:column;padding-bottom:14px}
 .side::-webkit-scrollbar{width:4px}
 .side::-webkit-scrollbar-thumb{background:var(--brd);border-radius:2px}
-.sb-lbl{font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:16px 16px 6px}
-/* Collapsible section header. Reuses .sb-lbl's typography so an expanded menu looks
-   exactly as before — the affordance only shows on hover/focus. */
-.sb-grp{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;cursor:pointer;text-align:left;font-family:inherit}
+/* Section heading matches .nav-item's size and family so the menu reads as one
+   typographic scale; hierarchy comes from weight and colour, not from a smaller
+   font. Left padding (17px) equals a nav-item's 8px margin + 9px padding, so headings
+   and their screens share one left edge. */
+.sb-lbl{font-size:13.5px;font-weight:800;letter-spacing:.01em;text-transform:uppercase;color:var(--muted);padding:15px 10px 5px 17px}
+/* Collapsible section header. The toggle affordance only shows on hover/focus.
+   Gaps are tight because the longest heading plus its collapsed count badge and
+   chevron only just clear the 262px sidebar. */
+.sb-grp{display:flex;align-items:center;gap:6px;width:100%;background:none;border:0;cursor:pointer;text-align:left;font-family:inherit;line-height:1.25}
+.sb-grp>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sb-grp:hover{color:var(--ink)}
 .sb-grp:focus-visible{outline:2px solid var(--gold);outline-offset:-2px;border-radius:6px}
-.sb-grp .chev{margin-left:auto;font-size:11px;color:var(--muted);transition:transform .15s}
+.sb-grp .chev{margin-left:auto;flex:none;font-size:12px;color:var(--muted);transition:transform .15s}
 .sb-grp .chev.open{transform:rotate(90deg)}
 /* Item count shown only while a section is collapsed, so nothing looks lost. */
-.sb-cnt{font-size:10px;font-weight:800;background:var(--surf2);color:var(--muted);border-radius:9px;padding:1px 7px;letter-spacing:0}
+.sb-cnt{flex:none;font-size:10.5px;font-weight:800;background:var(--surf2);color:var(--muted);border-radius:9px;padding:1px 6px;letter-spacing:0}
 @media (prefers-reduced-motion:reduce){.sb-grp .chev{transition:none}}
 .nav-item{display:flex;align-items:center;gap:10px;width:calc(100% - 16px);margin:0 8px 2px;text-align:left;padding:8px 9px;border-radius:var(--r-sm);color:var(--ink);font-weight:500;font-size:13.5px}
 .nav-item:hover{background:var(--surf2)}
