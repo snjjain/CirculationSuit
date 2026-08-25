@@ -59,6 +59,53 @@ module.exports = function installCommandCentre({ app, q }) {
     return { asOn, prev, label, mode: mode || 'prev_day' };
   }
 
+  /* Date range for the headline strip. Indian financial year runs Apr–Mar, so
+     "This FY" starts on 1 April of the year the as-on date belongs to. Only the
+     figures that are genuinely a SUM over time follow this range (collection,
+     field visits); supply is a point-in-time daily count and outstanding is a
+     balance, so both stay anchored to the as-on date whatever range is picked —
+     each card says which window it covers rather than implying they all move. */
+  function resolveRangeWindow(asOn, range) {
+    const y = Number(asOn.slice(0, 4)), m = Number(asOn.slice(5, 7));
+    const fyStartYear = m >= 4 ? y : y - 1;
+    const pad = n => String(n).padStart(2, '0');
+    const d = new Date(asOn + 'T00:00:00');
+    switch (range) {
+      case 'today':
+        return { from: asOn, to: asOn, label: 'Today', key: 'today' };
+      case 'last_month': {
+        const s = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+        const e = new Date(d.getFullYear(), d.getMonth(), 0);
+        const iso = x => `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`;
+        return { from: iso(s), to: iso(e), label: 'Last Month', key: 'last_month' };
+      }
+      case 'fytd':
+        return { from: `${fyStartYear}-04-01`, to: asOn, label: `FY ${fyStartYear}-${String(fyStartYear + 1).slice(2)} (YTD)`, key: 'fytd' };
+      case 'last_90':
+        return { from: new Date(d.getTime() - 89 * 86400000).toISOString().slice(0, 10), to: asOn, label: 'Last 90 Days', key: 'last_90' };
+      case 'mtd':
+      default:
+        return { from: asOn.slice(0, 8) + '01', to: asOn, label: 'This Month', key: 'mtd' };
+    }
+  }
+
+  // Collection receipts + field visits over an arbitrary window, all-India.
+  async function rangeTotals(win, unitScope) {
+    const uC = unitScope ? ' AND unit_code = ?' : '';
+    const uD = unitScope ? ' AND unit_code = ?' : '';
+    const uP = unitScope ? [unitScope] : [];
+    const [coll, visits] = await Promise.all([
+      q(`SELECT -COALESCE(SUM(amount),0) amt, COUNT(*) txn, COUNT(DISTINCT ag_code) agencies
+         FROM agency_collection WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uC}`, [win.from, win.to, ...uP]),
+      q(`SELECT COUNT(*) visits, COUNT(DISTINCT visit_to_main_code) agencies, COUNT(DISTINCT emp_code) execs
+         FROM dcr_agency_visit WHERE mark_attn_date BETWEEN ? AND ?${uD}`, [win.from, win.to, ...uP]),
+    ]);
+    return {
+      collection: N(coll.rows[0]?.amt), txn: N(coll.rows[0]?.txn), agencies_paid: N(coll.rows[0]?.agencies),
+      visits: N(visits.rows[0]?.visits), agencies_visited: N(visits.rows[0]?.agencies), execs_active: N(visits.rows[0]?.execs),
+    };
+  }
+
   // ── Supply: Agent (credit sale) + Cash (hawker), both sides state-bucketed ──
   async function supplyByState(asOn, prev, unitScope) {
     const uCl = unitScope ? ' AND s.unit_code = ?' : '';
@@ -259,12 +306,14 @@ module.exports = function installCommandCentre({ app, q }) {
     try {
       const unitScope = (req.query.unit_code || '').trim() || null;
       const { asOn, prev, label, mode } = await resolveDates(req.query.as_on, req.query.compare);
-      const [sup, col, os, dcr, heads] = await Promise.all([
+      const win = resolveRangeWindow(asOn, req.query.range);
+      const [sup, col, os, dcr, heads, rng] = await Promise.all([
         supplyByState(asOn, prev, unitScope),
         collectionByState(asOn, prev, unitScope),
         osByState(unitScope),
         dcrByState(asOn, prev, unitScope),
         stateHeads(),
+        rangeTotals(win, unitScope),
       ]);
 
       const states = STATES.map(s => {
@@ -308,9 +357,34 @@ module.exports = function installCommandCentre({ app, q }) {
         };
       }).filter(s => s.supply.current || s.collection.current || s.os.current || s.dcr.current);
 
+      // All-India headline strip. Each figure carries the window it actually covers,
+      // because they do not all follow the date range: supply is a point-in-time daily
+      // count and outstanding is a balance, so both stay on the as-on date while
+      // collection and field visits sum over the selected range.
+      const sum = f => states.reduce((a, s) => a + f(s), 0);
+      const supTot = sum(s => s.supply.current), supPrevTot = sum(s => s.supply.previous);
+      const billTot = sum(s => s.collection.prev_month_billing);
+      const mtdTot = sum(s => s.collection.current);
+      const osTot = sum(s => s.os.current), osPrevTot = sum(s => s.os.previous);
+      const bookTot = sum(s => s.dcr.agencies_total);
+      const totals = {
+        supply:        { value: supTot, prev: supPrevTot, growth_pct: r1(pct(supTot, supPrevTot)), window: `on ${asOn}` },
+        agent:         { value: sum(s => s.supply.agent), share_pct: supTot ? r1(sum(s => s.supply.agent) / supTot * 100) : null, window: `on ${asOn}` },
+        cash:          { value: sum(s => s.supply.cash),  share_pct: supTot ? r1(sum(s => s.supply.cash) / supTot * 100) : null, window: `on ${asOn}` },
+        collection:    { value: rng.collection, txn: rng.txn, agencies_paid: rng.agencies_paid, window: win.label },
+        collection_pct:{ value: billTot > 0 ? r1(mtdTot / billTot * 100) : null, billed: billTot, collected: mtdTot,
+                         window: `this month vs ${col.prev_month_label} billing` },
+        outstanding:   { value: osTot, prev: osPrevTot, growth_pct: r1(pct(osTot, osPrevTot)), window: `as on today` },
+        critical:      { value: sum(s => s.os.critical_agencies), of: sum(s => s.os.agencies), window: 'agencies above ₹1 L' },
+        coverage:      { value: rng.agencies_visited, of: bookTot, visits: rng.visits, execs: rng.execs_active,
+                         pct: bookTot ? r1(rng.agencies_visited / bookTot * 100) : null, window: win.label },
+      };
+
       res.json({
         as_on: asOn, previous: prev, compare: mode, compare_label: label,
+        range: win.key, range_label: win.label, range_from: win.from, range_to: win.to,
         unit_code: unitScope,
+        totals,
         states,
         alerts: buildAlerts(states),
         opportunities: buildOpportunities(states),

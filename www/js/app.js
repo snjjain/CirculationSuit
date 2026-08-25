@@ -4117,7 +4117,7 @@ function _cmdViewLegacy() {
    share can never disagree with each other. */
 
 function _ccState() {
-  return S.live.cc || (S.live.cc = { asOn: '', compare: 'prev_day', state: '', unit: '', district: '', data: null, _loading: false, drill: null });
+  return S.live.cc || (S.live.cc = { asOn: '', compare: 'prev_day', range: 'mtd', state: '', unit: '', district: '', data: null, _loading: false, drill: null });
 }
 window.ccSet = (k, v) => {
   const st = _ccState();
@@ -4149,6 +4149,7 @@ function _ccLoad() {
   const p = new URLSearchParams();
   if (st.asOn) p.set('as_on', st.asOn);
   if (st.compare) p.set('compare', st.compare);
+  if (st.range) p.set('range', st.range);
   if (st.unit) p.set('unit_code', st.unit);
   fetch(`${location.origin}/api/command/state-performance?${p}`, { headers: api.h() })
     .then(r => r.json())
@@ -4181,6 +4182,23 @@ function _ccBar(pctVal, color) {
   const w = Math.max(0, Math.min(100, Number(pctVal) || 0));
   return `<div style="height:6px;background:#eef2f7;border-radius:4px;overflow:hidden;margin-top:5px">
     <div style="height:100%;width:${w}%;background:${color};border-radius:4px"></div></div>`;
+}
+
+/* ── headline card for the all-India strip ──
+   The coloured top rule is what separates one card from the next; no icons, per the
+   "simple and clear" direction. Every card states the window it covers, because they
+   deliberately do NOT all follow the date range — supply is a point-in-time count and
+   outstanding is a balance, so only collection and field visits move with it. */
+function _ccTopCard(o) {
+  return `<div ${o.onClick ? `onclick="${o.onClick}" ` : ''}style="background:#fff;border:1px solid #e2e8f0;border-top:3px solid ${o.color};border-radius:11px;padding:12px 14px;${o.onClick ? 'cursor:pointer;' : ''}display:flex;flex-direction:column;gap:2px">
+    <div style="font-size:10px;font-weight:800;letter-spacing:.06em;color:#64748b;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(o.label)}</div>
+    <div style="display:flex;align-items:baseline;gap:7px;flex-wrap:wrap">
+      <span style="font-size:22px;font-weight:800;color:#1e3a8a;line-height:1.15;font-variant-numeric:tabular-nums">${o.value}</span>
+      ${o.trend || ''}
+    </div>
+    <div style="font-size:10.5px;color:#94a3b8">${o.sub || ''}</div>
+    ${o.barPct != null ? _ccBar(o.barPct, o.color) : ''}
+  </div>`;
 }
 
 /* ── one KPI row inside a state card ── */
@@ -4305,8 +4323,9 @@ function _cmdViewNew() {
     ${sel('Compare with', 'compare', st.compare, [['prev_day','Previous Day'],['prev_week','Previous Week'],['prev_month','Previous Month']], 'Previous Day')}
     ${sel('State', 'state', st.state, stateOpts, 'All States')}
     ${sel('Unit', 'unit', st.unit, unitOpts, 'All Units')}
-    <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
-      ${d && !d._err ? `<span style="font-size:11px;color:#64748b">Showing <b style="color:#0f172a">${esc(d.as_on)}</b> vs <b style="color:#0f172a">${esc(d.previous)}</b></span>` : ''}
+    <div style="margin-left:auto;display:flex;align-items:flex-end;gap:10px">
+      ${d && !d._err ? `<span style="font-size:11px;color:#64748b;padding-bottom:7px">Showing <b style="color:#0f172a">${esc(d.as_on)}</b> vs <b style="color:#0f172a">${esc(d.previous)}</b></span>` : ''}
+      ${sel('Date range', 'range', st.range, [['today','Today'],['mtd','This Month'],['last_month','Last Month'],['fytd','Current FY (YTD)'],['last_90','Last 90 Days']], 'This Month')}
       <button onclick="ccReset()" style="padding:7px 13px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#64748b;font-size:12px;cursor:pointer">Reset</button>
     </div>
   </div>`;
@@ -4319,7 +4338,45 @@ function _cmdViewNew() {
 
   const shown = (d.states || []).filter(s => !st.state || s.key === st.state);
 
-  const cards = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:12px;margin-bottom:18px">
+  // ── All-India headline strip ──
+  const t = d.totals || {};
+  const q = v => String(v).replace(/'/g, "\\'");
+  const anyState = st.state || (shown[0] && shown[0].key) || 'RAJASTHAN';
+  const topStrip = !t.supply ? '' : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(196px,1fr));gap:11px;margin-bottom:16px">
+    ${_ccTopCard({ label: st.state ? esc(shown[0] ? shown[0].name : '') + ' Supply' : 'Total Supply', color: '#3b82f6',
+      value: _ccN(t.supply.value) + ' <span style="font-size:12px;font-weight:600;color:#64748b">cp</span>',
+      trend: _ccTrend(t.supply.growth_pct), sub: `Agent + Cash · ${esc(t.supply.window)}`,
+      onClick: `ccDrill('supply_dash','${q(anyState)}')` })}
+    ${_ccTopCard({ label: 'Agent Sale', color: '#6366f1',
+      value: _ccN(t.agent.value) + ' <span style="font-size:12px;font-weight:600;color:#64748b">cp</span>',
+      sub: `${t.agent.share_pct == null ? '' : t.agent.share_pct + '% of supply · '}credit agencies`,
+      barPct: t.agent.share_pct, onClick: `ccDrill('supply_dash','${q(anyState)}')` })}
+    ${_ccTopCard({ label: 'Cash Sale', color: '#f59e0b',
+      value: _ccN(t.cash.value) + ' <span style="font-size:12px;font-weight:600;color:#64748b">cp</span>',
+      sub: `${t.cash.share_pct == null ? '' : t.cash.share_pct + '% of supply · '}city / hawker`,
+      barPct: t.cash.share_pct, onClick: `ccDrill('supply_dash','${q(anyState)}')` })}
+    ${_ccTopCard({ label: 'Collection', color: '#22c55e',
+      value: _ccINR(t.collection.value), sub: `${_ccN(t.collection.txn)} receipts · ${esc(t.collection.window)}`,
+      onClick: `ccDrill('collections','${q(anyState)}')` })}
+    ${_ccTopCard({ label: 'Collection vs Billing', color: '#10b981',
+      value: (t.collection_pct.value == null ? '—' : t.collection_pct.value + '%'),
+      sub: `${_ccINR(t.collection_pct.collected)} of ${_ccINR(t.collection_pct.billed)} · ${esc(t.collection_pct.window)}`,
+      barPct: t.collection_pct.value, onClick: `ccDrill('collections','${q(anyState)}')` })}
+    ${_ccTopCard({ label: 'Outstanding', color: '#ef4444',
+      value: _ccINR(t.outstanding.value), trend: _ccTrend(t.outstanding.growth_pct, true),
+      sub: `balance ${esc(t.outstanding.window)}`, onClick: `ccDrill('outstanding','${q(anyState)}')` })}
+    ${_ccTopCard({ label: 'Critical Agencies', color: '#dc2626',
+      value: _ccN(t.critical.value), sub: `of ${_ccN(t.critical.of)} · ${esc(t.critical.window)}`,
+      barPct: t.critical.of ? (t.critical.value / t.critical.of) * 100 : null,
+      onClick: `ccDrill('outstanding','${q(anyState)}')` })}
+    ${_ccTopCard({ label: 'Field Coverage', color: '#8b5cf6',
+      value: (t.coverage.pct == null ? '—' : t.coverage.pct + '%'),
+      sub: `${_ccN(t.coverage.value)} of ${_ccN(t.coverage.of)} agencies · ${esc(t.coverage.window)}`,
+      barPct: t.coverage.pct, onClick: `ccDrill('dcr_analytics','${q(anyState)}')` })}
+  </div>`;
+
+  const cards = `<div style="font-size:11px;font-weight:800;letter-spacing:.06em;color:#64748b;text-transform:uppercase;margin:0 0 8px 2px">State-wise Performance</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:12px;margin-bottom:18px">
     ${shown.map(_ccStateCard).join('')}
   </div>`;
 
@@ -4374,7 +4431,7 @@ function _cmdViewNew() {
   </div>`;
 
   const sub = `${shown.length} state${shown.length === 1 ? '' : 's'} · ${d.as_on} vs ${d.previous} (${d.compare_label})`;
-  return pagehead('Circulation Command Centre', sub) + _cmdDesignSwitch('new') + filters + cards + twoCol + market;
+  return pagehead('Circulation Command Centre', sub) + _cmdDesignSwitch('new') + filters + topStrip + cards + twoCol + market;
 }
 
 
