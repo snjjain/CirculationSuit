@@ -89,17 +89,28 @@ module.exports = function installCommandCentre({ app, q }) {
     }
   }
 
-  /* Quarterly Collection and Supply, current FY vs the one before — the "base vs
-     achieved" comparison management reads first. Quarters are Indian FY quarters
-     (Q1 Apr-Jun ... Q4 Jan-Mar), so Q1 of FY 2026-27 is Apr-Jun 2026. Supply is a
-     daily count, so a quarter's figure is its DAILY AVERAGE, not a sum — summing
-     copies over 90 days would produce a number nobody has a use for and would swing
-     purely on how many days happened to sync. */
+  /* Quarterly Collection and Supply, current period vs the one before — the "base vs
+     achieved" comparison management reads first.
+
+     The two metrics do NOT share a quarter definition, and mixing them up shifts every
+     bar by one quarter:
+       Collection   financial year, Apr-Mar   Q1 Apr-Jun ... Q4 Jan-Mar
+       Supply       calendar year,  Jan-Dec   Q1 Jan-Mar ... Q4 Oct-Dec
+     So Q1 of "FY 2026-27" collection is Apr-Jun 2026, while Q1 of "CY 2026" supply is
+     Jan-Mar 2026. Each series therefore gets its own window, its own year bucketing and
+     its own pair of labels.
+
+     Supply is a daily count, so a quarter's figure is its DAILY AVERAGE, not a sum —
+     summing copies over 90 days produces a number nobody has a use for and swings purely
+     on how many days happened to sync. */
   async function quarterly(asOn, unitScope) {
     const y = Number(asOn.slice(0, 4)), m = Number(asOn.slice(5, 7));
-    const fy = m >= 4 ? y : y - 1;                 // current FY start year
-    const span = fyy => ({ from: `${fyy}-04-01`, to: `${fyy + 1}-03-31` });
-    const cur = span(fy), base = span(fy - 1);
+    const fy = m >= 4 ? y : y - 1;                 // current FY start year (Apr-Mar)
+    const cy = y;                                  // current calendar year (Jan-Dec)
+    const fySpan = yy => ({ from: `${yy}-04-01`, to: `${yy + 1}-03-31` });
+    const cySpan = yy => ({ from: `${yy}-01-01`, to: `${yy}-12-31` });
+    const fyCur = fySpan(fy), fyBase = fySpan(fy - 1);
+    const cyCur = cySpan(cy), cyBase = cySpan(cy - 1);
     const uC = unitScope ? ' AND unit_code = ?' : '';
     const uP = unitScope ? [unitScope] : [];
 
@@ -107,12 +118,12 @@ module.exports = function installCommandCentre({ app, q }) {
       q(`SELECT YEAR(coll_date) y, QUARTER(coll_date) q, -COALESCE(SUM(amount),0) amt
          FROM agency_collection
          WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uC}
-         GROUP BY y, q`, [base.from, cur.to, ...uP]),
+         GROUP BY y, q`, [fyBase.from, fyCur.to, ...uP]),
       q(`SELECT YEAR(supply_date) y, QUARTER(supply_date) q,
                 SUM(sup_copy) copies, COUNT(DISTINCT supply_date) days
          FROM supply_data
          WHERE supply_date BETWEEN ? AND ?${uC}
-         GROUP BY y, q`, [base.from, cur.to, ...uP]),
+         GROUP BY y, q`, [cyBase.from, cyCur.to, ...uP]),
     ]);
     // Calendar quarter -> FY quarter. Calendar Q2 (Apr-Jun) is FY Q1, and calendar
     // Q1 (Jan-Mar) belongs to the PREVIOUS financial year's Q4.
@@ -125,15 +136,22 @@ module.exports = function installCommandCentre({ app, q }) {
       if (f.fy === fy) slot.current += N(r.amt); else if (f.fy === fy - 1) slot.base += N(r.amt);
     });
     sup.rows.forEach(r => {
-      const f = toFy(N(r.y), N(r.q));
-      const slot = supOut[f.q - 1]; if (!slot) return;
+      // Calendar quarters map straight through — no FY shift for supply.
+      const slot = supOut[N(r.q) - 1]; if (!slot) return;
       const avg = N(r.days) ? Math.round(N(r.copies) / N(r.days)) : 0;
-      if (f.fy === fy) slot.current += avg; else if (f.fy === fy - 1) slot.base += avg;
+      if (N(r.y) === cy) slot.current += avg; else if (N(r.y) === cy - 1) slot.base += avg;
     });
     return {
+      collection: collOut, supply: supOut,
+      collection_current: `FY ${fy}-${String(fy + 1).slice(2)}`,
+      collection_base: `FY ${fy - 1}-${String(fy).slice(2)}`,
+      collection_basis: 'Financial year · Apr–Mar',
+      supply_current: `CY ${cy}`,
+      supply_base: `CY ${cy - 1}`,
+      supply_basis: 'Calendar year · Jan–Dec',
+      // kept so anything still reading the old field names keeps working
       fy_current: `FY ${fy}-${String(fy + 1).slice(2)}`,
       fy_base: `FY ${fy - 1}-${String(fy).slice(2)}`,
-      collection: collOut, supply: supOut,
     };
   }
 
@@ -436,8 +454,7 @@ module.exports = function installCommandCentre({ app, q }) {
         totals,
         quarterly: qtr,
         states,
-        alerts: buildAlerts(states),
-        opportunities: buildOpportunities(states),
+        ...balance(buildAlerts(states), buildOpportunities(states)),
         market_share: buildMarketShare(states),
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
@@ -577,7 +594,21 @@ module.exports = function installCommandCentre({ app, q }) {
       }
     });
     const rank = { critical: 0, high: 1, medium: 2 };
-    return out.sort((a, b) => rank[a.priority] - rank[b.priority]).slice(0, 12);
+    return out.sort((a, b) => rank[a.priority] - rank[b.priority]);
+  }
+
+  /* The two panels sit side by side, so a 9-vs-2 split reads as a broken layout rather
+     than as a finding. Cap both at CARDS and, when both actually have something to say,
+     level them to the shorter list. If one side is genuinely empty — nothing is wrong,
+     or nothing is on offer — the other keeps its full list rather than being blanked. */
+  const CARDS = 8;
+  function balance(alerts, opps) {
+    let a = alerts.slice(0, CARDS), o = opps.slice(0, CARDS);
+    if (a.length && o.length) {
+      const n = Math.min(a.length, o.length);
+      a = a.slice(0, n); o = o.slice(0, n);
+    }
+    return { alerts: a, opportunities: o };
   }
 
   function buildOpportunities(states) {
@@ -616,16 +647,59 @@ module.exports = function installCommandCentre({ app, q }) {
       }
     });
     if (best && best.supply.growth_pct != null && best.supply.growth_pct > 0) {
+      // "only region growing" is a claim, not a phrase — check it before making it.
+      const growers = withSupply.filter(s => (s.supply.growth_pct ?? 0) > 0).length;
+      const sole = growers === 1;
       out.push({
         priority: 'low', state: best.key, state_name: best.name, type: 'Replicate what works',
-        title: `${best.name} is the only region growing (+${best.supply.growth_pct}%)`,
-        impact: `${cp(best.supply.diff)} copies added while others declined — its branch practice is worth copying.`,
+        title: sole
+          ? `${best.name} is the only region growing (+${best.supply.growth_pct}%)`
+          : `${best.name} is the fastest growing region (+${best.supply.growth_pct}%)`,
+        impact: `${cp(best.supply.diff)} copies added${sole ? ' while others declined' : `, ahead of the other ${withSupply.length - 1} regions`} — its branch practice is worth copying.`,
         action: 'Study its top branches and apply the same push elsewhere.',
         drill: { screen: 'supply_dash', state: best.key },
       });
     }
+
+    /* The rules above only fire on specific shapes (credit outrunning volume, a 60-90%
+       collection band, coverage already past 2%). In a month where none of them hit, the
+       panel would come up empty beside eight alerts — so these three read the same
+       numbers from the positive side. They are the standing opportunities, not filler:
+       dues actually coming down, volume actually rising, and the concentration of dues in
+       a small set of agencies, which is what makes a recovery drive worth running. */
+    states.forEach(s => {
+      if (s.os.growth_pct != null && s.os.growth_pct < 0 && s.os.diff < 0) {
+        out.push({
+          priority: 'medium', state: s.key, state_name: s.name, type: 'Working capital released',
+          title: `${s.name}: outstanding down ${Math.abs(s.os.growth_pct)}%`,
+          impact: `${inr(Math.abs(s.os.diff))} recovered since ${s.os.prev_label}, bringing dues to ${inr(s.os.current)}.`,
+          action: 'Hold the recovery discipline that produced this and extend it to the remaining critical agencies.',
+          drill: { screen: 'outstanding', state: s.key },
+        });
+      }
+      if (s.supply.growth_pct != null && s.supply.growth_pct > 0 && s.supply.diff > 0) {
+        out.push({
+          priority: 'medium', state: s.key, state_name: s.name, type: 'Volume momentum',
+          title: `${s.name}: supply up ${s.supply.growth_pct}%`,
+          impact: `${cp(s.supply.diff)} copies added per day — ${cp(s.supply.diff * 30)} a month if it holds.`,
+          action: 'Find the branches driving it and set the same push as the target elsewhere.',
+          drill: { screen: 'supply_dash', state: s.key },
+        });
+      }
+      if (s.os.critical_agencies > 0 && s.os.agencies > 0 && s.os.current > 0) {
+        const share = r1((s.os.critical_agencies / s.os.agencies) * 100);
+        out.push({
+          priority: 'low', state: s.key, state_name: s.name, type: 'Concentrated recovery',
+          title: `${s.name}: ${cp(s.os.critical_agencies)} agencies carry most of ${inr(s.os.current)}`,
+          impact: `Just ${share}% of the state's ${cp(s.os.agencies)} billed agencies are above ₹1 L — a short, targeted drive reaches the bulk of the dues.`,
+          action: 'Work the ₹1 L+ list branch by branch instead of a broad reminder run.',
+          drill: { screen: 'outstanding', state: s.key },
+        });
+      }
+    });
+
     const rank = { high: 0, medium: 1, low: 2 };
-    return out.sort((a, b) => rank[a.priority] - rank[b.priority]).slice(0, 10);
+    return out.sort((a, b) => rank[a.priority] - rank[b.priority]);
   }
 
   function buildMarketShare(states) {

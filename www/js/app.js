@@ -4495,18 +4495,24 @@ function _cmdViewNew() {
   <style>@media(max-width:1180px){.cc-strip{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
   @media(max-width:560px){.cc-strip{grid-template-columns:1fr!important}}</style>`;
 
-  // ── Quarterly base-vs-current charts ──
+  /* ── Quarterly base-vs-current charts ──
+     The two charts do NOT share a quarter definition: collection runs on the financial
+     year (Q1 Apr-Jun) and supply on the calendar year (Q1 Jan-Mar), so each states its
+     own basis under the title — otherwise the same "Q1" on two adjacent charts would be
+     read as the same three months. */
   const Q = d.quarterly;
+  const cBase = Q && (Q.collection_base || Q.fy_base), cCur = Q && (Q.collection_current || Q.fy_current);
+  const sBase = Q && (Q.supply_base || Q.fy_base), sCur = Q && (Q.supply_current || Q.fy_current);
   const charts = !Q ? '' : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
       <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Collection</div>
-      <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(Q.fy_base)} (Base) vs ${esc(Q.fy_current)} · receipts banked</div>
-      ${_ccQuarterChart(Q.collection, Q.fy_base, Q.fy_current, _ccINR, '#22c55e')}
+      <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(cBase)} (Base) vs ${esc(cCur)} · receipts banked · ${esc(Q.collection_basis || 'Financial year · Apr–Mar')}</div>
+      ${_ccQuarterChart(Q.collection, cBase, cCur, _ccINR, '#22c55e')}
     </div>
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
-      <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Supply</div>
-      <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(Q.fy_base)} (Base) vs ${esc(Q.fy_current)} · average copies per day</div>
-      ${_ccQuarterChart(Q.supply, Q.fy_base, Q.fy_current, v => _ccN(v) + ' cp', '#3b82f6')}
+      <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Supply (Net Paid)</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(sBase)} (Base) vs ${esc(sCur)} · average copies per day · ${esc(Q.supply_basis || 'Calendar year · Jan–Dec')}</div>
+      ${_ccQuarterChart(Q.supply, sBase, sCur, v => _ccN(v) + ' cp', '#3b82f6')}
     </div>
   </div>`;
 
