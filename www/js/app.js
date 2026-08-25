@@ -2411,10 +2411,22 @@ function _dcrATourPlanCheckTab() {
   if (d._err || d.detail) return picker + `<div style="color:var(--red);padding:20px 0">Could not load tour plan analysis.</div>`;
 
   const rows = d.results || [], s = d.summary || {};
-  if (!rows.length) return picker + `<div style="background:var(--surface-2);border-radius:10px;padding:26px;text-align:center">
-      <div style="font-size:15px;font-weight:700;margin-bottom:4px">No tour plan submitted for ${esc(date)}</div>
-      <div style="font-size:12px;color:var(--ink-2)">Nothing was filed for this date${_dcrA.unit_code ? ' in the selected unit' : ''}, so there is nothing to score.</div>
+  if (!rows.length) {
+    // "No plan" is a normal answer here, so point at where the plans actually are
+    // rather than dead-ending — otherwise this reads as a broken screen.
+    const ctx = d.context || {};
+    const dts = (ctx.recent_dates || []).filter(x => x.date !== date);
+    const uns = (ctx.units_on_date || []).filter(u => !_dcrA.unit_code || u.unit_code !== _dcrA.unit_code);
+    const chip = (label, sub, onclick) => `<button class="btn sm" onclick="${onclick}" style="margin:0 6px 6px 0">${esc(label)}<span style="color:var(--ink-2);font-weight:400"> · ${esc(sub)}</span></button>`;
+    return picker + `<div style="background:var(--surface-2);border-radius:10px;padding:24px 22px">
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px">No tour plan filed for ${esc(date)}</div>
+      <div style="font-size:12px;color:var(--ink-2);margin-bottom:${dts.length || uns.length ? '16px' : '0'}">Nothing was submitted${_dcrA.unit_code ? ' by this unit' : ''} on this date, so there is nothing to score. Not every unit files a plan every day.</div>
+      ${dts.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin-bottom:6px">Recent dates ${_dcrA.unit_code ? 'this unit' : 'anyone'} did file</div>
+        <div style="margin-bottom:14px">${dts.map(x => chip(x.date, x.planned + ' planned', `dcrATpDate('${x.date}')`)).join('')}</div>` : ''}
+      ${uns.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin-bottom:6px">Units that filed on ${esc(date)}</div>
+        <div>${uns.map(u => chip(u.unit_name || u.unit_code, u.planned + ' planned', `_dcrA.unit_code='${esc(u.unit_code).replace(/'/g,"\\'")}';_dcrA.tourPlanChk=null;_dcrA._loadTpc=false;render()`)).join('')}</div>` : ''}
     </div>`;
+  }
 
   const kpis = `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">
     ${[[s.executives, 'Executives Planned', 'var(--ink)'],

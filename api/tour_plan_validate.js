@@ -270,7 +270,28 @@ module.exports = function registerTourPlanValidate(ctx) {
         planned_visits: results.reduce((s, r) => s + r.submitted_count, 0),
         missed_priority: results.reduce((s, r) => s + r.missing.length, 0),
       };
-      res.json({ date, unit_code: unitCode, count: n, summary, results });
+      // Nothing filed is a normal, frequent answer here — tour-plan adoption is patchy,
+      // and a unit that plans on Saturday often files nothing on Monday. Rather than
+      // dead-end on "no plan", hand back where the plans actually are so the screen can
+      // offer them: recent dates this unit did file, and who filed on the chosen date.
+      let context = null;
+      if (!n) {
+        const [dates, units] = await Promise.all([
+          q(`SELECT visit_date, COUNT(*) planned FROM cir_tour_plan_dtl
+             WHERE COALESCE(cancel_status,'N') <> 'Y' AND visit_to_main_code IS NOT NULL
+               AND visit_date <= ? ${unitCode ? 'AND unit_code = ?' : ''}
+             GROUP BY visit_date ORDER BY visit_date DESC LIMIT 6`,
+            unitCode ? [date, unitCode] : [date]),
+          q(`SELECT unit_code, MAX(unit_name) unit_name, COUNT(*) planned FROM cir_tour_plan_dtl
+             WHERE visit_date = ? AND COALESCE(cancel_status,'N') <> 'Y' AND visit_to_main_code IS NOT NULL
+             GROUP BY unit_code ORDER BY planned DESC LIMIT 12`, [date]),
+        ]);
+        context = {
+          recent_dates: dates.rows.map(r => ({ date: String(r.visit_date).slice(0, 10), planned: Number(r.planned) || 0 })),
+          units_on_date: units.rows.map(r => ({ unit_code: r.unit_code, unit_name: r.unit_name, planned: Number(r.planned) || 0 })),
+        };
+      }
+      res.json({ date, unit_code: unitCode, count: n, summary, results, context });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 };
