@@ -502,14 +502,16 @@ module.exports = function installCommandCentre({ app, q }) {
         // Biggest dues in the state — the recovery worklist behind both alerts.
         const { rows } = await q(
           `SELECT ag_code, MAX(ag_name) ag_name, MAX(unit_code) unit_code, MAX(unit_name) unit_name,
-                  MAX(exec_name) exec_name, SUM(cl_amt) os, SUM(bill_amt) billed
+                  MAX(exec_name) exec_name, MAX(exec_code) exec_code, SUM(cl_amt) os, SUM(bill_amt) billed
            FROM agency_outstanding
            WHERE period_label='CURRENT' AND group_unit_name = ? AND cl_amt > 0
            GROUP BY ag_code ORDER BY os DESC LIMIT 15`, [osCode]);
         return res.json({ kpi, state: stateKey,
           columns: ['Agency', 'Branch', 'Executive', 'Outstanding'],
+          // exec_code is carried so the executive name is clickable, not just readable.
           rows: rows.map(r => ({ label: r.ag_name || r.ag_code, agcd: r.ag_code,
-            unit_code: r.unit_code, unit_name: r.unit_name, exec: r.exec_name, amount: N(r.os) })) });
+            unit_code: r.unit_code, unit_name: r.unit_name,
+            exec: r.exec_name, exec_code: r.exec_code, amount: N(r.os) })) });
       }
 
       if (kpi === 'dcr') {

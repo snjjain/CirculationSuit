@@ -4194,7 +4194,7 @@ window.ccFly = (kind, idx) => {
   const src = kind === 'alert' ? (st.data && st.data.alerts) : (st.data && st.data.opportunities);
   const item = (src || [])[idx];
   if (!item) return;
-  st.fly = { kind, item, rows: null, loading: true };
+  st.fly = { kind, item, rows: null, loading: true, stack: [] };
   render();
   const p = new URLSearchParams({ kpi: item.kpi || item.type || '', state: item.state || '' });
   if (st.asOn) p.set('as_on', st.asOn);
@@ -4206,33 +4206,135 @@ window.ccFly = (kind, idx) => {
 };
 window.ccFlyClose = () => { const st = _ccState(); st.fly = null; render(); };
 
-/* ── Second level of the flyout: the agency itself ──
-   A row in "Behind this number" is not the end of the trail — the question after
-   "which agency owes the most" is always "what is going on at that agency". Rather than
-   throwing the user out to the full Agency 360° screen and losing the alert they were
-   reading, the profile opens as a second panel in the same place, with Back returning to
-   the list. The full screen is still one button away for anyone who wants it. */
-window.ccFlyAgency = (unitCode, agcd, name) => {
+/* ── Panels beyond the alert list ──
+   A row in "Behind this number" is not the end of the trail: after "which agency owes the
+   most" comes "what is going on at that agency", and after that "how is the executive
+   carrying it doing". Rather than throwing the user out to a full screen and losing the
+   alert they were reading, each answer opens as another panel in the same place.
+
+   The panels form a STACK, not two flags — an agency can be reached from the executive's
+   book just as an executive is reached from the agency, so Back has to unwind whatever
+   path was actually taken. The full screens stay one button away. */
+function _ccFlyPush(panel, url, key) {
   const st = _ccState();
   if (!st.fly) return;
-  if (!unitCode || !agcd) { toast('Cannot open profile — agency code or unit missing'); return; }
-  st.fly.ag = { unitCode, agcd, name: name || agcd, data: null, loading: true, err: null };
+  st.fly.stack = st.fly.stack || [];
+  st.fly.stack.push(panel);
+  const depth = st.fly.stack.length;
   render();
-  fetch(`${api.base}/api/agency-profile/${encodeURIComponent(unitCode)}/${encodeURIComponent(agcd)}`, { headers: api.h() })
+  fetch(url, { headers: api.h() })
     .then(r => r.json())
     .then(d => {
-      const a = st.fly && st.fly.ag; if (!a || a.agcd !== agcd) return;
-      if (d && d.detail) a.err = String(d.detail); else a.data = d;
-      a.loading = false; if (S.screen === 'command') render();
+      const p = st.fly && (st.fly.stack || [])[depth - 1];
+      if (!p || p[key] !== panel[key]) return;      // user moved on before this landed
+      if (d && d.detail) p.err = String(d.detail); else p.data = d;
+      p.loading = false; if (S.screen === 'command') render();
     })
     .catch(e => {
-      const a = st.fly && st.fly.ag; if (!a || a.agcd !== agcd) return;
-      a.err = String(e && e.message || e); a.loading = false; if (S.screen === 'command') render();
+      const p = st.fly && (st.fly.stack || [])[depth - 1];
+      if (!p || p[key] !== panel[key]) return;
+      p.err = String(e && e.message || e); p.loading = false; if (S.screen === 'command') render();
     });
+}
+window.ccFlyAgency = (unitCode, agcd, name) => {
+  if (!_ccState().fly) return;
+  if (!unitCode || !agcd) { toast('Cannot open profile — agency code or unit missing'); return; }
+  _ccFlyPush({ kind: 'agency', unitCode, agcd, name: name || agcd, data: null, loading: true, err: null },
+    `${api.base}/api/agency-profile/${encodeURIComponent(unitCode)}/${encodeURIComponent(agcd)}`, 'agcd');
 };
-window.ccFlyBack = () => { const st = _ccState(); if (st.fly) st.fly.ag = null; render(); };
+window.ccFlyExec = (execCode, name) => {
+  if (!_ccState().fly) return;
+  if (!execCode) { toast('Cannot open performance — executive code missing'); return; }
+  _ccFlyPush({ kind: 'exec', execCode, name: name || execCode, data: null, loading: true, err: null },
+    `${api.base}/api/exec-perf/executive/${encodeURIComponent(execCode)}`, 'execCode');
+};
+window.ccFlyBack = () => {
+  const st = _ccState(); if (!st.fly || !st.fly.stack) return;
+  st.fly.stack.pop(); render();
+};
+window.ccFlyExecFull = () => {
+  const st = _ccState(); const x = _ccFlyTop(); if (!x || x.kind !== 'exec') return;
+  st.fly = null;
+  go('exec_perf');
+  // Drill after the screen switch so epDrillExec's render lands on the right view.
+  try { epDrillExec(x.execCode, x.name); } catch (_) {}
+};
+function _ccFlyTop() {
+  const st = _ccState(); const s = st.fly && st.fly.stack;
+  return s && s.length ? s[s.length - 1] : null;
+}
+
+/* The executive panel: their whole book in one column — coverage, money, hierarchy and
+   the agencies they carry, each of which drills back down into the agency panel. */
+function _ccFlyExecPanel(x) {
+  if (x.loading) return `<div style="padding:26px;text-align:center;color:#64748b;font-size:13px">Loading ${esc(x.name)}…</div>`;
+  if (x.err || !x.data) return `<div style="padding:20px;color:#b91c1c;font-size:13px">Could not load this executive.<div style="color:#64748b;font-size:11.5px;margin-top:5px">${esc(x.err || 'No data returned.')}</div></div>`;
+  const d = x.data, e = d.exec || {}, ags = d.agencies || [];
+  const q = v => String(v == null ? '' : v).replace(/'/g, "\\'");
+  const kpi = (label, val, tone) => `<div style="background:#f8fafc;border:1px solid #eef2f7;border-radius:9px;padding:8px 10px">
+    <div style="font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8">${label}</div>
+    <div style="font-size:15px;font-weight:800;color:${tone || '#0f172a'};margin-top:2px;font-variant-numeric:tabular-nums">${val}</div>
+  </div>`;
+  const fact = (k, v) => v ? `<div style="display:flex;gap:8px;font-size:11.5px;line-height:1.8">
+    <span style="flex:none;width:96px;color:#94a3b8">${k}</span><span style="color:#0f172a">${esc(String(v))}</span></div>` : '';
+  const sec = (title, inner) => inner ? `<div style="margin-top:14px">
+    <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:6px">${title}</div>${inner}</div>` : '';
+
+  // Worst dues first — that is what an executive panel opened from an alert is for.
+  const top = ags.slice().sort((a, b) => (b.total_outstanding || 0) - (a.total_outstanding || 0)).slice(0, 12);
+  const agTable = !top.length ? '' : `<table style="width:100%;border-collapse:collapse;font-size:11.5px">
+    <thead><tr style="color:#94a3b8;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em">
+      <th style="text-align:left;padding:4px 6px;font-weight:700">Agency</th>
+      <th style="text-align:right;padding:4px 6px;font-weight:700">Supply</th>
+      <th style="text-align:right;padding:4px 6px;font-weight:700">Coll %</th>
+      <th style="text-align:right;padding:4px 6px;font-weight:700">Outstanding</th>
+      <th style="text-align:right;padding:4px 6px;font-weight:700">Visits</th>
+    </tr></thead><tbody>${top.map(a => `<tr onclick="ccFlyAgency('${q(a.unit_code)}','${q(a.ag_code)}','${q(a.ag_name || '')}')"
+      title="Open agency profile" style="cursor:pointer;border-top:1px solid #f1f5f9"
+      onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
+      <td style="padding:5px 6px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b style="color:#1e3a8a">${esc(a.ag_name || a.ag_code)}</b>
+        <div style="color:#94a3b8;font-size:10px">${esc(a.unit_name || a.unit_code || '')}${a.status && a.status !== 'Active' ? ' · ' + esc(a.status) : ''}</div></td>
+      <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums">${_apFmtN(a.total_supply)}</td>
+      <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums">${a.collection_pct == null ? '—' : a.collection_pct + '%'}</td>
+      <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums;color:${(a.total_outstanding || 0) > 0 ? '#b91c1c' : '#0f172a'}"><b>${_apFmtC(a.total_outstanding)}</b></td>
+      <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums">${_apFmtN(a.visit_count)}</td>
+    </tr>`).join('')}</tbody></table>
+    ${ags.length > top.length ? `<div style="font-size:10.5px;color:#94a3b8;margin-top:5px">Showing the ${top.length} largest dues of ${_apFmtN(ags.length)} agencies.</div>` : ''}`;
+
+  const chain = [
+    ['Edition Incharge', e.edtn_incharge_name], ['Circulation Incharge', e.circ_incharge_name],
+    ['Zonal Head', e.zonal_head_name], ['VP Circulation', e.vp_circulation_name],
+  ].filter(r => r[1]).map(r => fact(r[0], r[1])).join('');
+
+  const visited = N_(e.agencies_visited), book = N_(e.agency_count);
+  const cov = book ? Math.round((visited / book) * 1000) / 10 : null;
+
+  return `<div>
+    <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:9px">
+      ${e.exec_designation ? `<span style="font-size:10.5px;font-weight:800;color:#1e3a8a;background:#eef4ff;border-radius:9px;padding:3px 10px">${esc(e.exec_designation)}</span>` : ''}
+      <span style="font-size:10.5px;color:#64748b">${esc(e.executive_code || '')}${e.state_name ? ' · ' + esc(e.state_name) : ''}</span>
+    </div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:9px">Window: ${esc(d.from || '')} → ${esc(d.to || '')}</div>
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+      ${kpi('Agencies', _apFmtN(e.agency_count))}
+      ${/* window TOTAL, unlike the Command Centre cards which are copies per day */ ''}
+      ${kpi('Supply (total)', _apFmtN(e.total_supply) + ' cp')}
+      ${kpi('Collection', _apFmtC(e.total_collection))}
+      ${kpi('Collection %', e.collection_pct == null ? '—' : e.collection_pct + '%')}
+      ${kpi('Outstanding', _apFmtC(e.total_outstanding), (e.total_outstanding || 0) > 0 ? '#b91c1c' : '#0f172a')}
+      ${kpi('Visits', _apFmtN(e.total_visits))}
+      ${kpi('Active days', _apFmtN(e.active_days))}
+      ${kpi('Agencies visited', _apFmtN(e.agencies_visited))}
+      ${kpi('Coverage', cov == null ? '—' : cov + '%', cov != null && cov < 20 ? '#b91c1c' : '#15803d')}
+    </div>
+    ${sec('Posting', `<div>${fact('Branch', e.units)}${fact('State', e.state_name)}</div>`)}
+    ${sec('Reports to', chain)}
+    ${sec('Agencies by dues', agTable)}
+  </div>`;
+}
+function N_(v) { return Number(v) || 0; }
 window.ccFlyFull = () => {
-  const st = _ccState(); const a = st.fly && st.fly.ag; if (!a) return;
+  const st = _ccState(); const a = _ccFlyTop(); if (!a || a.kind !== 'agency') return;
   st.fly = null; window.openAgencyProfile(a.unitCode, a.agcd, a.name);
 };
 // Branch rows drill the matching dashboard already filtered to that branch.
@@ -4259,8 +4361,11 @@ function _ccFlyAgencyPanel(a) {
     <div style="font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8">${label}</div>
     <div style="font-size:15px;font-weight:800;color:${tone || '#0f172a'};margin-top:2px;font-variant-numeric:tabular-nums">${val}</div>
   </div>`;
-  const fact = (k, v) => v ? `<div style="display:flex;gap:8px;font-size:11.5px;line-height:1.8">
-    <span style="flex:none;width:76px;color:#94a3b8">${k}</span><span style="color:#0f172a">${esc(String(v))}</span></div>` : '';
+  const qs = v => String(v == null ? '' : v).replace(/'/g, "\\'");
+  const fact = (k, v, click) => v ? `<div style="display:flex;gap:8px;font-size:11.5px;line-height:1.8">
+    <span style="flex:none;width:76px;color:#94a3b8">${k}</span>${click
+      ? `<a onclick="${click}" title="Open executive performance" style="cursor:pointer;color:#1e3a8a;text-decoration:underline;text-underline-offset:2px">${esc(String(v))}</a>`
+      : `<span style="color:#0f172a">${esc(String(v))}</span>`}</div>` : '';
   const sec = (title, inner) => inner ? `<div style="margin-top:14px">
     <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:6px">${title}</div>${inner}</div>` : '';
   const miniTable = (cols, rows) => !rows.length ? '' : `<table style="width:100%;border-collapse:collapse;font-size:11.5px">
@@ -4301,7 +4406,7 @@ function _ccFlyAgencyPanel(a) {
       ${fact('Code', id.agcd)}${fact('Branch', id.unit_name || id.unit_code)}
       ${fact('District', id.dist_name)}${fact('City', id.city_name)}
       ${fact('Station', id.station_name || id.station_code)}${fact('Address', id.address)}
-      ${fact('Mobile', id.mobile_no1)}${fact('Executive', id.exec_name)}
+      ${fact('Mobile', id.mobile_no1)}${fact('Executive', id.exec_name, id.exec_code ? `ccFlyExec('${qs(id.exec_code)}','${qs(id.exec_name)}')` : '')}
       ${fact('Since', id.supply_start_dt)}
     </div>`)}
     ${sec('AI brief', brief ? `<div style="font-size:12px;color:#334155;line-height:1.65;background:#f8fafc;border-radius:8px;padding:9px 11px">${esc(brief)}</div>` : '')}
@@ -4341,16 +4446,49 @@ function _ccFlyout() {
             const act = isAg
               ? `ccFlyAgency('${q(r.unit_code)}','${q(r.agcd)}','${q(r.label || '')}')`
               : r.unit_code ? `ccFlyUnit('${q((it.drill && it.drill.screen) || 'supply_dash')}','${q(it.state || '')}','${q(r.unit_code)}')` : '';
+            // The executive cell is its own drill — stop the click reaching the row.
+            const execCell = r.exec_code && r.exec
+              ? `<a onclick="event.stopPropagation();ccFlyExec('${q(r.exec_code)}','${q(r.exec)}')" title="Open executive performance"
+                   style="cursor:pointer;color:#1e3a8a;text-decoration:underline;text-underline-offset:2px">${esc(r.exec)}</a>`
+              : esc(r.exec || '—');
             const cells = r.amount != null
-              ? [`<b${act ? ' style="color:#1e3a8a"' : ''}>${esc(r.label)}</b>`, esc(r.unit_name || r.unit_code || ''), esc(r.exec || '—'), `<b style="color:#b91c1c">${money(r.amount)}</b>`]
+              ? [`<b${act ? ' style="color:#1e3a8a"' : ''}>${esc(r.label)}</b>`, esc(r.unit_name || r.unit_code || ''), execCell, `<b style="color:#b91c1c">${money(r.amount)}</b>`]
               : [`<b${act ? ' style="color:#1e3a8a"' : ''}>${esc(r.label)}</b>`, num(r.a), num(r.b),
                  `<b style="color:${r.delta < 0 ? '#b91c1c' : '#15803d'}">${r.delta > 0 ? '+' : ''}${num(r.delta)}</b>`];
             return `<tr ${act ? `onclick="${act}" title="${isAg ? 'Open agency profile' : 'Open branch'}" style="cursor:pointer;border-top:1px solid #eef2f7" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''"` : 'style="border-top:1px solid #eef2f7"'}>${cells.map((c, i) =>
               `<td style="padding:7px 8px;text-align:${i === 0 ? 'left' : 'right'};${i === 0 ? 'max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' : 'font-variant-numeric:tabular-nums'}">${c}</td>`).join('')}</tr>`;
           }).join('')}</tbody></table>`;
 
-  // ── Second level: an agency profile replaces the alert content in the same panel ──
-  const ag = f.ag;
+  /* ── Anything pushed onto the stack renders instead of the alert list ──
+     Only the top of the stack is drawn; Back pops one level, so the path taken to get
+     here — agency → executive → another agency → … — unwinds in the order it was walked. */
+  const top = _ccFlyTop();
+  const ex = top && top.kind === 'exec' ? top : null;
+  if (ex) {
+    return `<div onclick="ccFlyClose()" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:300"></div>
+    <aside role="dialog" aria-modal="true" style="position:fixed;top:0;right:0;bottom:0;width:min(560px,94vw);background:#fff;z-index:301;box-shadow:-8px 0 30px rgba(15,23,42,.18);display:flex;flex-direction:column">
+      <div style="border-top:4px solid #7c3aed;padding:12px 18px;border-bottom:1px solid #e2e8f0">
+        <div style="display:flex;align-items:flex-start;gap:10px">
+          <button onclick="ccFlyBack()" aria-label="Back"
+            style="flex:none;height:28px;padding:0 10px;border-radius:8px;border:1px solid #e2e8f0;background:#fff;color:#475569;font-size:12px;cursor:pointer">← Back</button>
+          <div style="min-width:0;flex:1">
+            <div style="font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#7c3aed">Executive Performance</div>
+            <div style="font-size:16px;font-weight:800;color:#0f172a;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ex.name)}</div>
+          </div>
+          <button onclick="ccFlyClose()" aria-label="Close"
+            style="flex:none;width:30px;height:30px;border-radius:8px;border:1px solid #e2e8f0;background:#fff;color:#64748b;font-size:17px;line-height:1;cursor:pointer">×</button>
+        </div>
+      </div>
+      <div style="flex:1;overflow:auto;padding:13px 16px">${_ccFlyExecPanel(ex)}</div>
+      <div style="border-top:1px solid #e2e8f0;padding:11px 16px;display:flex;gap:9px;justify-content:flex-end">
+        <button onclick="ccFlyBack()" style="padding:8px 15px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font-size:12.5px;cursor:pointer">Back</button>
+        <button onclick="ccFlyExecFull()" style="padding:8px 15px;border:none;border-radius:8px;background:#7c3aed;color:#fff;font-size:12.5px;font-weight:600;cursor:pointer">Open full performance →</button>
+      </div>
+    </aside>`;
+  }
+
+  // ── An agency profile, replacing the alert content in the same panel ──
+  const ag = top && top.kind === 'agency' ? top : null;
   if (ag) {
     return `<div onclick="ccFlyClose()" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:300"></div>
     <aside role="dialog" aria-modal="true" style="position:fixed;top:0;right:0;bottom:0;width:min(560px,94vw);background:#fff;z-index:301;box-shadow:-8px 0 30px rgba(15,23,42,.18);display:flex;flex-direction:column">
