@@ -4278,12 +4278,34 @@ function _ccQuarterChart(rows, baseLabel, curLabel, fmt, color) {
       <rect x="${x + bw + 0.4}" y="${100 - hc}" width="${bw}" height="${hc}" fill="${color}" rx="0.6"></rect>
     </g>`;
   }).join('');
+  /* The hover layer is plain HTML, not SVG <title>: the chart is drawn with
+     preserveAspectRatio="none" (bars stretch to fill the card), so any text inside the
+     SVG would stretch with it. One transparent column per quarter sits over the bars and
+     reveals a tooltip on hover — no JS, and the text stays crisp. */
+  const delta = (b, c) => {
+    b = Number(b) || 0; c = Number(c) || 0;
+    if (!b || !c) return '';
+    const p = (c - b) / b * 100;
+    const up = p >= 0;
+    return `<div class="ccq-tip-d" style="color:${up ? '#15803d' : '#b91c1c'}">${up ? '▲' : '▼'} ${Math.abs(p).toFixed(1)}% vs base</div>`;
+  };
+  const cols = rows.map(r => `<div class="ccq-col">
+    <div class="ccq-tip">
+      <div class="ccq-tip-q">${esc(r.q)}</div>
+      <div class="ccq-tip-r"><i style="background:#cbd5e1"></i><span>${esc(baseLabel)}</span><b>${fmt(r.base)}</b></div>
+      <div class="ccq-tip-r"><i style="background:${color}"></i><span>${esc(curLabel)}</span><b>${fmt(r.current)}</b></div>
+      ${delta(r.base, r.current)}
+    </div>
+  </div>`).join('');
   return `<div>
     <div style="display:flex;gap:14px;font-size:11px;color:#64748b;margin-bottom:7px">
       <span><i style="display:inline-block;width:9px;height:9px;background:#cbd5e1;border-radius:2px;margin-right:5px"></i>${esc(baseLabel)}</span>
       <span><i style="display:inline-block;width:9px;height:9px;background:${color};border-radius:2px;margin-right:5px"></i>${esc(curLabel)}</span>
     </div>
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:150px;display:block">${bars}</svg>
+    <div class="ccq-wrap">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:150px;display:block">${bars}</svg>
+      <div class="ccq-hover" style="grid-template-columns:repeat(${rows.length},1fr)">${cols}</div>
+    </div>
     <div style="display:grid;grid-template-columns:repeat(${rows.length},1fr);margin-top:5px">
       ${rows.map(r => `<div style="text-align:center">
         <div style="font-size:11px;font-weight:700;color:#0f172a">${r.q}</div>
