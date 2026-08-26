@@ -981,57 +981,50 @@ module.exports = function installCommandCentre({ app, q }) {
 
   /* ── CI Hawker Detail — full hawker list with supply + market share ─────────
      Called from the Executive Performance full-page view for CI execs.
-     Returns every hawker in the CI's centre(s), their today/MTD supply from
-     hawker_supply, and market-share data from competitor_data. */
+     Uses hawker_supply.center_incharge as source of truth — avoids stale hawker_master
+     data from Oracle sync (no active-status filter). */
   app.get('/api/command/ci-hawker-detail', async (req, res) => {
     try {
       const execCode = String(req.query.exec_code || '').trim();
       if (!execCode) return res.status(400).json({ detail: 'exec_code required' });
-      let unitCode = String(req.query.unit_code || '').trim();
+      const unitCode = String(req.query.unit_code || '').trim();
       const { asOn, prev } = await resolveDates(req.query.as_on, req.query.compare);
       const win = resolveRangeWindow(asOn, req.query.range || 'mtd');
 
-      // unit_code must be provided (passed from frontend via ccFlyExecFull → epDrillExec).
-      // Without it, we cannot reliably scope to the correct unit.
       if (!unitCode) {
         return res.json({ exec_code: execCode, unit_code: '', as_on: asOn, hawkers: [], totals: {},
-          _info: 'unit_code required — navigate via Command Centre flyout' });
+          _info: 'unit_code required' });
       }
 
-      const ucWhere = ' AND loc_id = ?';
-      const ucP    = [unitCode];
-
-      // 2. Get distinct hawkers from hawker_master scoped to this unit.
-      //    unit_code filter excludes dirty rows with the same center_incharge_code in other units.
-      const { rows: hwkRows } = await q(
-        `SELECT hawker_id, hawker_name, mobile_no, catagory, hawker_center_code, hawker_center_name
-         FROM hawker_master
-         WHERE center_incharge_code = ? AND unit_code = ?
-         ORDER BY hawker_center_name, hawker_name`,
-        [execCode, unitCode]);
-
-      if (!hwkRows.length) {
-        return res.json({ exec_code: execCode, unit_code: unitCode, as_on: asOn, hawkers: [], totals: {} });
-      }
-
-      const hwkIds = hwkRows.map(r => r.hawker_id);
-      const IN_PH  = hwkIds.map(() => '?').join(',');
-
-      // 3. Supply today + MTD per hawker (uses hawker_id IN — fast indexed query)
+      // Step 1: hawker IDs + supply from hawker_supply (authoritative — idx_hs_ci on center_incharge)
       const { rows: supRows } = await q(
-        `SELECT hawker_id,
+        `SELECT hs.hawker_id,
                 SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) today_cp,
                 SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prev_cp,
                 SUM(CASE WHEN supply_date BETWEEN ? AND ? THEN sup_copies ELSE 0 END) mtd_cp
-         FROM hawker_supply
-         WHERE hawker_id IN (${IN_PH})${ucWhere}
-           AND supply_date BETWEEN ? AND ?
-         GROUP BY hawker_id`,
-        [asOn, prev, win.from, asOn, ...hwkIds, ...ucP, win.from, asOn]);
+         FROM hawker_supply hs
+         WHERE hs.center_incharge = ? AND hs.loc_id = ?
+           AND hs.supply_date BETWEEN ? AND ?
+         GROUP BY hs.hawker_id`,
+        [asOn, prev, win.from, asOn, execCode, unitCode, win.from, asOn]);
 
-      const supMap  = {}; supRows.forEach(r => { supMap[r.hawker_id] = r; });
+      if (!supRows.length) {
+        return res.json({ exec_code: execCode, unit_code: unitCode, as_on: asOn, hawkers: [], totals: {} });
+      }
 
-      // 4. Latest competitor/market share data per hawker (most recent period ≤ current month)
+      const hwkIds = supRows.map(r => r.hawker_id);
+      const IN_PH  = hwkIds.map(() => '?').join(',');
+      const supMap = {};
+      supRows.forEach(r => { supMap[r.hawker_id] = r; });
+
+      // Step 2: metadata from hawker_master (name, centre, category)
+      const { rows: hmRows } = await q(
+        `SELECT hawker_id, hawker_name, mobile_no, catagory, hawker_center_code, hawker_center_name
+         FROM hawker_master WHERE hawker_id IN (${IN_PH})`, hwkIds);
+      const hmMap = {};
+      hmRows.forEach(r => { hmMap[r.hawker_id] = r; });
+
+      // Step 3: competitor / market-share data
       const curPeriod = asOn.slice(0, 7);
       const { rows: compRows } = await q(
         `SELECT cd.agent_code hawker_id, cd.period,
@@ -1054,76 +1047,73 @@ module.exports = function installCommandCentre({ app, q }) {
          WHERE cd.comp_type = 'hawker'`,
         [...hwkIds, curPeriod]);
 
-      const compMap = {}; compRows.forEach(r => { compMap[r.hawker_id] = r; });
+      const compMap = {};
+      compRows.forEach(r => { compMap[r.hawker_id] = r; });
 
       let totToday = 0, totMtd = 0, totDbAll = 0, totPatrika = 0;
 
-      const hawkers = hwkRows.map(h => {
-        const s = supMap[h.hawker_id] || {};
-        const c = compMap[h.hawker_id] || {};
-        const todayCp  = N(s.today_cp);
-        const prevCp   = N(s.prev_cp);
-        const mtdCp    = N(s.mtd_cp);
-        // Use our_supply from competitor_data; fall back to mtd_cp when 0/null (upload left blank)
-        const hasComp  = !!c.period;
-        const patrikaCp= hasComp ? (c.patrika_cp > 0 ? N(c.patrika_cp) : mtdCp) : 0;
-        const compTotal= N(c.comp_total);
-        const dbTotal  = hasComp ? patrikaCp + compTotal : 0;
-        const msPct    = (hasComp && dbTotal > 0) ? r1(patrikaCp / dbTotal * 100) : null;
+      const hawkers = supRows
+        .sort((a, b) => {
+          const ha = hmMap[a.hawker_id] || {}, hb = hmMap[b.hawker_id] || {};
+          return (ha.hawker_center_name || '').localeCompare(hb.hawker_center_name || '')
+            || (ha.hawker_name || '').localeCompare(hb.hawker_name || '');
+        })
+        .map(s => {
+          const h = hmMap[s.hawker_id] || {};
+          const c = compMap[s.hawker_id] || {};
+          const todayCp   = N(s.today_cp);
+          const prevCp    = N(s.prev_cp);
+          const mtdCp     = N(s.mtd_cp);
+          const hasComp   = !!c.period;
+          const patrikaCp = hasComp ? (c.patrika_cp > 0 ? N(c.patrika_cp) : mtdCp) : 0;
+          const compTotal = N(c.comp_total);
+          const dbTotal   = hasComp ? patrikaCp + compTotal : 0;
+          const msPct     = (hasComp && dbTotal > 0) ? r1(patrikaCp / dbTotal * 100) : null;
 
-        totToday   += todayCp;
-        totMtd     += mtdCp;
-        if (hasComp && dbTotal > 0) { totDbAll += dbTotal; totPatrika += patrikaCp; }
+          totToday += todayCp; totMtd += mtdCp;
+          if (hasComp && dbTotal > 0) { totDbAll += dbTotal; totPatrika += patrikaCp; }
 
-        const comps = [1,2,3,4,5].map(i => ({
-          name: c[`comp${i}_name`] || null,
-          copies: N(c[`comp${i}_supply`]),
-        })).filter(x => x.name && x.copies > 0);
+          const comps = [1,2,3,4,5].map(i => ({
+            name: c[`comp${i}_name`] || null, copies: N(c[`comp${i}_supply`]),
+          })).filter(x => x.name && x.copies > 0);
 
-        return {
-          hawker_id:    h.hawker_id,
-          hawker_name:  h.hawker_name,
-          mobile:       h.mobile_no,
-          category:     h.catagory,
-          center_code:  h.hawker_center_code,
-          center_name:  h.hawker_center_name,
-          today_cp:     todayCp,
-          prev_cp:      prevCp,
-          mtd_cp:       mtdCp,
-          growth_pct:   prevCp > 0 ? r1((todayCp - prevCp) / prevCp * 100) : null,
-          // Market share
-          ms_period:    c.period || null,
-          patrika_cp:   hasComp ? patrikaCp : null,
-          db_total:     hasComp && dbTotal > 0 ? dbTotal : null,
-          ms_pct:       msPct,
-          competitors:  comps,
-        };
-      });
-
-      const totalMs = totDbAll > 0 ? r1(totPatrika / totDbAll * 100) : null;
+          return {
+            hawker_id:   s.hawker_id,
+            hawker_name: h.hawker_name || s.hawker_id,
+            mobile:      h.mobile_no,
+            category:    h.catagory,
+            center_code: h.hawker_center_code,
+            center_name: h.hawker_center_name,
+            today_cp:    todayCp,
+            prev_cp:     prevCp,
+            mtd_cp:      mtdCp,
+            growth_pct:  prevCp > 0 ? r1((todayCp - prevCp) / prevCp * 100) : null,
+            ms_period:   c.period || null,
+            patrika_cp:  hasComp ? patrikaCp : null,
+            db_total:    hasComp && dbTotal > 0 ? dbTotal : null,
+            ms_pct:      msPct,
+            competitors: comps,
+          };
+        });
 
       res.json({
-        exec_code:  execCode,
-        unit_code:  unitCode,
-        as_on:      asOn,
-        range_label: win.label,
+        exec_code: execCode, unit_code: unitCode, as_on: asOn, range_label: win.label,
         hawkers,
         totals: {
           hawker_count: hawkers.length,
-          today_cp:     totToday,
-          mtd_cp:       totMtd,
-          db_total:     totDbAll || null,
-          patrika_cp:   totPatrika || null,
-          ms_pct:       totalMs,
+          today_cp:     totToday, mtd_cp: totMtd,
+          db_total:     totDbAll || null, patrika_cp: totPatrika || null,
+          ms_pct:       totDbAll > 0 ? r1(totPatrika / totDbAll * 100) : null,
         },
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
-  /* ── CI Centre summary — fast, no unit_code required ─────────────────────────
-     Groups hawker_master by centre, returns hawker counts + supply totals.
-     Used as the first step in CI performance page: show centres, then on click
-     load ci-hawker-detail for the selected centre. */
+  /* ── CI Centre summary ────────────────────────────────────────────────────────
+     Uses hawker_supply.center_incharge as source of truth (actual deliveries),
+     NOT hawker_master.center_incharge_code which can have stale/historical data
+     from Oracle due to hawker reassignments without a status filter in the sync.
+     idx_hs_ci index on hawker_supply(center_incharge) makes this fast at 10M+ rows. */
   app.get('/api/command/ci-centers', async (req, res) => {
     try {
       const execCode = String(req.query.exec_code || '').trim();
@@ -1131,46 +1121,47 @@ module.exports = function installCommandCentre({ app, q }) {
       const { asOn, prev } = await resolveDates(req.query.as_on, req.query.compare);
       const win = resolveRangeWindow(asOn, req.query.range || 'mtd');
 
-      // All hawkers for this CI (fast — indexed on center_incharge_code)
-      const { rows: hwkRows } = await q(
-        `SELECT hawker_id, unit_code, hawker_center_code, hawker_center_name
-         FROM hawker_master
-         WHERE center_incharge_code = ?
-         ORDER BY unit_code, hawker_center_name`,
-        [execCode]);
-
-      if (!hwkRows.length) return res.json({ exec_code: execCode, as_on: asOn, centers: [] });
-
-      // Group by (unit_code, center_code)
-      const centerMap = {};
-      hwkRows.forEach(h => {
-        const key = `${h.unit_code}|${h.hawker_center_code}`;
-        if (!centerMap[key]) centerMap[key] = {
-          unit_code: h.unit_code, center_code: h.hawker_center_code,
-          center_name: h.hawker_center_name, hawker_ids: [],
-        };
-        centerMap[key].hawker_ids.push(h.hawker_id);
-      });
-
-      const centers = Object.values(centerMap);
-      const allIds  = hwkRows.map(r => r.hawker_id);
-      const IN_PH   = allIds.map(() => '?').join(',');
-
-      // Supply totals for all hawkers in one pass (hawker_id IN — fast indexed query)
+      // Step 1: get hawker IDs + supply totals from hawker_supply (authoritative CI mapping)
       const { rows: supRows } = await q(
-        `SELECT hawker_id,
+        `SELECT hs.hawker_id, hs.loc_id AS unit_code,
                 SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) today_cp,
                 SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prev_cp,
                 SUM(CASE WHEN supply_date BETWEEN ? AND ? THEN sup_copies ELSE 0 END) mtd_cp
-         FROM hawker_supply
-         WHERE hawker_id IN (${IN_PH}) AND supply_date BETWEEN ? AND ?
-         GROUP BY hawker_id`,
-        [asOn, prev, win.from, asOn, ...allIds, win.from, asOn]);
+         FROM hawker_supply hs
+         WHERE hs.center_incharge = ?
+           AND hs.supply_date BETWEEN ? AND ?
+         GROUP BY hs.hawker_id, hs.loc_id`,
+        [asOn, prev, win.from, asOn, execCode, win.from, asOn]);
 
+      if (!supRows.length) return res.json({ exec_code: execCode, as_on: asOn, centers: [] });
+
+      // Step 2: get centre metadata from hawker_master by hawker_id (fast, indexed)
+      const hwkIds = supRows.map(r => r.hawker_id);
+      const IN_PH  = hwkIds.map(() => '?').join(',');
+      const { rows: hmRows } = await q(
+        `SELECT hawker_id, hawker_center_code, hawker_center_name
+         FROM hawker_master WHERE hawker_id IN (${IN_PH})`, hwkIds);
+      const hmMap = {};
+      hmRows.forEach(r => { hmMap[r.hawker_id] = r; });
+
+      // Step 3: group by (unit_code from supply, center from master) + aggregate supply
       const supMap = {};
       supRows.forEach(r => { supMap[r.hawker_id] = r; });
 
-      const result = centers.map(c => {
+      const centerMap = {};
+      supRows.forEach(r => {
+        const hm  = hmMap[r.hawker_id] || {};
+        const key = `${r.unit_code}|${hm.hawker_center_code || '?'}`;
+        if (!centerMap[key]) centerMap[key] = {
+          unit_code:   r.unit_code,
+          center_code: hm.hawker_center_code || '?',
+          center_name: hm.hawker_center_name || '?',
+          hawker_ids:  [],
+        };
+        centerMap[key].hawker_ids.push(r.hawker_id);
+      });
+
+      const result = Object.values(centerMap).map(c => {
         let today = 0, prevCp = 0, mtd = 0;
         c.hawker_ids.forEach(id => {
           const s = supMap[id] || {};
@@ -1188,7 +1179,7 @@ module.exports = function installCommandCentre({ app, q }) {
           mtd_cp:       mtd    || null,
           growth_pct:   prevCp > 0 ? r1((today - prevCp) / prevCp * 100) : null,
         };
-      });
+      }).sort((a, b) => (b.mtd_cp || 0) - (a.mtd_cp || 0));
 
       res.json({ exec_code: execCode, as_on: asOn, centers: result });
     } catch (e) { res.status(500).json({ detail: String(e) }); }

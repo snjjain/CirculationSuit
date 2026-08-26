@@ -11,7 +11,7 @@
  *
  * Usage:
  *   node api/oracle_dcr_sync.js                          # last 2 days
- *   node api/oracle_dcr_sync.js --backfill               # Jan 2025 → today (reverse)
+ *   node api/oracle_dcr_sync.js --backfill               # 2 years back → today (newest-first)
  *   node api/oracle_dcr_sync.js --from 2026-07-01 --to 2026-07-31
  */
 
