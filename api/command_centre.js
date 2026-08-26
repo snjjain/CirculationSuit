@@ -868,6 +868,13 @@ module.exports = function installCommandCentre({ app, q }) {
       const ucWhereCa = unitCode ? ' AND unit_code = ?' : '';
       const ucPCa    = unitCode ? [unitCode] : [];
 
+      // execCode is person_code (e.g. E01827). dcr_center_attendance uses employee_code (e.g. R02073).
+      // Resolve the Oracle employee_code from hierarchy_master.
+      const { rows: hmRows } = await q(
+        `SELECT employee_code FROM hierarchy_master WHERE person_code = ? AND is_active = 1 LIMIT 1`,
+        [execCode]);
+      const empCode = hmRows[0]?.employee_code || execCode; // fallback to execCode if not found
+
       const [hawker, attnSummary, attnRows, receipt, survey] = await Promise.all([
         q(`SELECT loc_id unit_code, MAX(center_incharge_name) exec_name,
                   SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) cur,
@@ -882,7 +889,7 @@ module.exports = function installCommandCentre({ app, q }) {
            GROUP BY loc_id`,
           [asOn, prev, asOn, asOn, asOn, asOn, execCode, ...ucP, asOn, prev]),
 
-        // Center attendance summary: attn_type A=attendance, V=visit
+        // Center attendance summary: attn_type A=attendance, V=visit (use empCode from hierarchy_master)
         q(`SELECT
              COUNT(*) total,
              COUNT(DISTINCT attn_date) active_days,
@@ -890,7 +897,7 @@ module.exports = function installCommandCentre({ app, q }) {
              SUM(CASE WHEN attn_type = 'V' THEN 1 ELSE 0 END) visit_count
            FROM dcr_center_attendance
            WHERE emp_code = ? AND attn_date BETWEEN ? AND ?${ucWhereCa}`,
-          [execCode, win.from, win.to, ...ucPCa]),
+          [empCode, win.from, win.to, ...ucPCa]),
 
         // Recent attendance/visit rows with remarks (limit 15)
         q(`SELECT attn_date, attn_type, center_name, location_name, present_rmrk, closed_rmrk,
@@ -899,7 +906,7 @@ module.exports = function installCommandCentre({ app, q }) {
            WHERE emp_code = ? AND attn_date BETWEEN ? AND ?${ucWhereCa}
            ORDER BY attn_date DESC, created_dt DESC
            LIMIT 15`,
-          [execCode, win.from, win.to, ...ucPCa]),
+          [empCode, win.from, win.to, ...ucPCa]),
 
         // Last hawker supply receipt entry time today
         q(`SELECT MAX(creation_date) last_entry, COUNT(*) txn_count
@@ -937,6 +944,7 @@ module.exports = function installCommandCentre({ app, q }) {
 
       res.json({
         exec_code: execCode,
+        emp_code: empCode,
         exec_name: h.exec_name || execCode,
         unit_code: h.unit_code || unitCode,
         as_on: asOn,

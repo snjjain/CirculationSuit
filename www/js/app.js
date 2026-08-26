@@ -4390,7 +4390,7 @@ function _ccFlyExecPanel(x) {
     return `<div>
       <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:9px">
         <span style="font-size:10.5px;font-weight:800;color:#0ea5e9;background:#f0f9ff;border:1px solid #bae6fd;border-radius:9px;padding:3px 10px">CI · Centre Incharge</span>
-        <span style="font-size:10.5px;color:#64748b">${esc(e.executive_code || x.execCode)}${e.state_name ? ' · ' + esc(e.state_name) : ''}</span>
+        <span style="font-size:10.5px;color:#64748b">${esc(e.executive_code || x.execCode)}${ci.emp_code && ci.emp_code !== (e.executive_code || x.execCode) ? ' / ' + esc(ci.emp_code) : ''}${e.state_name ? ' · ' + esc(e.state_name) : ''}</span>
         ${centerLabel ? `<span style="font-size:11px;font-weight:700;color:#0f172a">${esc(centerLabel)}</span>` : ''}
       </div>
       <div style="font-size:11px;color:#64748b;margin-bottom:12px">Cash sale is collected upfront — collection is always 100% for city centres</div>
