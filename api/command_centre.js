@@ -991,27 +991,24 @@ module.exports = function installCommandCentre({ app, q }) {
       const { asOn, prev } = await resolveDates(req.query.as_on, req.query.compare);
       const win = resolveRangeWindow(asOn, req.query.range || 'mtd');
 
-      // Auto-detect unit from hawker_master if not provided (exec_code may exist across units)
+      // unit_code must be provided (passed from frontend via ccFlyExecFull → epDrillExec).
+      // Without it, we cannot reliably scope to the correct unit.
       if (!unitCode) {
-        const { rows: uRows } = await q(
-          `SELECT unit_code FROM hawker_master WHERE center_incharge_code = ? AND unit_code IS NOT NULL AND unit_code != '' LIMIT 1`,
-          [execCode]);
-        unitCode = uRows[0]?.unit_code || '';
+        return res.json({ exec_code: execCode, unit_code: '', as_on: asOn, hawkers: [], totals: {},
+          _info: 'unit_code required — navigate via Command Centre flyout' });
       }
 
-      const ucWhere = unitCode ? ' AND loc_id = ?' : '';
-      const ucP    = unitCode ? [unitCode] : [];
+      const ucWhere = ' AND loc_id = ?';
+      const ucP    = [unitCode];
 
-      // 1. All hawkers in this CI's centres from hawker_master
-      const hmWhere = unitCode ? ' AND unit_code = ?' : '';
-      const hmP    = unitCode ? [unitCode] : [];
+      // 2. Get distinct hawkers from hawker_master scoped to this unit.
+      //    unit_code filter excludes dirty rows with the same center_incharge_code in other units.
       const { rows: hwkRows } = await q(
-        `SELECT hawker_id, hawker_name, mobile_no, catagory,
-                hawker_center_code, hawker_center_name
+        `SELECT hawker_id, hawker_name, mobile_no, catagory, hawker_center_code, hawker_center_name
          FROM hawker_master
-         WHERE center_incharge_code = ?${hmWhere}
+         WHERE center_incharge_code = ? AND unit_code = ?
          ORDER BY hawker_center_name, hawker_name`,
-        [execCode, ...hmP]);
+        [execCode, unitCode]);
 
       if (!hwkRows.length) {
         return res.json({ exec_code: execCode, unit_code: unitCode, as_on: asOn, hawkers: [], totals: {} });
@@ -1020,7 +1017,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const hwkIds = hwkRows.map(r => r.hawker_id);
       const IN_PH  = hwkIds.map(() => '?').join(',');
 
-      // 2. Supply today + MTD per hawker
+      // 3. Supply today + MTD per hawker (uses hawker_id IN — fast indexed query)
       const { rows: supRows } = await q(
         `SELECT hawker_id,
                 SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) today_cp,
@@ -1032,7 +1029,9 @@ module.exports = function installCommandCentre({ app, q }) {
          GROUP BY hawker_id`,
         [asOn, prev, win.from, asOn, ...hwkIds, ...ucP, win.from, asOn]);
 
-      // 3. Latest competitor/market share data per hawker (most recent period ≤ current month)
+      const supMap  = {}; supRows.forEach(r => { supMap[r.hawker_id] = r; });
+
+      // 4. Latest competitor/market share data per hawker (most recent period ≤ current month)
       const curPeriod = asOn.slice(0, 7);
       const { rows: compRows } = await q(
         `SELECT cd.agent_code hawker_id, cd.period,
@@ -1055,14 +1054,12 @@ module.exports = function installCommandCentre({ app, q }) {
          WHERE cd.comp_type = 'hawker'`,
         [...hwkIds, curPeriod]);
 
-      // Build lookup maps
-      const supMap  = {}; supRows.forEach(r  => { supMap[r.hawker_id]  = r; });
       const compMap = {}; compRows.forEach(r => { compMap[r.hawker_id] = r; });
 
       let totToday = 0, totMtd = 0, totDbAll = 0, totPatrika = 0;
 
       const hawkers = hwkRows.map(h => {
-        const s = supMap[h.hawker_id]  || {};
+        const s = supMap[h.hawker_id] || {};
         const c = compMap[h.hawker_id] || {};
         const todayCp  = N(s.today_cp);
         const prevCp   = N(s.prev_cp);
