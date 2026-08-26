@@ -4421,7 +4421,7 @@ function _ccFlyExecPanel(x) {
     <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
       ${kpi('Agencies', _apFmtN(e.agency_count))}
       ${/* window TOTAL, unlike the Command Centre cards which are copies per day */ ''}
-      ${kpi('Supply (total)', _apFmtN(e.total_supply) + ' cp')}
+      ${kpi('Daily Supply', _apFmtN(e.daily_supply != null ? e.daily_supply : e.total_supply))}
       ${kpi('Collection', _apFmtC(e.total_collection))}
       ${kpi('Collection %', e.collection_pct == null ? '—' : e.collection_pct + '%')}
       ${kpi('Outstanding', _apFmtC(e.total_outstanding), (e.total_outstanding || 0) > 0 ? '#b91c1c' : '#0f172a')}

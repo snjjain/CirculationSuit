@@ -635,15 +635,13 @@ module.exports = function installCommandCentre({ app, q }) {
            GROUP BY unit_code, emp_code`, [win.from, win.to, ...codes]),
         // Active exec flag — scoped to unit_code IN scope so the scan stays small.
         q(`SELECT executive_code, is_active_pli FROM exec_master WHERE unit_code IN (${IN})`, codes),
-        // Exec-level billing: join agency_outstanding snapshots with agency_master for exec_code.
-        // Two consecutive cumulative snapshots are differenced (same method as branch billing).
-        q(`SELECT ao.period_label, am.executive_code exec_code, SUM(ao.bill_amt) amt
+        // Exec-level billing: agency-level snapshots matched to executives via execOf in JS.
+        // Avoid SQL join to agency_master — older snapshots may differ in dp_code/agcd format,
+        // causing the June row to vanish (makes the diff return the full cumulative instead of delta).
+        q(`SELECT ao.period_label, ao.unit_code, ao.ag_code, SUM(ao.bill_amt) amt
            FROM agency_outstanding ao
-           JOIN agency_master am ON am.unit = ao.unit_code AND am.agcd = ao.ag_code
-             AND CAST(am.dpcd AS UNSIGNED) = 1
            WHERE ao.period_label IN (?, ?) AND ao.unit_code IN (${IN})
-             AND CAST(ao.dp_code AS UNSIGNED) = 1
-           GROUP BY ao.period_label, am.executive_code`,
+           GROUP BY ao.period_label, ao.unit_code, ao.ag_code`,
           [prevMonthLabel, prevPrevLabel, ...codes]),
       ]);
 
@@ -723,12 +721,14 @@ module.exports = function installCommandCentre({ app, q }) {
       codes.forEach(c => {
         B[c].billed = havePrev ? Math.max(0, (cumThis[c] || 0) - (cumPrev[c] || 0)) : (cumThis[c] || 0);
       });
-      // Exec-level billing: same differenced-snapshot method, grouped by executive_code
+      // Exec-level billing: use execOf (built from agency_master) to map each agency to its exec.
       const exBillThis = {}, exBillPrev = {};
       (execBilling.rows || []).forEach(r => {
-        if (!r.exec_code) return;
+        const k = `${r.unit_code}|${r.ag_code}`;
+        const ex = execOf[k];
+        if (!ex || !ex.code) return;
         const t = r.period_label === prevMonthLabel ? exBillThis : exBillPrev;
-        t[r.exec_code] = (t[r.exec_code] || 0) + N(r.amt);
+        t[ex.code] = (t[ex.code] || 0) + N(r.amt);
       });
       Object.keys(E).forEach(code => {
         E[code].billed = havePrev

@@ -340,7 +340,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
            GROUP BY executive_code`, [execCode]),
 
         // Use DISTINCT join to avoid DPCD fan-out (agency_master has 1 row per delivery point)
-        q(`SELECT SUM(sd.sup_copy) total
+        q(`SELECT SUM(sd.sup_copy) total, COUNT(DISTINCT sd.supply_date) supply_days
            FROM supply_data sd
            JOIN (SELECT DISTINCT unit, agcd FROM agency_master WHERE executive_code = ?) am
              ON sd.unit_code = am.unit AND sd.agcd = am.agcd
@@ -436,6 +436,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
           units:                ei.units,
           agency_count:         N(ei.agency_count),
           total_supply:         N(supR.rows[0]?.total),
+          daily_supply:         N(supR.rows[0]?.supply_days) > 0 ? Math.round(N(supR.rows[0]?.total) / N(supR.rows[0]?.supply_days)) : N(supR.rows[0]?.total),
           total_collection:     totalColl,
           total_outstanding:    totalOu,
           collection_pct:       collPct,
