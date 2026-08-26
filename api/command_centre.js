@@ -1067,15 +1067,16 @@ module.exports = function installCommandCentre({ app, q }) {
         const todayCp  = N(s.today_cp);
         const prevCp   = N(s.prev_cp);
         const mtdCp    = N(s.mtd_cp);
-        // Use our_supply from competitor_data; fall back to mtd_cp when blank
-        const patrikaCp= c.patrika_cp != null ? N(c.patrika_cp) : mtdCp;
+        // Use our_supply from competitor_data; fall back to mtd_cp when 0/null (upload left blank)
+        const hasComp  = !!c.period;
+        const patrikaCp= hasComp ? (c.patrika_cp > 0 ? N(c.patrika_cp) : mtdCp) : 0;
         const compTotal= N(c.comp_total);
-        const dbTotal  = patrikaCp + compTotal;
-        const msPct    = dbTotal > 0 ? r1(patrikaCp / dbTotal * 100) : null;
+        const dbTotal  = hasComp ? patrikaCp + compTotal : 0;
+        const msPct    = (hasComp && dbTotal > 0) ? r1(patrikaCp / dbTotal * 100) : null;
 
         totToday   += todayCp;
         totMtd     += mtdCp;
-        if (dbTotal > 0) { totDbAll += dbTotal; totPatrika += patrikaCp; }
+        if (hasComp && dbTotal > 0) { totDbAll += dbTotal; totPatrika += patrikaCp; }
 
         const comps = [1,2,3,4,5].map(i => ({
           name: c[`comp${i}_name`] || null,
@@ -1095,8 +1096,8 @@ module.exports = function installCommandCentre({ app, q }) {
           growth_pct:   prevCp > 0 ? r1((todayCp - prevCp) / prevCp * 100) : null,
           // Market share
           ms_period:    c.period || null,
-          patrika_cp:   patrikaCp || null,
-          db_total:     dbTotal || null,
+          patrika_cp:   hasComp ? patrikaCp : null,
+          db_total:     hasComp && dbTotal > 0 ? dbTotal : null,
           ms_pct:       msPct,
           competitors:  comps,
         };
