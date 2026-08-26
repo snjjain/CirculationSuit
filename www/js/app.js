@@ -4286,6 +4286,19 @@ function _ccFlyTop() {
   return s && s.length ? s[s.length - 1] : null;
 }
 
+/* Fetch hawker supply data for a Centre Incharge when the exec-perf endpoint
+   returns nothing (CIs are not in agency_master). Stores result in x.ciData. */
+function _ccCIFetch(x, execCode, unitCode) {
+  if (x.ciLoading || x.ciData) return;
+  x.ciLoading = true;
+  const uc = unitCode || '';
+  const url = `${api.base}/api/command/ci-panel?exec_code=${encodeURIComponent(execCode)}&unit_code=${encodeURIComponent(uc)}`;
+  fetch(url, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { x.ciData = d; x.ciLoading = false; if (_ccFlyLive()) render(); })
+    .catch(e => { x.ciData = { _err: String(e && e.message || e) }; x.ciLoading = false; if (_ccFlyLive()) render(); });
+}
+
 /* The executive panel: their whole book in one column — coverage, money, hierarchy and
    the agencies they carry, each of which drills back down into the agency panel. */
 function _ccFlyExecPanel(x) {
@@ -4330,10 +4343,36 @@ function _ccFlyExecPanel(x) {
 
   const visited = N_(e.agencies_visited), book = N_(e.agency_count);
   const cov = book ? Math.round((visited / book) * 1000) / 10 : null;
-  /* A centre incharge runs hawker centres, not credit agencies, and this endpoint builds
-     everything from agency_master.executive_code — so a CI legitimately comes back empty
-     rather than the figures being missing. Say so instead of showing a wall of zeros. */
+  /* A centre incharge runs hawker centres, not credit agencies. When the exec-perf
+     endpoint returns empty (isCentreOnly), we fetch hawker supply data separately and
+     render a CI-specific panel instead of showing a wall of zeros. */
   const isCentreOnly = !book && !N_(e.total_supply) && !N_(e.total_outstanding);
+  if (isCentreOnly) {
+    // Trigger CI data fetch if not yet loaded
+    _ccCIFetch(x, e.executive_code || x.execCode, e.units || '');
+    if (x.ciLoading) return `<div style="padding:26px;text-align:center;color:#64748b;font-size:13px">Loading centre data…</div>`;
+    if (x.ciData && x.ciData._err) return `<div style="padding:20px;color:#b91c1c;font-size:13px">Could not load centre data.<div style="color:#64748b;font-size:11.5px;margin-top:4px">${esc(x.ciData._err)}</div></div>`;
+    const ci = x.ciData || {};
+    const growClr = ci.growth_pct == null ? '#0f172a' : ci.growth_pct >= 0 ? '#15803d' : '#b91c1c';
+    return `<div>
+      <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:9px">
+        <span style="font-size:10.5px;font-weight:800;color:#0ea5e9;background:#f0f9ff;border:1px solid #bae6fd;border-radius:9px;padding:3px 10px">CI · Centre Incharge</span>
+        <span style="font-size:10.5px;color:#64748b">${esc(e.executive_code || x.execCode)}${e.state_name ? ' · ' + esc(e.state_name) : ''}</span>
+      </div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:12px">Cash sale is collected upfront — collection is always 100% for city centres</div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:14px">
+        ${kpi('Centres managed', ci.centres != null ? _ccN(ci.centres) : '—', '#0ea5e9')}
+        ${kpi('Hawkers', ci.hawkers != null ? _ccN(ci.hawkers) : '—', '#0ea5e9')}
+        ${kpi('Supply (today)', ci.supply_cur != null ? _ccN(ci.supply_cur) + ' cp' : '—')}
+        ${kpi('Growth vs prev', ci.growth_pct != null ? (ci.growth_pct > 0 ? '+' : '') + ci.growth_pct + '%' : '—', growClr)}
+        ${kpi('Collection %', '100%', '#15803d')}
+        ${kpi('Outstanding', '₹0', '#94a3b8')}
+        ${kpi('Visits', _apFmtN(ci.visits))}
+        ${kpi('Active days', _apFmtN(ci.active_days))}
+      </div>
+      ${sec('Reports to', chain)}
+    </div>`;
+  }
 
   return `<div>
     <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:9px">
@@ -4341,10 +4380,6 @@ function _ccFlyExecPanel(x) {
       <span style="font-size:10.5px;color:#64748b">${esc(e.executive_code || '')}${e.state_name ? ' · ' + esc(e.state_name) : ''}</span>
     </div>
     <div style="font-size:11px;color:#64748b;margin-bottom:9px">Window: ${esc(d.from || '')} → ${esc(d.to || '')}</div>
-    ${isCentreOnly ? `<div style="font-size:11.5px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 11px;margin-bottom:10px;line-height:1.55">
-      No credit agencies are mapped to ${esc(e.exec_name || 'this person')}${e.exec_designation ? ` (${esc(e.exec_designation)})` : ''}.
-      City-sale centre incharges carry hawker centres rather than agencies, so their copies appear as
-      <b>Cash sale</b> on the branch dashboard, not here.</div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
       ${kpi('Agencies', _apFmtN(e.agency_count))}
       ${/* window TOTAL, unlike the Command Centre cards which are copies per day */ ''}
@@ -5223,8 +5258,15 @@ function _csInsights(st, d) {
       const collBadge = r.collection.pct != null ? `<span style="font-size:11px;font-weight:700;color:${r.collection.pct<60?'#b91c1c':r.collection.pct<80?'#b45309':'#15803d'};margin-left:8px">Coll ${r.collection.pct}%</span>` : '';
       const growBadge = g != null ? `<span style="font-size:11px;font-weight:700;color:${g<0?'#b91c1c':'#15803d'};margin-left:8px">${g>0?'+':''}${g}%</span>` : '';
       const osBadge = r.outstanding.amount > 1000000 ? `<span style="font-size:10px;color:#b91c1c;margin-left:6px">OS ${_ccINR(r.outstanding.amount)}</span>` : '';
+      const subInfo = r.is_ci
+        ? `<span style="font-size:10px;color:#0ea5e9">${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk</span>`
+        : (r.unit_name ? `<span style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</span>` : '');
       return `<div onclick="${rowClick(r)}" style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:9px;background:#f8fafc;margin-bottom:5px;cursor:pointer" onmouseenter="this.style.background='#eff6ff'" onmouseleave="this.style.background='#f8fafc'">
-        ${badge}<div style="font-size:12.5px;font-weight:700;color:#1e3a8a;min-width:110px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</div>
+        ${badge}
+        <div style="flex:1;overflow:hidden">
+          <div style="font-size:12.5px;font-weight:700;color:#1e3a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</div>
+          ${subInfo}
+        </div>
         <div style="font-size:12.5px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums">${_ccN(supVal)} <span style="font-size:10px;color:#94a3b8;font-weight:500">cp</span></div>
         ${scoreBar(supVal, maxSupply)}${collBadge}${growBadge}${osBadge}${_csStatus(r, st.seg)}
       </div>`;
@@ -5241,8 +5283,8 @@ function _csInsights(st, d) {
 function _csConsolidated(st, d) {
   let rows = (d.branches || []).filter(r => {
     if (st.activeOnly && r.is_active === false) return false;
-    if (st.seg === 'agent' && !r.supply.agent && !r.supply.current) return false;
-    if (st.seg === 'cash'  && !r.supply.cash  && !r.supply.current) return false;
+    if (st.seg === 'agent' && !r.supply.agent) return false;
+    if (st.seg === 'cash'  && !r.supply.cash)  return false;
     if (st.search) {
       const q = st.search.toLowerCase();
       if (!r.name.toLowerCase().includes(q)) return false;
@@ -5313,8 +5355,11 @@ function _csConsolidated(st, d) {
   const shown = st.execAll ? rows : rows.slice(0, 30);
   const trows = shown.length ? shown.map((r, ri) => {
     const onClick = rowLink(r);
-    const nameCl = `<div><b style="color:#1e3a8a;font-size:12.5px">${esc(r.name)}</b>${r.sub ? ` <span style="font-size:10px;font-weight:600;color:#94a3b8;background:#f1f5f9;padding:1px 5px;border-radius:4px">${esc(r.sub)}</span>` : ''}</div>
-      ${isBranch && r.unit_name ? `<div style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</div>` : ''}`;
+    const ciSub = r.is_ci && (r.hawker_centres || r.hawker_count)
+      ? `<span style="font-size:10px;color:#0ea5e9">${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hawkers</span>`
+      : (isBranch && r.unit_name ? `<div style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</div>` : '');
+    const nameCl = `<div><b style="color:#1e3a8a;font-size:12.5px">${esc(r.name)}</b>${r.sub ? ` <span style="font-size:10px;font-weight:600;color:${r.is_ci?'#0ea5e9':'#94a3b8'};background:#f1f5f9;padding:1px 5px;border-radius:4px">${esc(r.sub)}</span>` : ''}</div>
+      ${ciSub}`;
     const agentVal = r.supply.agent;
     const cashVal  = r.supply.cash;
     const supVal   = r.supply.current;

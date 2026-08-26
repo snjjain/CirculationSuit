@@ -595,9 +595,11 @@ module.exports = function installCommandCentre({ app, q }) {
         // dimension, but there is a centre incharge — which is who carries it.
         q(`SELECT loc_id unit_code, center_incharge, MAX(center_incharge_name) center_incharge_name,
                   SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) cur,
-                  SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prv
+                  SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prv,
+                  COUNT(DISTINCT CASE WHEN supply_date = ? THEN hwk_cent_code END) centres,
+                  COUNT(DISTINCT CASE WHEN supply_date = ? THEN hawker_id END) hawkers
            FROM hawker_supply WHERE supply_date IN (?, ?) AND loc_id IN (${IN})
-           GROUP BY loc_id, center_incharge`, [asOn, prev, asOn, prev, ...codes]),
+           GROUP BY loc_id, center_incharge`, [asOn, prev, asOn, asOn, asOn, prev, ...codes]),
         q(`SELECT unit_code, ag_code, -COALESCE(SUM(amount),0) amt, COUNT(*) txn
            FROM agency_collection
            WHERE is_valid=1 AND coll_date BETWEEN ? AND ? AND unit_code IN (${IN})
@@ -661,6 +663,7 @@ module.exports = function installCommandCentre({ app, q }) {
           agencies: 0, supply_cur: 0, supply_prev: 0, cash_cur: 0, cash_prev: 0, collection: 0, billed: 0, os: 0,
           txn: 0, agencies_paid: 0, os_agencies: 0, critical: 0,
           visits: 0, agencies_visited: 0,
+          hawker_centres: 0, hawker_count: 0,
         };
         if (name && E[code].exec_name === code) E[code].exec_name = name;
         if (unit) E[code].units.add(unit);
@@ -678,7 +681,7 @@ module.exports = function installCommandCentre({ app, q }) {
         const b = B[r.unit_code]; if (b) { b.cash_cur += N(r.cur); b.cash_prev += N(r.prv); }
         // City sale belongs to the centre incharge, who is an executive in their own right.
         const e = exec(r.center_incharge, r.center_incharge_name, r.unit_code);
-        if (e) { e.supply_cur += N(r.cur); e.supply_prev += N(r.prv); e.cash_cur += N(r.cur); e.cash_prev += N(r.prv); }
+        if (e) { e.supply_cur += N(r.cur); e.supply_prev += N(r.prv); e.cash_cur += N(r.cur); e.cash_prev += N(r.prv); e.hawker_centres += N(r.centres); e.hawker_count += N(r.hawkers); }
       });
       coll.rows.forEach(r => {
         const b = B[r.unit_code];
@@ -770,6 +773,9 @@ module.exports = function installCommandCentre({ app, q }) {
             execRow.supply.cash_prev = e.cash_prev;
             execRow.supply.agent_growth_pct = r1(pct(execRow.supply.agent, execRow.supply.agent_prev));
             execRow.supply.cash_growth_pct = r1(pct(execRow.supply.cash, execRow.supply.cash_prev));
+            execRow.is_ci = e.cash_cur > 0 && e.supply_cur - e.cash_cur === 0;
+            execRow.hawker_centres = e.hawker_centres;
+            execRow.hawker_count = e.hawker_count;
             return execRow;
           }).filter(r => r.supply.current || r.outstanding.amount || r.dcr.book)
             .sort((a, x) => x.supply.current - a.supply.current);
@@ -838,6 +844,53 @@ module.exports = function installCommandCentre({ app, q }) {
                  execs: bsum(b => b.execs.size), coverage_pct: bookTot ? r1((seenTot / bookTot) * 100) : null },
         },
         branches, executives,
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  /* ── Centre Incharge (CI) hawker panel ──────────────────────────────────────
+     CIs don't appear in agency_master so the exec-perf endpoint returns zeros.
+     This endpoint reads hawker_supply directly for the correct figures. */
+  app.get('/api/command/ci-panel', async (req, res) => {
+    try {
+      const execCode = String(req.query.exec_code || '').trim();
+      if (!execCode) return res.status(400).json({ detail: 'exec_code required' });
+      const unitCode = String(req.query.unit_code || '').trim();
+
+      const { asOn, prev } = await resolveDates(req.query.as_on, req.query.compare);
+      const win = resolveRangeWindow(asOn, req.query.range || 'mtd');
+
+      const [hawker, visits] = await Promise.all([
+        q(`SELECT loc_id unit_code, MAX(center_incharge_name) exec_name,
+                  SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) cur,
+                  SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prv,
+                  COUNT(DISTINCT CASE WHEN supply_date = ? THEN hwk_cent_code END) centres,
+                  COUNT(DISTINCT CASE WHEN supply_date = ? THEN hawker_id END) hawkers
+           FROM hawker_supply
+           WHERE center_incharge = ?${unitCode ? ' AND loc_id = ?' : ''}
+             AND supply_date IN (?, ?)
+           GROUP BY loc_id`,
+          [asOn, prev, asOn, asOn, execCode, ...(unitCode ? [unitCode] : []), asOn, prev]),
+        q(`SELECT COUNT(*) visits, COUNT(DISTINCT DATE(mark_attn_date)) active_days
+           FROM dcr_agency_visit
+           WHERE emp_code = ? AND mark_attn_date BETWEEN ? AND ?`,
+          [execCode, win.from, win.to]),
+      ]);
+
+      const h = hawker.rows[0] || {};
+      const cur = N(h.cur), prv = N(h.prv);
+      res.json({
+        exec_code: execCode,
+        exec_name: h.exec_name || execCode,
+        unit_code: h.unit_code || unitCode,
+        as_on: asOn,
+        supply_cur: cur, supply_prev: prv,
+        growth_pct: r1(pct(cur, prv)),
+        centres: N(h.centres), hawkers: N(h.hawkers),
+        collection_pct: 100,
+        visits: N(visits.rows[0]?.visits),
+        active_days: N(visits.rows[0]?.active_days),
+        range_label: win.label,
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
