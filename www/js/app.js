@@ -4354,10 +4354,20 @@ function _ccFlyExecPanel(x) {
     if (x.ciData && x.ciData._err) return `<div style="padding:20px;color:#b91c1c;font-size:13px">Could not load centre data.<div style="color:#64748b;font-size:11.5px;margin-top:4px">${esc(x.ciData._err)}</div></div>`;
     const ci = x.ciData || {};
     const growClr = ci.growth_pct == null ? '#0f172a' : ci.growth_pct >= 0 ? '#15803d' : '#b91c1c';
+    const centerLabel = ci.center_name || ci.cent_code || null;
+    // last receipt time: show HH:MM format
+    let lastEntryStr = '—';
+    if (ci.last_entry_today) {
+      const t = String(ci.last_entry_today);
+      const m = t.match(/(\d{2}:\d{2})/);
+      lastEntryStr = m ? m[1] : t.slice(11, 16);
+    }
+    const txnNote = ci.txn_count_today ? ` (${ci.txn_count_today} entries)` : '';
     return `<div>
       <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:9px">
         <span style="font-size:10.5px;font-weight:800;color:#0ea5e9;background:#f0f9ff;border:1px solid #bae6fd;border-radius:9px;padding:3px 10px">CI · Centre Incharge</span>
         <span style="font-size:10.5px;color:#64748b">${esc(e.executive_code || x.execCode)}${e.state_name ? ' · ' + esc(e.state_name) : ''}</span>
+        ${centerLabel ? `<span style="font-size:11px;font-weight:700;color:#0f172a">${esc(centerLabel)}</span>` : ''}
       </div>
       <div style="font-size:11px;color:#64748b;margin-bottom:12px">Cash sale is collected upfront — collection is always 100% for city centres</div>
       <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:14px">
@@ -4367,6 +4377,7 @@ function _ccFlyExecPanel(x) {
         ${kpi('Growth vs prev', ci.growth_pct != null ? (ci.growth_pct > 0 ? '+' : '') + ci.growth_pct + '%' : '—', growClr)}
         ${kpi('Collection %', '100%', '#15803d')}
         ${kpi('Outstanding', '₹0', '#94a3b8')}
+        ${kpi('Last receipt entry', lastEntryStr + txnNote, ci.last_entry_today ? '#0f172a' : '#94a3b8')}
         ${kpi('Visits', _apFmtN(ci.visits))}
         ${kpi('Active days', _apFmtN(ci.active_days))}
       </div>
@@ -5334,9 +5345,11 @@ function _csInsights(st, d) {
       const osBadge = r.outstanding.amount > 1000000 ? `<span style="font-size:10px;color:#b91c1c;margin-left:6px">OS ${_ccINR(r.outstanding.amount)}</span>` : '';
       const _isCi = r.is_ci || (!r.supply.agent && r.supply.cash > 0);
       const subInfo = _isCi
-        ? (r.hawker_centres || r.hawker_count
-            ? `<span style="font-size:10px;color:#0ea5e9">${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk</span>`
-            : `<span style="font-size:10px;color:#0ea5e9">Centre Incharge</span>`)
+        ? (r.hawker_cent_name
+            ? `<span style="font-size:10px;color:#0ea5e9">${esc(r.hawker_cent_name)}${(r.hawker_centres || r.hawker_count) ? ` · ${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk` : ''}</span>`
+            : (r.hawker_centres || r.hawker_count
+                ? `<span style="font-size:10px;color:#0ea5e9">${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk</span>`
+                : `<span style="font-size:10px;color:#0ea5e9">Centre Incharge</span>`))
         : (r.unit_name ? `<span style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</span>` : '');
       const stClass = _csStatusClass(r, st.seg);
       const stReason = _csStatusReason(r, st.seg);
