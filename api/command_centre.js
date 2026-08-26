@@ -868,12 +868,20 @@ module.exports = function installCommandCentre({ app, q }) {
       const ucWhereCa = unitCode ? ' AND unit_code = ?' : '';
       const ucPCa    = unitCode ? [unitCode] : [];
 
-      // execCode is person_code (e.g. E01827). dcr_center_attendance uses employee_code (e.g. R02073).
-      // Resolve the Oracle employee_code from hierarchy_master.
-      const { rows: hmRows } = await q(
-        `SELECT employee_code FROM hierarchy_master WHERE person_code = ? AND is_active = 1 LIMIT 1`,
-        [execCode]);
-      const empCode = hmRows[0]?.employee_code || execCode; // fallback to execCode if not found
+      // execCode (e.g. E01827) is the circulation exec code from exec_master/hawker_supply.
+      // dcr_center_attendance.emp_code (e.g. R02073) is the Oracle HR employee code — different system.
+      // Resolve by matching center_incharge_name (from hawker_supply) against executive_name in dcr_center_attendance.
+      const { rows: nameRows } = await q(
+        `SELECT MAX(center_incharge_name) exec_name FROM hawker_supply WHERE center_incharge = ?${unitCode ? ' AND loc_id = ?' : ''} LIMIT 1`,
+        [execCode, ...(unitCode ? [unitCode] : [])]);
+      const execName = nameRows[0]?.exec_name || null;
+      let empCode = execCode; // fallback
+      if (execName) {
+        const { rows: empRows } = await q(
+          `SELECT emp_code FROM dcr_center_attendance WHERE executive_name = ?${unitCode ? ' AND unit_code = ?' : ''} AND emp_code IS NOT NULL LIMIT 1`,
+          [execName, ...(unitCode ? [unitCode] : [])]);
+        if (empRows[0]?.emp_code) empCode = empRows[0].emp_code;
+      }
 
       const [hawker, attnSummary, attnRows, receipt, survey] = await Promise.all([
         q(`SELECT loc_id unit_code, MAX(center_incharge_name) exec_name,
@@ -914,15 +922,17 @@ module.exports = function installCommandCentre({ app, q }) {
            WHERE center_incharge = ? AND supply_date = ?${ucWhere}`,
           [execCode, today, ...ucP]),
 
-        // Survey & orders this month for hawkers under this CI's centres
+        // Survey & orders: created_by = CI's mobile login number
+        // Resolve mobile via hierarchy_master.employee_code → app_users
         q(`SELECT COUNT(DISTINCT sd.r_id) survey_count,
                   COUNT(DISTINCT CASE WHEN sd.order_id IS NOT NULL AND sd.order_id != '' THEN sd.r_id END) order_count
            FROM survey_data sd
-           WHERE sd.agcd IN (
-             SELECT DISTINCT hawker_id FROM hawker_supply
-             WHERE center_incharge = ?${ucWhere} AND supply_date >= ?
+           WHERE sd.created_by IN (
+             SELECT au.mobile FROM app_users au
+             INNER JOIN hierarchy_master hm ON hm.person_code = au.person_code
+             WHERE hm.employee_code = ? AND au.mobile IS NOT NULL AND au.mobile != ''
            ) AND sd.bookdate BETWEEN ? AND ?`,
-          [execCode, ...ucP, win.from, win.from, win.to]),
+          [empCode, win.from, win.to]),
       ]);
 
       const h = hawker.rows[0] || {};
