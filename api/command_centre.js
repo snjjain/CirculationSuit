@@ -629,8 +629,8 @@ module.exports = function installCommandCentre({ app, q }) {
            FROM dcr_agency_visit
            WHERE mark_attn_date BETWEEN ? AND ? AND unit_code IN (${IN})
            GROUP BY unit_code, emp_code`, [win.from, win.to, ...codes]),
-        // Active exec flag — used by the frontend to default to active-only view.
-        q(`SELECT executive_code, is_active_pli FROM exec_master`),
+        // Active exec flag — scoped to unit_code IN scope so the scan stays small.
+        q(`SELECT executive_code, is_active_pli FROM exec_master WHERE unit_code IN (${IN})`, codes),
       ]);
 
       // ── Active executive map from exec_master ──

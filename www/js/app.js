@@ -5149,20 +5149,20 @@ function _csMovers(st, d) {
   return _csCard('Agencies Growing & Declining', sub, inner, tabs);
 }
 
-/* ── Status chip for a row ── */
-function _csStatus(r, seg) {
+/* ── Status classification (pure, no HTML) ── */
+function _csStatusClass(r, seg) {
   const growth = seg === 'agent' ? (r.supply.agent_growth_pct != null ? r.supply.agent_growth_pct : r.supply.growth_pct)
                : seg === 'cash'  ? (r.supply.cash_growth_pct  != null ? r.supply.cash_growth_pct  : r.supply.growth_pct)
                : r.supply.growth_pct;
   const coll = r.collection ? r.collection.pct : null;
   const critAmt = r.outstanding ? r.outstanding.amount : 0;
   const hasCrit = r.outstanding && r.outstanding.critical > 0;
-  const isRisk = (growth != null && growth < -5) || (coll != null && coll < 60) || (hasCrit && critAmt > 2000000);
-  const isWatch = !isRisk && ((growth != null && growth < 0) || (coll != null && coll < 80) || hasCrit);
-  if (isRisk)  return `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#fee2e2;color:#b91c1c">&#128308; Risk</span>`;
-  if (isWatch) return `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#fef3c7;color:#b45309">&#128993; Watch</span>`;
-  return       `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#dcfce7;color:#15803d">&#128994; Good</span>`;
+  if ((growth != null && growth < -5) || (coll != null && coll < 60) || (hasCrit && critAmt > 2000000)) return 'risk';
+  if ((growth != null && growth < 0)  || (coll != null && coll < 80) || hasCrit) return 'watch';
+  return 'good';
 }
+const _csStatusBadge = { good: `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#dcfce7;color:#15803d">&#128994; Good</span>`, watch: `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#fef3c7;color:#b45309">&#128993; Watch</span>`, risk: `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#fee2e2;color:#b91c1c">&#128308; Risk</span>` };
+function _csStatus(r, seg) { return _csStatusBadge[_csStatusClass(r, seg)]; }
 
 /* ── Quick Insights panel ── */
 function _csInsights(st, d) {
@@ -5304,8 +5304,14 @@ function _csConsolidated(st, d) {
     <th style="text-align:center;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th>
   </tr>`;
 
+  // Pre-compute status once per row — used in summary counts and per-row badge
+  const rowStatus = rows.map(r => _csStatusClass(r, st.seg));
+  const totalRisk2  = rowStatus.filter(s => s === 'risk').length;
+  const totalWatch2 = rowStatus.filter(s => s === 'watch').length;
+  const totalGood2  = rows.length - totalRisk2 - totalWatch2;
+
   const shown = st.execAll ? rows : rows.slice(0, 30);
-  const trows = shown.length ? shown.map(r => {
+  const trows = shown.length ? shown.map((r, ri) => {
     const onClick = rowLink(r);
     const nameCl = `<div><b style="color:#1e3a8a;font-size:12.5px">${esc(r.name)}</b>${r.sub ? ` <span style="font-size:10px;font-weight:600;color:#94a3b8;background:#f1f5f9;padding:1px 5px;border-radius:4px">${esc(r.sub)}</span>` : ''}</div>
       ${isBranch && r.unit_name ? `<div style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</div>` : ''}`;
@@ -5326,19 +5332,16 @@ function _csConsolidated(st, d) {
       <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px"><span style="color:${r.outstanding.amount>0?'#b91c1c':'#94a3b8'}">${_ccINR(r.outstanding.amount)}</span></td>
       <td style="padding:8px 8px;text-align:right;font-size:12px"><span style="color:${r.outstanding.critical>0?'#b91c1c':'#94a3b8'}">${_ccN(r.outstanding.critical)}</span></td>
       <td style="padding:8px 8px;text-align:right;font-size:12px">${r.dcr && r.dcr.coverage_pct != null ? `<span style="color:${r.dcr.coverage_pct<10?'#b91c1c':r.dcr.coverage_pct<30?'#b45309':'#15803d'}">${r.dcr.coverage_pct}%</span>` : '—'}</td>
-      <td style="padding:8px 8px;text-align:center">${_csStatus(r, st.seg)}</td>
+      <td style="padding:8px 8px;text-align:center">${_csStatusBadge[rowStatus[ri] || 'good']}</td>
     </tr>`;
   }).join('') : `<tr><td colspan="12" style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px">No ${gLabel.toLowerCase()}s match the current filters.</td></tr>`;
 
   const showAllBtn = rows.length > 30 ? `<div style="margin-top:11px">${_csBtn(st.execAll ? 'Show top 30' : `Show all ${_ccN(rows.length)} →`, 'csExecAll()', false)}</div>` : '';
 
-  const totalRisk  = rows.filter(r => { const s = _csStatus(r, st.seg); return s.includes('Risk'); }).length;
-  const totalWatch = rows.filter(r => { const s = _csStatus(r, st.seg); return s.includes('Watch'); }).length;
-  const totalGood  = rows.length - totalRisk - totalWatch;
   const statusSummary = rows.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:11.5px">
-    <span style="color:#15803d;font-weight:700">&#128994; ${totalGood} Good</span>
-    <span style="color:#b45309;font-weight:700">&#128993; ${totalWatch} Watch</span>
-    <span style="color:#b91c1c;font-weight:700">&#128308; ${totalRisk} Risk</span>
+    <span style="color:#15803d;font-weight:700">&#128994; ${totalGood2} Good</span>
+    <span style="color:#b45309;font-weight:700">&#128993; ${totalWatch2} Watch</span>
+    <span style="color:#b91c1c;font-weight:700">&#128308; ${totalRisk2} Risk</span>
     <span style="color:#94a3b8">· ${rows.length} total${st.activeOnly ? ' (active only)' : ''}</span>
   </div>` : '';
 
