@@ -10666,6 +10666,7 @@ const epState = () => S.live.ep || (S.live.ep = {
   filterOpts: null, kpis: null, ranking: null,
   list: null, listPage: 1, listSearch: '', listSort: 'collection_pct', listSortDir: 'desc', _listKey: '',
   drillExec: '', drillExecName: '', drillExecData: null,
+  ciDetail: null, ciDetailLoading: false,
   drillAgency: '', drillUnitCode: '', drillAgencyName: '', drillAgencyData: null,
   growth: null, dcr: null, lastVisit: null, alerts: null,
   alertBucket: '', alertBucketData: null, alertBucketLoading: false,
@@ -10768,11 +10769,24 @@ window.epDrillExec = (code, name) => {
   const st = epState();
   st.drillExec = code; st.drillExecName = name || code;
   st.drillExecData = null; st.drillAgency = ''; st.drillAgencyData = null;
+  st.ciDetail = null; st.ciDetailLoading = false;
   render();
   const f = st.filters;
   api.get(epApi(`executive/${encodeURIComponent(code)}`) + `?from=${f.from}&to=${f.to}`)
     .then(d => { if (d) { epState().drillExecData = d; } if (S.screen === 'exec_perf') render(); });
 };
+
+// Fetch CI hawker detail (supply + market share) for the full exec-perf CI view
+function _epCIFetch(execCode, unitCode) {
+  const st = epState();
+  if (st.ciDetailLoading || st.ciDetail) return;
+  st.ciDetailLoading = true;
+  const f = st.filters;
+  fetch(`${api.base}/api/command/ci-hawker-detail?exec_code=${encodeURIComponent(execCode)}&unit_code=${encodeURIComponent(unitCode || '')}&as_on=${f.to}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.ciDetail = d; st.ciDetailLoading = false; if (S.screen === 'exec_perf') render(); })
+    .catch(() => { st.ciDetailLoading = false; if (S.screen === 'exec_perf') render(); });
+}
 
 window.epDrillAgency = (unitCode, agCode, agName) => {
   if (!agCode) return;
@@ -11526,6 +11540,125 @@ function epExecDetailView() {
     `<div style="padding:24px;text-align:center;color:var(--muted)">Loading…</div>`;
 
   const { exec, agencies = [] } = data;
+
+  // CI detection: agency_count=0 AND exec not in supply_data (CI manages hawker centres, not agencies)
+  const _isCI = (exec.agency_count === 0 && !exec.total_supply && exec.exec_designation && exec.exec_designation.toUpperCase().includes('CI'))
+    || (exec.agency_count === 0 && exec.total_supply === 0 && exec.collection_pct === 0);
+  if (_isCI) {
+    // Trigger hawker detail fetch lazily
+    const unitCode = (exec.units || '').split('/')[0].trim();
+    _epCIFetch(st.drillExec, unitCode);
+    const cd = st.ciDetail;
+    const cdLoading = st.ciDetailLoading;
+
+    // Hawker table
+    const _n  = v => (v == null || v === '' ? '—' : Number(v).toLocaleString('en-IN'));
+    const _pct = v => v == null ? '—' : v + '%';
+    const _msClr = v => v == null ? '#64748b' : v >= 50 ? '#15803d' : v >= 30 ? '#b45309' : '#b91c1c';
+    const _growClr = v => v == null ? '#0f172a' : v >= 0 ? '#15803d' : '#b91c1c';
+
+    let hawkerTable = `<div style="padding:20px;text-align:center;color:#64748b">
+      ${cdLoading ? 'Loading hawker data…' : (cd ? 'No hawkers found' : 'Tap to load hawker data')}
+    </div>`;
+
+    if (cd && cd.hawkers && cd.hawkers.length) {
+      const hasMS = cd.hawkers.some(h => h.ms_pct != null);
+      const rows = cd.hawkers.map((h, i) => {
+        const compStr = (h.competitors || []).map(c => `${esc(c.name)} ${_n(c.copies)}`).join(' · ');
+        return `<tr style="border-bottom:1px solid #f1f5f9;${i%2===0?'background:#fafafa':''}">
+          <td style="padding:7px 9px;font-size:12.5px;font-weight:600;color:#1e3a8a">${esc(h.hawker_name)}</td>
+          <td style="padding:7px 9px;font-size:11px;color:#64748b">${esc(h.hawker_id)}</td>
+          <td style="padding:7px 9px;font-size:11px;color:#64748b">${esc(h.center_name || '—')}</td>
+          <td style="padding:7px 9px;font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums">${_n(h.today_cp)}</td>
+          <td style="padding:7px 9px;font-size:12px;text-align:right;color:${_growClr(h.growth_pct)}">${h.growth_pct != null ? (h.growth_pct > 0 ? '+' : '') + h.growth_pct + '%' : '—'}</td>
+          ${hasMS ? `<td style="padding:7px 9px;font-size:12.5px;text-align:center;font-weight:700;color:${_msClr(h.ms_pct)}">${_pct(h.ms_pct)}</td>` : ''}
+          ${hasMS ? `<td style="padding:7px 9px;font-size:11px;color:#64748b;max-width:200px">${compStr || '—'}</td>` : ''}
+        </tr>`;
+      }).join('');
+
+      const t = cd.totals || {};
+      hawkerTable = `<div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;min-width:500px">
+          <thead>
+            <tr style="background:#1e3a8a;color:#fff">
+              <th style="padding:8px 9px;text-align:left;font-size:11px;font-weight:700;white-space:nowrap">Hawker Name</th>
+              <th style="padding:8px 9px;text-align:left;font-size:11px;font-weight:700">Code</th>
+              <th style="padding:8px 9px;text-align:left;font-size:11px;font-weight:700">Centre</th>
+              <th style="padding:8px 9px;text-align:right;font-size:11px;font-weight:700">Supply (Today)</th>
+              <th style="padding:8px 9px;text-align:right;font-size:11px;font-weight:700">Growth</th>
+              ${hasMS ? '<th style="padding:8px 9px;text-align:center;font-size:11px;font-weight:700">Market Share</th>' : ''}
+              ${hasMS ? '<th style="padding:8px 9px;text-align:left;font-size:11px;font-weight:700">Competitors (DB)</th>' : ''}
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+          <tfoot>
+            <tr style="background:#eff6ff;font-weight:700;border-top:2px solid #1e3a8a">
+              <td colspan="3" style="padding:8px 9px;font-size:12px">Total (${_n(t.hawker_count)} hawkers)</td>
+              <td style="padding:8px 9px;text-align:right;font-size:13px;color:#1e3a8a">${_n(t.today_cp)} cp</td>
+              <td></td>
+              ${hasMS ? `<td style="padding:8px 9px;text-align:center;font-size:13px;font-weight:800;color:${_msClr(t.ms_pct)}">${_pct(t.ms_pct)}</td>` : ''}
+              ${hasMS ? `<td style="padding:8px 9px;font-size:11px;color:#64748b">DB: ${_n(t.db_total)} total market</td>` : ''}
+            </tr>
+          </tfoot>
+        </table>
+      </div>`;
+    }
+
+    const ciChain = [
+      ['Edition Incharge', exec.edtn_incharge_name],
+      ['Circ Incharge',    exec.circ_incharge_name],
+      ['Zonal Head',       exec.zonal_head_name],
+      ['VP Circulation',   exec.vp_circulation_name],
+    ].filter(([, n]) => n);
+
+    return pagehead('Executive Performance', '') +
+      `<button class="btn sm" onclick="epBack()" style="margin-bottom:12px">← Back</button>` + bc +
+      `<div class="card" style="padding:14px 16px;margin-bottom:12px">
+        <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:12px">
+          <div style="flex:1;min-width:180px">
+            <div style="font-size:17px;font-weight:800;margin-bottom:2px">${esc(exec.exec_name || exec.executive_code)}</div>
+            <div style="font-size:11.5px;color:#64748b;margin-bottom:6px">${esc(exec.exec_designation || 'CI')} · ${esc(exec.units || '')}
+              <span style="margin-left:8px;font-size:10.5px;font-weight:700;color:#0ea5e9;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:2px 8px">Centre Incharge</span>
+            </div>
+            ${ciChain.length ? `<div style="font-size:11px;color:#94a3b8;margin-bottom:3px;font-weight:700;text-transform:uppercase;letter-spacing:.04em">Reports to</div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">
+              ${ciChain.map(([role, name], i) => `${i>0?'<span style="color:#cbd5e1">›</span>':''}
+                <div style="display:inline-flex;flex-direction:column">
+                  <span style="font-size:10px;color:#94a3b8;text-transform:uppercase">${esc(role)}</span>
+                  <span style="font-size:12px;font-weight:600">${esc(name)}</span>
+                </div>`).join('')}
+            </div>` : ''}
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:4px">
+          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px">
+            <div style="font-size:10px;font-weight:700;color:#0ea5e9;text-transform:uppercase">Hawkers</div>
+            <div style="font-size:20px;font-weight:800;color:#0ea5e9">${_n(cd ? cd.totals?.hawker_count : null)}</div>
+          </div>
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px">
+            <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Supply Today</div>
+            <div style="font-size:20px;font-weight:800">${_n(cd ? cd.totals?.today_cp : null)} <span style="font-size:12px;color:#94a3b8">cp</span></div>
+          </div>
+          <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px">
+            <div style="font-size:10px;font-weight:700;color:#15803d;text-transform:uppercase">Collection %</div>
+            <div style="font-size:20px;font-weight:800;color:#15803d">100%</div>
+            <div style="font-size:10px;color:#86efac">Cash upfront</div>
+          </div>
+          ${cd && cd.totals?.ms_pct != null ? `<div style="background:#fefce8;border:1px solid #fef08a;border-radius:8px;padding:10px">
+            <div style="font-size:10px;font-weight:700;color:#b45309;text-transform:uppercase">Market Share</div>
+            <div style="font-size:20px;font-weight:800;color:${_msClr(cd.totals.ms_pct)}">${cd.totals.ms_pct}%</div>
+            <div style="font-size:10px;color:#94a3b8">DB: ${_n(cd.totals.db_total)}</div>
+          </div>` : ''}
+        </div>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px">
+          <span style="font-size:13px;font-weight:700">Hawker List</span>
+          <span style="font-size:11px;color:#64748b">· Supply & Market Share</span>
+        </div>
+        ${hawkerTable}
+      </div>`;
+  }
   const pct = exec.collection_pct || 0;
 
   const chain = [

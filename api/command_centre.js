@@ -979,6 +979,140 @@ module.exports = function installCommandCentre({ app, q }) {
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
+  /* ── CI Hawker Detail — full hawker list with supply + market share ─────────
+     Called from the Executive Performance full-page view for CI execs.
+     Returns every hawker in the CI's centre(s), their today/MTD supply from
+     hawker_supply, and market-share data from competitor_data. */
+  app.get('/api/command/ci-hawker-detail', async (req, res) => {
+    try {
+      const execCode = String(req.query.exec_code || '').trim();
+      if (!execCode) return res.status(400).json({ detail: 'exec_code required' });
+      const unitCode = String(req.query.unit_code || '').trim();
+      const { asOn, prev } = await resolveDates(req.query.as_on, req.query.compare);
+      const win = resolveRangeWindow(asOn, req.query.range || 'mtd');
+
+      const ucWhere = unitCode ? ' AND loc_id = ?' : '';
+      const ucP    = unitCode ? [unitCode] : [];
+
+      // 1. All hawkers in this CI's centres from hawker_master
+      const hmWhere = unitCode ? ' AND unit_code = ?' : '';
+      const hmP    = unitCode ? [unitCode] : [];
+      const { rows: hwkRows } = await q(
+        `SELECT hawker_id, hawker_name, mobile_no, catagory,
+                hawker_center_code, hawker_center_name
+         FROM hawker_master
+         WHERE center_incharge_code = ?${hmWhere}
+         ORDER BY hawker_center_name, hawker_name`,
+        [execCode, ...hmP]);
+
+      if (!hwkRows.length) {
+        return res.json({ exec_code: execCode, unit_code: unitCode, as_on: asOn, hawkers: [], totals: {} });
+      }
+
+      const hwkIds = hwkRows.map(r => r.hawker_id);
+      const IN_PH  = hwkIds.map(() => '?').join(',');
+
+      // 2. Supply today + MTD per hawker
+      const { rows: supRows } = await q(
+        `SELECT hawker_id,
+                SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) today_cp,
+                SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prev_cp,
+                SUM(CASE WHEN supply_date BETWEEN ? AND ? THEN sup_copies ELSE 0 END) mtd_cp
+         FROM hawker_supply
+         WHERE hawker_id IN (${IN_PH})${ucWhere}
+           AND supply_date BETWEEN ? AND ?
+         GROUP BY hawker_id`,
+        [asOn, prev, win.from, asOn, ...hwkIds, ...ucP, win.from, asOn]);
+
+      // 3. Latest competitor/market share data per hawker (most recent period ≤ current month)
+      const curPeriod = asOn.slice(0, 7);
+      const { rows: compRows } = await q(
+        `SELECT cd.agent_code hawker_id, cd.period,
+                cd.our_supply patrika_cp,
+                COALESCE(cd.comp1_supply,0)+COALESCE(cd.comp2_supply,0)+
+                COALESCE(cd.comp3_supply,0)+COALESCE(cd.comp4_supply,0)+
+                COALESCE(cd.comp5_supply,0) comp_total,
+                cd.comp1_name, cd.comp1_supply,
+                cd.comp2_name, cd.comp2_supply,
+                cd.comp3_name, cd.comp3_supply,
+                cd.comp4_name, cd.comp4_supply,
+                cd.comp5_name, cd.comp5_supply
+         FROM competitor_data cd
+         INNER JOIN (
+           SELECT agent_code, MAX(period) max_period
+           FROM competitor_data
+           WHERE comp_type = 'hawker' AND agent_code IN (${IN_PH}) AND period <= ?
+           GROUP BY agent_code
+         ) lp ON cd.agent_code = lp.agent_code AND cd.period = lp.max_period
+         WHERE cd.comp_type = 'hawker'`,
+        [...hwkIds, curPeriod]);
+
+      // Build lookup maps
+      const supMap  = {}; supRows.forEach(r  => { supMap[r.hawker_id]  = r; });
+      const compMap = {}; compRows.forEach(r => { compMap[r.hawker_id] = r; });
+
+      let totToday = 0, totMtd = 0, totDbAll = 0, totPatrika = 0;
+
+      const hawkers = hwkRows.map(h => {
+        const s = supMap[h.hawker_id]  || {};
+        const c = compMap[h.hawker_id] || {};
+        const todayCp  = N(s.today_cp);
+        const prevCp   = N(s.prev_cp);
+        const mtdCp    = N(s.mtd_cp);
+        const patrikaCp= N(c.patrika_cp);
+        const compTotal= N(c.comp_total);
+        const dbTotal  = patrikaCp + compTotal;
+        const msPct    = dbTotal > 0 ? r1(patrikaCp / dbTotal * 100) : null;
+
+        totToday   += todayCp;
+        totMtd     += mtdCp;
+        if (dbTotal > 0) { totDbAll += dbTotal; totPatrika += patrikaCp; }
+
+        const comps = [1,2,3,4,5].map(i => ({
+          name: c[`comp${i}_name`] || null,
+          copies: N(c[`comp${i}_supply`]),
+        })).filter(x => x.name && x.copies > 0);
+
+        return {
+          hawker_id:    h.hawker_id,
+          hawker_name:  h.hawker_name,
+          mobile:       h.mobile_no,
+          category:     h.catagory,
+          center_code:  h.hawker_center_code,
+          center_name:  h.hawker_center_name,
+          today_cp:     todayCp,
+          prev_cp:      prevCp,
+          mtd_cp:       mtdCp,
+          growth_pct:   prevCp > 0 ? r1((todayCp - prevCp) / prevCp * 100) : null,
+          // Market share
+          ms_period:    c.period || null,
+          patrika_cp:   patrikaCp || null,
+          db_total:     dbTotal || null,
+          ms_pct:       msPct,
+          competitors:  comps,
+        };
+      });
+
+      const totalMs = totDbAll > 0 ? r1(totPatrika / totDbAll * 100) : null;
+
+      res.json({
+        exec_code:  execCode,
+        unit_code:  unitCode,
+        as_on:      asOn,
+        range_label: win.label,
+        hawkers,
+        totals: {
+          hawker_count: hawkers.length,
+          today_cp:     totToday,
+          mtd_cp:       totMtd,
+          db_total:     totDbAll || null,
+          patrika_cp:   totPatrika || null,
+          ms_pct:       totalMs,
+        },
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
   /* ── Agencies growing and declining fastest ─────────────────────────────────
      Its own endpoint because it is the expensive part: a ~50-day scan of supply_data
      while everything else on the dashboard is two dates and a snapshot. Fetched after
