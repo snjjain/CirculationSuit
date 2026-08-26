@@ -4355,14 +4355,38 @@ function _ccFlyExecPanel(x) {
     const ci = x.ciData || {};
     const growClr = ci.growth_pct == null ? '#0f172a' : ci.growth_pct >= 0 ? '#15803d' : '#b91c1c';
     const centerLabel = ci.center_name || ci.cent_code || null;
-    // last receipt time: show HH:MM format
     let lastEntryStr = '—';
     if (ci.last_entry_today) {
       const t = String(ci.last_entry_today);
       const m = t.match(/(\d{2}:\d{2})/);
       lastEntryStr = m ? m[1] : t.slice(11, 16);
     }
-    const txnNote = ci.txn_count_today ? ` (${ci.txn_count_today} entries)` : '';
+    const txnNote = ci.txn_count_today ? ` (${ci.txn_count_today})` : '';
+
+    // Recent attendance / visit rows table
+    const attnTypeLabel = t => t === 'V' ? '🚶 Visit' : '✓ Attn';
+    const attnRows = (ci.recent_attn || []).map(r => {
+      const rmk = r.remark ? esc(r.remark.slice(0, 60)) + (r.remark.length > 60 ? '…' : '') : '';
+      const loc = r.location || r.center_name || '';
+      return `<tr>
+        <td style="padding:5px 7px;white-space:nowrap;font-size:11.5px">${esc(r.date || '—')}</td>
+        <td style="padding:5px 7px;white-space:nowrap;font-size:11px;color:${r.type === 'V' ? '#7c3aed' : '#0ea5e9'};font-weight:700">${attnTypeLabel(r.type)}</td>
+        <td style="padding:5px 7px;font-size:11px;color:#64748b">${esc(loc)}</td>
+        <td style="padding:5px 7px;font-size:11px;color:#475569">${rmk || '<span style="color:#cbd5e1">—</span>'}</td>
+      </tr>`;
+    }).join('');
+    const attnTable = attnRows
+      ? `<table style="width:100%;border-collapse:collapse">
+           <thead><tr style="border-bottom:1px solid #e2e8f0">
+             <th style="padding:5px 7px;text-align:left;font-size:10px;font-weight:800;color:#94a3b8;text-transform:uppercase">Date</th>
+             <th style="padding:5px 7px;text-align:left;font-size:10px;font-weight:800;color:#94a3b8;text-transform:uppercase">Type</th>
+             <th style="padding:5px 7px;text-align:left;font-size:10px;font-weight:800;color:#94a3b8;text-transform:uppercase">Location</th>
+             <th style="padding:5px 7px;text-align:left;font-size:10px;font-weight:800;color:#94a3b8;text-transform:uppercase">Remarks</th>
+           </tr></thead>
+           <tbody>${attnRows}</tbody>
+         </table>`
+      : `<div style="color:#94a3b8;font-size:12px;padding:8px 0">No attendance / visit records this month</div>`;
+
     return `<div>
       <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:9px">
         <span style="font-size:10.5px;font-weight:800;color:#0ea5e9;background:#f0f9ff;border:1px solid #bae6fd;border-radius:9px;padding:3px 10px">CI · Centre Incharge</span>
@@ -4378,9 +4402,12 @@ function _ccFlyExecPanel(x) {
         ${kpi('Collection %', '100%', '#15803d')}
         ${kpi('Outstanding', '₹0', '#94a3b8')}
         ${kpi('Last receipt entry', lastEntryStr + txnNote, ci.last_entry_today ? '#0f172a' : '#94a3b8')}
-        ${kpi('Visits', _apFmtN(ci.visits))}
-        ${kpi('Active days', _apFmtN(ci.active_days))}
+        ${kpi('Attendance days', ci.attendance_days != null ? String(ci.attendance_days) : '—', ci.attendance_days > 0 ? '#15803d' : '#94a3b8')}
+        ${kpi('Visits (V-type)', ci.visit_count != null ? String(ci.visit_count) : '—', ci.visit_count > 0 ? '#7c3aed' : '#94a3b8')}
+        ${kpi('Surveys this month', ci.survey_count != null ? String(ci.survey_count) : '—')}
+        ${kpi('Orders this month', ci.order_count != null ? String(ci.order_count) : '—', ci.order_count > 0 ? '#15803d' : '#94a3b8')}
       </div>
+      ${sec('Attendance & Visit log', attnTable)}
       ${sec('Reports to', chain)}
     </div>`;
   }

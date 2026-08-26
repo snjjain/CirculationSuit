@@ -862,8 +862,13 @@ module.exports = function installCommandCentre({ app, q }) {
       const { asOn, prev } = await resolveDates(req.query.as_on, req.query.compare);
       const win = resolveRangeWindow(asOn, req.query.range || 'mtd');
 
-      const today = asOn; // asOn is the snapshot date (YYYY-MM-DD)
-      const [hawker, visits, receipt] = await Promise.all([
+      const today = asOn;
+      const ucWhere = unitCode ? ' AND loc_id = ?' : '';
+      const ucP    = unitCode ? [unitCode] : [];
+      const ucWhereCa = unitCode ? ' AND unit_code = ?' : '';
+      const ucPCa    = unitCode ? [unitCode] : [];
+
+      const [hawker, attnSummary, attnRows, receipt, survey] = await Promise.all([
         q(`SELECT loc_id unit_code, MAX(center_incharge_name) exec_name,
                   SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) cur,
                   SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prv,
@@ -872,25 +877,64 @@ module.exports = function installCommandCentre({ app, q }) {
                   MAX(CASE WHEN supply_date = ? THEN COALESCE(hawker_center, hwk_cent_code) END) center_name,
                   MAX(CASE WHEN supply_date = ? THEN hwk_cent_code END) cent_code
            FROM hawker_supply
-           WHERE center_incharge = ?${unitCode ? ' AND loc_id = ?' : ''}
+           WHERE center_incharge = ?${ucWhere}
              AND supply_date IN (?, ?)
            GROUP BY loc_id`,
-          [asOn, prev, asOn, asOn, asOn, asOn, execCode, ...(unitCode ? [unitCode] : []), asOn, prev]),
-        q(`SELECT COUNT(*) visits, COUNT(DISTINCT DATE(mark_attn_date)) active_days
-           FROM dcr_agency_visit
-           WHERE emp_code = ? AND mark_attn_date BETWEEN ? AND ?`,
-          [execCode, win.from, win.to]),
-        // Last receipt entry time for today's supply date
-        q(`SELECT MAX(creation_date) last_entry, COUNT(*) txn_count, SUM(sup_copies) total_copies
+          [asOn, prev, asOn, asOn, asOn, asOn, execCode, ...ucP, asOn, prev]),
+
+        // Center attendance summary: attn_type A=attendance, V=visit
+        q(`SELECT
+             COUNT(*) total,
+             COUNT(DISTINCT attn_date) active_days,
+             SUM(CASE WHEN attn_type = 'A' OR attn_type IS NULL OR attn_type = '' THEN 1 ELSE 0 END) attendance_days,
+             SUM(CASE WHEN attn_type = 'V' THEN 1 ELSE 0 END) visit_count
+           FROM dcr_center_attendance
+           WHERE emp_code = ? AND attn_date BETWEEN ? AND ?${ucWhereCa}`,
+          [execCode, win.from, win.to, ...ucPCa]),
+
+        // Recent attendance/visit rows with remarks (limit 15)
+        q(`SELECT attn_date, attn_type, center_name, location_name, present_rmrk, closed_rmrk,
+                  TIME(created_dt) attn_time, center_closed
+           FROM dcr_center_attendance
+           WHERE emp_code = ? AND attn_date BETWEEN ? AND ?${ucWhereCa}
+           ORDER BY attn_date DESC, created_dt DESC
+           LIMIT 15`,
+          [execCode, win.from, win.to, ...ucPCa]),
+
+        // Last hawker supply receipt entry time today
+        q(`SELECT MAX(creation_date) last_entry, COUNT(*) txn_count
            FROM hawker_supply
-           WHERE center_incharge = ? AND supply_date = ?${unitCode ? ' AND loc_id = ?' : ''}`,
-          [execCode, today, ...(unitCode ? [unitCode] : [])]),
+           WHERE center_incharge = ? AND supply_date = ?${ucWhere}`,
+          [execCode, today, ...ucP]),
+
+        // Survey & orders this month for hawkers under this CI's centres
+        q(`SELECT COUNT(DISTINCT sd.r_id) survey_count,
+                  COUNT(DISTINCT CASE WHEN sd.order_id IS NOT NULL AND sd.order_id != '' THEN sd.r_id END) order_count
+           FROM survey_data sd
+           WHERE sd.agcd IN (
+             SELECT DISTINCT hawker_id FROM hawker_supply
+             WHERE center_incharge = ?${ucWhere} AND supply_date >= ?
+           ) AND sd.bookdate BETWEEN ? AND ?`,
+          [execCode, ...ucP, win.from, win.from, win.to]),
       ]);
 
       const h = hawker.rows[0] || {};
       const rc = receipt.rows[0] || {};
+      const as = attnSummary.rows[0] || {};
+      const sv = survey.rows[0] || {};
       const cur = N(h.cur), prv = N(h.prv);
       const lastEntry = rc.last_entry ? String(rc.last_entry).slice(0, 19) : null;
+
+      const recentAttn = attnRows.rows.map(r => ({
+        date: r.attn_date ? String(r.attn_date).slice(0, 10) : null,
+        type: r.attn_type || 'A',
+        time: r.attn_time ? String(r.attn_time).slice(0, 5) : null,
+        center_name: r.center_name || null,
+        location: r.location_name || null,
+        remark: r.present_rmrk || r.closed_rmrk || null,
+        closed: r.center_closed ? String(r.center_closed).slice(0, 16) : null,
+      }));
+
       res.json({
         exec_code: execCode,
         exec_name: h.exec_name || execCode,
@@ -904,8 +948,14 @@ module.exports = function installCommandCentre({ app, q }) {
         collection_pct: 100,
         last_entry_today: lastEntry,
         txn_count_today: N(rc.txn_count),
-        visits: N(visits.rows[0]?.visits),
-        active_days: N(visits.rows[0]?.active_days),
+        // Attendance from dcr_center_attendance (correct table for CIs)
+        attendance_days: N(as.attendance_days),
+        visit_count: N(as.visit_count),
+        active_days: N(as.active_days),
+        recent_attn: recentAttn,
+        // Survey + orders (hawkers under CI's centres this month)
+        survey_count: N(sv.survey_count),
+        order_count: N(sv.order_count),
         range_label: win.label,
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
