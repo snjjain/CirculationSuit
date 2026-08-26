@@ -638,7 +638,8 @@ module.exports = function installCommandCentre({ app, q }) {
         // Exec-level billing: agency-level snapshots matched to executives via execOf in JS.
         // Avoid SQL join to agency_master — older snapshots may differ in dp_code/agcd format,
         // causing the June row to vanish (makes the diff return the full cumulative instead of delta).
-        q(`SELECT ao.period_label, ao.unit_code, ao.ag_code, SUM(ao.bill_amt) amt
+        q(`SELECT ao.period_label, ao.unit_code, ao.ag_code,
+                  MAX(ao.exec_code) exec_code, SUM(ao.bill_amt) amt
            FROM agency_outstanding ao
            WHERE ao.period_label IN (?, ?) AND ao.unit_code IN (${IN})
            GROUP BY ao.period_label, ao.unit_code, ao.ag_code`,
@@ -721,14 +722,15 @@ module.exports = function installCommandCentre({ app, q }) {
       codes.forEach(c => {
         B[c].billed = havePrev ? Math.max(0, (cumThis[c] || 0) - (cumPrev[c] || 0)) : (cumThis[c] || 0);
       });
-      // Exec-level billing: use execOf (built from agency_master) to map each agency to its exec.
+      // Exec-level billing: use exec_code from agency_outstanding (covers closed/suspended agencies).
+      // Falls back to execOf for agencies where exec_code is missing in the snapshot.
       const exBillThis = {}, exBillPrev = {};
       (execBilling.rows || []).forEach(r => {
         const k = `${r.unit_code}|${r.ag_code}`;
-        const ex = execOf[k];
-        if (!ex || !ex.code) return;
+        const execCode = r.exec_code || (execOf[k] && execOf[k].code);
+        if (!execCode) return;
         const t = r.period_label === prevMonthLabel ? exBillThis : exBillPrev;
-        t[ex.code] = (t[ex.code] || 0) + N(r.amt);
+        t[execCode] = (t[execCode] || 0) + N(r.amt);
       });
       Object.keys(E).forEach(code => {
         E[code].billed = havePrev

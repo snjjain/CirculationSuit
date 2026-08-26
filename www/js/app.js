@@ -5555,9 +5555,9 @@ function _csConsolidated(st, d) {
     ${showCash  ? thBtn('cash',  'Cash Sale')  : ''}
     ${thBtn('supply', 'Supply')}
     ${thBtn('growth', 'Growth')}
+    ${thBtn('prevbill', 'Prev Bill')}
     ${thBtn('coll', 'Collection')}
     <th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">Coll %</th>
-    ${thBtn('prevbill', 'Prev Bill')}
     ${thBtn('os', 'Outstanding')}
     <th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">Critical</th>
     ${thBtn('dcr', 'DCR %')}
@@ -5593,9 +5593,9 @@ function _csConsolidated(st, d) {
       ${showCash  ? `<td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px;color:${cashVal?'#0ea5e9':'#cbd5e1'}">${cashVal ? _ccN(cashVal) : '—'}</td>` : ''}
       <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums"><b style="font-size:13px">${_ccN(supVal)}</b></td>
       <td style="padding:8px 8px;text-align:right">${_ccTrend(r.supply.growth_pct)}</td>
+      <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px;color:#64748b">${_ccINR(r.collection.billed)}</td>
       <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px">${_ccINR(r.collection.collected)}</td>
       <td style="padding:8px 8px;text-align:right"><b style="color:${collPct==null?'#94a3b8':collPct>=85?'#15803d':collPct>=65?'#b45309':'#b91c1c'}">${collPct == null ? '—' : collPct + '%'}</b></td>
-      <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px;color:#64748b">${_ccINR(r.collection.billed)}</td>
       <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px"><span style="color:${r.outstanding.amount>0?'#b91c1c':'#94a3b8'}">${_ccINR(r.outstanding.amount)}</span></td>
       <td style="padding:8px 8px;text-align:right;font-size:12px"><span style="color:${r.outstanding.critical>0?'#b91c1c':'#94a3b8'}">${_ccN(r.outstanding.critical)}</span></td>
       <td style="padding:8px 8px;text-align:right;font-size:12px">${r.dcr && r.dcr.coverage_pct != null ? `<span style="color:${r.dcr.coverage_pct<10?'#b91c1c':r.dcr.coverage_pct<30?'#b45309':'#15803d'}">${r.dcr.coverage_pct}%</span>` : '—'}</td>
