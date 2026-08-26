@@ -1120,6 +1120,80 @@ module.exports = function installCommandCentre({ app, q }) {
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
+  /* ── CI Centre summary — fast, no unit_code required ─────────────────────────
+     Groups hawker_master by centre, returns hawker counts + supply totals.
+     Used as the first step in CI performance page: show centres, then on click
+     load ci-hawker-detail for the selected centre. */
+  app.get('/api/command/ci-centers', async (req, res) => {
+    try {
+      const execCode = String(req.query.exec_code || '').trim();
+      if (!execCode) return res.status(400).json({ detail: 'exec_code required' });
+      const { asOn, prev } = await resolveDates(req.query.as_on, req.query.compare);
+      const win = resolveRangeWindow(asOn, req.query.range || 'mtd');
+
+      // All hawkers for this CI (fast — indexed on center_incharge_code)
+      const { rows: hwkRows } = await q(
+        `SELECT hawker_id, unit_code, hawker_center_code, hawker_center_name
+         FROM hawker_master
+         WHERE center_incharge_code = ?
+         ORDER BY unit_code, hawker_center_name`,
+        [execCode]);
+
+      if (!hwkRows.length) return res.json({ exec_code: execCode, as_on: asOn, centers: [] });
+
+      // Group by (unit_code, center_code)
+      const centerMap = {};
+      hwkRows.forEach(h => {
+        const key = `${h.unit_code}|${h.hawker_center_code}`;
+        if (!centerMap[key]) centerMap[key] = {
+          unit_code: h.unit_code, center_code: h.hawker_center_code,
+          center_name: h.hawker_center_name, hawker_ids: [],
+        };
+        centerMap[key].hawker_ids.push(h.hawker_id);
+      });
+
+      const centers = Object.values(centerMap);
+      const allIds  = hwkRows.map(r => r.hawker_id);
+      const IN_PH   = allIds.map(() => '?').join(',');
+
+      // Supply totals for all hawkers in one pass (hawker_id IN — fast indexed query)
+      const { rows: supRows } = await q(
+        `SELECT hawker_id,
+                SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) today_cp,
+                SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prev_cp,
+                SUM(CASE WHEN supply_date BETWEEN ? AND ? THEN sup_copies ELSE 0 END) mtd_cp
+         FROM hawker_supply
+         WHERE hawker_id IN (${IN_PH}) AND supply_date BETWEEN ? AND ?
+         GROUP BY hawker_id`,
+        [asOn, prev, win.from, asOn, ...allIds, win.from, asOn]);
+
+      const supMap = {};
+      supRows.forEach(r => { supMap[r.hawker_id] = r; });
+
+      const result = centers.map(c => {
+        let today = 0, prevCp = 0, mtd = 0;
+        c.hawker_ids.forEach(id => {
+          const s = supMap[id] || {};
+          today  += N(s.today_cp);
+          prevCp += N(s.prev_cp);
+          mtd    += N(s.mtd_cp);
+        });
+        return {
+          unit_code:    c.unit_code,
+          center_code:  c.center_code,
+          center_name:  c.center_name,
+          hawker_count: c.hawker_ids.length,
+          today_cp:     today  || null,
+          prev_cp:      prevCp || null,
+          mtd_cp:       mtd    || null,
+          growth_pct:   prevCp > 0 ? r1((today - prevCp) / prevCp * 100) : null,
+        };
+      });
+
+      res.json({ exec_code: execCode, as_on: asOn, centers: result });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
   /* ── Agencies growing and declining fastest ─────────────────────────────────
      Its own endpoint because it is the expensive part: a ~50-day scan of supply_data
      while everything else on the dashboard is two dates and a snapshot. Fetched after

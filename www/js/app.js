@@ -10669,6 +10669,7 @@ const epState = () => S.live.ep || (S.live.ep = {
   list: null, listPage: 1, listSearch: '', listSort: 'collection_pct', listSortDir: 'desc', _listKey: '',
   drillExec: '', drillExecName: '', drillExecData: null,
   ciDetail: null, ciDetailLoading: false,
+  ciCenters: null, ciCentersLoading: false, ciSelectedCenter: null,
   drillAgency: '', drillUnitCode: '', drillAgencyName: '', drillAgencyData: null,
   growth: null, dcr: null, lastVisit: null, alerts: null,
   alertBucket: '', alertBucketData: null, alertBucketLoading: false,
@@ -10772,6 +10773,7 @@ window.epDrillExec = (code, name, unitCode) => {
   st.drillExec = code; st.drillExecName = name || code; st.drillUnitCode = unitCode || '';
   st.drillExecData = null; st.drillAgency = ''; st.drillAgencyData = null;
   st.ciDetail = null; st.ciDetailLoading = false;
+  st.ciCenters = null; st.ciCentersLoading = false; st.ciSelectedCenter = null;
   render();
   const f = st.filters;
   api.get(epApi(`executive/${encodeURIComponent(code)}`) + `?from=${f.from}&to=${f.to}`)
@@ -10789,6 +10791,41 @@ function _epCIFetch(execCode, unitCode) {
     .then(d => { st.ciDetail = d; st.ciDetailLoading = false; if (S.screen === 'exec_perf') render(); })
     .catch(() => { st.ciDetailLoading = false; if (S.screen === 'exec_perf') render(); });
 }
+
+// Fetch centre-level summary for CI (no unit_code needed — groups hawker_master by centre)
+function _epCICentersFetch(execCode) {
+  const st = epState();
+  if (st.ciCentersLoading || st.ciCenters) return;
+  st.ciCentersLoading = true;
+  const f = st.filters;
+  fetch(`${api.base}/api/command/ci-centers?exec_code=${encodeURIComponent(execCode)}&as_on=${f.to}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => {
+      st.ciCenters = d;
+      st.ciCentersLoading = false;
+      // Auto-select when unit_code already known (supply drill-down path)
+      if (st.drillUnitCode && !st.ciSelectedCenter && d.centers && d.centers.length) {
+        const m = d.centers.find(c => c.unit_code === st.drillUnitCode);
+        if (m) st.ciSelectedCenter = { unit_code: m.unit_code, center_code: m.center_code, center_name: m.center_name };
+      }
+      if (S.screen === 'exec_perf') render();
+    })
+    .catch(() => { st.ciCentersLoading = false; if (S.screen === 'exec_perf') render(); });
+}
+
+window.epSelectCICenter = (unitCode, centerCode, centerName) => {
+  const st = epState();
+  const prev = st.ciSelectedCenter;
+  // Toggle off if same center clicked again
+  if (prev && prev.unit_code === unitCode && prev.center_code === centerCode) {
+    st.ciSelectedCenter = null; st.ciDetail = null; st.ciDetailLoading = false;
+  } else {
+    st.ciSelectedCenter = { unit_code: unitCode, center_code: centerCode, center_name: centerName };
+    st.drillUnitCode = unitCode;
+    st.ciDetail = null; st.ciDetailLoading = false;
+  }
+  render();
+};
 
 window.epDrillAgency = (unitCode, agCode, agName) => {
   if (!agCode) return;
@@ -11547,62 +11584,115 @@ function epExecDetailView() {
   const _isCI = (exec.agency_count === 0 && !exec.total_supply && exec.exec_designation && exec.exec_designation.toUpperCase().includes('CI'))
     || (exec.agency_count === 0 && exec.total_supply === 0 && exec.collection_pct === 0);
   if (_isCI) {
-    // Trigger hawker detail fetch lazily; use drillUnitCode set by epDrillExec (passed from ccFlyExecFull)
-    const unitCode = st.drillUnitCode || '';
-    _epCIFetch(st.drillExec, unitCode);
+    // Step 1: fetch centres (fast, no unit_code needed)
+    _epCICentersFetch(st.drillExec);
+    const cc = st.ciCenters;
+    const ccLoading = st.ciCentersLoading;
+    const selC = st.ciSelectedCenter;
+
+    // Step 2: if a centre is selected, fetch its hawkers
+    if (selC) _epCIFetch(st.drillExec, selC.unit_code);
     const cd = st.ciDetail;
     const cdLoading = st.ciDetailLoading;
 
-    // Hawker table
     const _n  = v => (v == null || v === '' ? '—' : Number(v).toLocaleString('en-IN'));
     const _pct = v => v == null ? '—' : v + '%';
-    const _msClr = v => v == null ? '#64748b' : v >= 50 ? '#15803d' : v >= 30 ? '#b45309' : '#b91c1c';
+    const _msClr  = v => v == null ? '#64748b' : v >= 50 ? '#15803d' : v >= 30 ? '#b45309' : '#b91c1c';
     const _growClr = v => v == null ? '#0f172a' : v >= 0 ? '#15803d' : '#b91c1c';
 
-    let hawkerTable = `<div style="padding:20px;text-align:center;color:#64748b">
-      ${cdLoading ? 'Loading hawker data…' : (cd ? 'No hawkers found' : 'Tap to load hawker data')}
-    </div>`;
+    // KPIs: use selected centre's hawker totals when available, else centre summary totals
+    const kpiHawkers = selC && cd ? (cd.totals?.hawker_count || null)
+                     : (cc && cc.centers ? cc.centers.reduce((s, c) => s + c.hawker_count, 0) : null);
+    const kpiToday   = selC && cd ? (cd.totals?.today_cp || null)
+                     : (cc && cc.centers ? (cc.centers.reduce((s, c) => s + (c.today_cp || 0), 0) || null) : null);
+    const kpiMs      = selC && cd ? cd.totals?.ms_pct : null;
 
-    if (cd && cd.hawkers && cd.hawkers.length) {
-      const hasMS = cd.hawkers.some(h => h.ms_pct != null);
-      const rows = cd.hawkers.map((h, i) => {
-        const compStr = (h.competitors || []).map(c => `${esc(c.name)} ${_n(c.copies)}`).join(' · ');
-        return `<tr style="border-bottom:1px solid #f1f5f9;${i%2===0?'background:#fafafa':''}">
-          <td style="padding:7px 9px;font-size:12.5px;font-weight:600;color:#1e3a8a">${esc(h.hawker_name)}</td>
-          <td style="padding:7px 9px;font-size:11px;color:#64748b">${esc(h.hawker_id)}</td>
-          <td style="padding:7px 9px;font-size:11px;color:#64748b">${esc(h.center_name || '—')}</td>
-          <td style="padding:7px 9px;font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums">${_n(h.today_cp)}</td>
-          <td style="padding:7px 9px;font-size:12px;text-align:right;color:${_growClr(h.growth_pct)}">${h.growth_pct != null ? (h.growth_pct > 0 ? '+' : '') + h.growth_pct + '%' : '—'}</td>
-          ${hasMS ? `<td style="padding:7px 9px;font-size:12.5px;text-align:center;font-weight:700;color:${_msClr(h.ms_pct)}">${_pct(h.ms_pct)}</td>` : ''}
-          ${hasMS ? `<td style="padding:7px 9px;font-size:11px;color:#64748b;max-width:200px">${compStr || '—'}</td>` : ''}
+    // ── Centre table
+    let centerSection;
+    if (ccLoading && !cc) {
+      centerSection = `<div style="padding:20px;text-align:center;color:#64748b">Loading centres…</div>`;
+    } else if (!cc || !cc.centers || !cc.centers.length) {
+      centerSection = `<div style="padding:20px;text-align:center;color:#64748b">No centres found</div>`;
+    } else {
+      const cRows = cc.centers.map(c => {
+        const isSel = selC && selC.unit_code === c.unit_code && selC.center_code === c.center_code;
+        const fn = `epSelectCICenter('${_csQ(c.unit_code)}','${_csQ(c.center_code)}','${_csQ(c.center_name)}')`;
+        return `<tr style="border-bottom:1px solid #f1f5f9;${isSel ? 'background:#eff6ff' : ''}">
+          <td style="padding:10px 12px;font-size:13px;font-weight:${isSel?800:600};color:#1e3a8a;cursor:pointer" onclick="${fn}">${esc(c.center_name)}</td>
+          <td style="padding:10px 12px;font-size:11px;color:#64748b">${esc(c.unit_code)}</td>
+          <td style="padding:10px 12px;font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums">${_n(c.hawker_count)}</td>
+          <td style="padding:10px 12px;font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums">${_n(c.today_cp)}</td>
+          <td style="padding:10px 12px;font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums">${_n(c.mtd_cp)}</td>
+          <td style="padding:10px 12px;text-align:center">
+            <button class="btn sm" onclick="${fn}" style="font-size:11px;white-space:nowrap">${isSel ? '▼ Loaded' : 'View Hawkers →'}</button>
+          </td>
         </tr>`;
       }).join('');
+      centerSection = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:460px">
+        <thead><tr style="background:#1e3a8a;color:#fff">
+          <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:700">Centre</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:700">Unit</th>
+          <th style="padding:8px 12px;text-align:right;font-size:11px;font-weight:700">Hawkers</th>
+          <th style="padding:8px 12px;text-align:right;font-size:11px;font-weight:700">Today</th>
+          <th style="padding:8px 12px;text-align:right;font-size:11px;font-weight:700">MTD</th>
+          <th style="padding:8px 12px;text-align:center;font-size:11px;font-weight:700">Action</th>
+        </tr></thead>
+        <tbody>${cRows}</tbody>
+      </table></div>`;
+    }
 
-      const t = cd.totals || {};
-      hawkerTable = `<div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;min-width:500px">
-          <thead>
-            <tr style="background:#1e3a8a;color:#fff">
-              <th style="padding:8px 9px;text-align:left;font-size:11px;font-weight:700;white-space:nowrap">Hawker Name</th>
-              <th style="padding:8px 9px;text-align:left;font-size:11px;font-weight:700">Code</th>
-              <th style="padding:8px 9px;text-align:left;font-size:11px;font-weight:700">Centre</th>
-              <th style="padding:8px 9px;text-align:right;font-size:11px;font-weight:700">Supply (Today)</th>
-              <th style="padding:8px 9px;text-align:right;font-size:11px;font-weight:700">Growth</th>
-              ${hasMS ? '<th style="padding:8px 9px;text-align:center;font-size:11px;font-weight:700">Market Share</th>' : ''}
-              ${hasMS ? '<th style="padding:8px 9px;text-align:left;font-size:11px;font-weight:700">Competitors (DB)</th>' : ''}
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-          <tfoot>
-            <tr style="background:#eff6ff;font-weight:700;border-top:2px solid #1e3a8a">
-              <td colspan="3" style="padding:8px 9px;font-size:12px">Total (${_n(t.hawker_count)} hawkers)</td>
-              <td style="padding:8px 9px;text-align:right;font-size:13px;color:#1e3a8a">${_n(t.today_cp)} cp</td>
-              <td></td>
-              ${hasMS ? `<td style="padding:8px 9px;text-align:center;font-size:13px;font-weight:800;color:${_msClr(t.ms_pct)}">${_pct(t.ms_pct)}</td>` : ''}
-              ${hasMS ? `<td style="padding:8px 9px;font-size:11px;color:#64748b">DB: ${_n(t.db_total)} total market</td>` : ''}
-            </tr>
-          </tfoot>
-        </table>
+    // ── Hawker table (only when a centre is selected)
+    let hawkerSection = '';
+    if (selC) {
+      let hawkerTable;
+      if (cdLoading && !cd) {
+        hawkerTable = `<div style="padding:16px;text-align:center;color:#64748b">Loading hawkers for ${esc(selC.center_name)}…</div>`;
+      } else if (cd && cd.hawkers && cd.hawkers.length) {
+        const hasMS = cd.hawkers.some(h => h.ms_pct != null);
+        const hRows = cd.hawkers.map((h, i) => {
+          const compStr = (h.competitors || []).map(cx => `${esc(cx.name)} ${_n(cx.copies)}`).join(' · ');
+          return `<tr style="border-bottom:1px solid #f1f5f9;${i%2===0?'background:#fafafa':''}">
+            <td style="padding:7px 9px;font-size:12.5px;font-weight:600;color:#1e3a8a">${esc(h.hawker_name)}</td>
+            <td style="padding:7px 9px;font-size:11px;color:#64748b">${esc(h.hawker_id)}</td>
+            <td style="padding:7px 9px;font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums">${_n(h.today_cp)}</td>
+            <td style="padding:7px 9px;font-size:12px;text-align:right;color:${_growClr(h.growth_pct)}">${h.growth_pct != null ? (h.growth_pct > 0 ? '+' : '') + h.growth_pct + '%' : '—'}</td>
+            <td style="padding:7px 9px;font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums;color:#475569">${_n(h.mtd_cp)}</td>
+            ${hasMS ? `<td style="padding:7px 9px;font-size:12.5px;text-align:center;font-weight:700;color:${_msClr(h.ms_pct)}">${_pct(h.ms_pct)}</td>` : ''}
+            ${hasMS ? `<td style="padding:7px 9px;font-size:11px;color:#64748b;max-width:200px">${compStr || '—'}</td>` : ''}
+          </tr>`;
+        }).join('');
+        const t = cd.totals || {};
+        hawkerTable = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:460px">
+          <thead><tr style="background:#0ea5e9;color:#fff">
+            <th style="padding:8px 9px;text-align:left;font-size:11px;font-weight:700;white-space:nowrap">Hawker Name</th>
+            <th style="padding:8px 9px;text-align:left;font-size:11px;font-weight:700">Code</th>
+            <th style="padding:8px 9px;text-align:right;font-size:11px;font-weight:700">Today</th>
+            <th style="padding:8px 9px;text-align:right;font-size:11px;font-weight:700">Growth</th>
+            <th style="padding:8px 9px;text-align:right;font-size:11px;font-weight:700">MTD</th>
+            ${hasMS ? '<th style="padding:8px 9px;text-align:center;font-size:11px;font-weight:700">Market Share</th>' : ''}
+            ${hasMS ? '<th style="padding:8px 9px;text-align:left;font-size:11px;font-weight:700">DB Competitors</th>' : ''}
+          </tr></thead>
+          <tbody>${hRows}</tbody>
+          <tfoot><tr style="background:#f0f9ff;font-weight:700;border-top:2px solid #0ea5e9">
+            <td colspan="2" style="padding:8px 9px;font-size:12px">Total (${_n(t.hawker_count)} hawkers)</td>
+            <td style="padding:8px 9px;text-align:right;font-size:13px;color:#0ea5e9">${_n(t.today_cp)}</td>
+            <td></td>
+            <td style="padding:8px 9px;text-align:right;font-size:13px;color:#0ea5e9">${_n(t.mtd_cp)}</td>
+            ${hasMS ? `<td style="padding:8px 9px;text-align:center;font-size:13px;font-weight:800;color:${_msClr(t.ms_pct)}">${_pct(t.ms_pct)}</td>` : ''}
+            ${hasMS ? `<td style="padding:8px 9px;font-size:11px;color:#64748b">DB total: ${_n(t.db_total)}</td>` : ''}
+          </tr></tfoot>
+        </table></div>`;
+      } else if (!cdLoading) {
+        hawkerTable = `<div style="padding:16px;text-align:center;color:#64748b">No hawker data for ${esc(selC.center_name)}</div>`;
+      } else {
+        hawkerTable = '';
+      }
+      hawkerSection = `<div class="card" style="padding:0;overflow:hidden;margin-top:12px">
+        <div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px">
+          <span style="font-size:13px;font-weight:700">${esc(selC.center_name)}</span>
+          <span style="font-size:11px;color:#64748b">· Hawker List · Supply & Market Share</span>
+        </div>
+        ${hawkerTable}
       </div>`;
     }
 
@@ -11635,31 +11725,32 @@ function epExecDetailView() {
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:4px">
           <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px">
             <div style="font-size:10px;font-weight:700;color:#0ea5e9;text-transform:uppercase">Hawkers</div>
-            <div style="font-size:20px;font-weight:800;color:#0ea5e9">${_n(cd ? cd.totals?.hawker_count : null)}</div>
+            <div style="font-size:20px;font-weight:800;color:#0ea5e9">${_n(kpiHawkers)}</div>
           </div>
           <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px">
             <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Supply Today</div>
-            <div style="font-size:20px;font-weight:800">${_n(cd ? cd.totals?.today_cp : null)} <span style="font-size:12px;color:#94a3b8">cp</span></div>
+            <div style="font-size:20px;font-weight:800">${_n(kpiToday)} <span style="font-size:12px;color:#94a3b8">cp</span></div>
           </div>
           <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px">
             <div style="font-size:10px;font-weight:700;color:#15803d;text-transform:uppercase">Collection %</div>
             <div style="font-size:20px;font-weight:800;color:#15803d">100%</div>
             <div style="font-size:10px;color:#86efac">Cash upfront</div>
           </div>
-          ${cd && cd.totals?.ms_pct != null ? `<div style="background:#fefce8;border:1px solid #fef08a;border-radius:8px;padding:10px">
+          ${kpiMs != null ? `<div style="background:#fefce8;border:1px solid #fef08a;border-radius:8px;padding:10px">
             <div style="font-size:10px;font-weight:700;color:#b45309;text-transform:uppercase">Market Share</div>
-            <div style="font-size:20px;font-weight:800;color:${_msClr(cd.totals.ms_pct)}">${cd.totals.ms_pct}%</div>
-            <div style="font-size:10px;color:#94a3b8">DB: ${_n(cd.totals.db_total)}</div>
+            <div style="font-size:20px;font-weight:800;color:${_msClr(kpiMs)}">${kpiMs}%</div>
+            <div style="font-size:10px;color:#94a3b8">DB: ${_n(cd.totals?.db_total)}</div>
           </div>` : ''}
         </div>
       </div>
       <div class="card" style="padding:0;overflow:hidden">
         <div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px">
-          <span style="font-size:13px;font-weight:700">Hawker List</span>
-          <span style="font-size:11px;color:#64748b">· Supply & Market Share</span>
+          <span style="font-size:13px;font-weight:700">Centre List</span>
+          <span style="font-size:11px;color:#64748b">· Click a centre to view its hawkers</span>
         </div>
-        ${hawkerTable}
-      </div>`;
+        ${centerSection}
+      </div>
+      ${hawkerSection}`;
   }
   const pct = exec.collection_pct || 0;
 
