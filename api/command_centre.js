@@ -43,6 +43,32 @@ module.exports = function installCommandCentre({ app, q }) {
   };
   const blank = () => Object.fromEntries(STATES.map(s => [s.key, 0]));
 
+  /* agency_master's unit -> home-state tally and the VP-per-state rollup are the same
+     two full GROUP BYs on every request (~1.1s each), and they only move when
+     agency_master syncs. Memoised for an hour so the dashboard is not re-deriving the
+     org chart on every page load. */
+  const MEMO = new Map();
+  const MEMO_TTL_MS = 60 * 60 * 1000;
+  function memo(key, fn) {
+    const hit = MEMO.get(key);
+    if (hit && Date.now() - hit.at < MEMO_TTL_MS) return hit.p;
+    const p = Promise.resolve().then(fn).catch(e => { MEMO.delete(key); throw e; });
+    MEMO.set(key, { at: Date.now(), p });
+    return p;
+  }
+  // unit -> the state most of its agencies sit in. Used by supply bucketing, the state
+  // head rollup and the state dashboard's branch list, so they cannot disagree.
+  function unitHomeState() {
+    return memo('unitHome', async () => {
+      const { rows } = await q(
+        `SELECT unit, state_name, COUNT(*) c FROM agency_master
+         WHERE state_name IS NOT NULL AND state_name <> '' GROUP BY unit, state_name`);
+      const home = {};
+      rows.forEach(r => { const u = r.unit; if (!home[u] || N(r.c) > home[u].c) home[u] = { st: r.state_name, c: N(r.c) }; });
+      return home;
+    });
+  }
+
   // ── Comparison windows ────────────────────────────────────────────────────
   // "Previous day" is the previous day WITH DATA, not calendar-yesterday — supply
   // syncs overnight and skips some days, and comparing against an empty day would
@@ -155,6 +181,34 @@ module.exports = function installCommandCentre({ app, q }) {
     };
   }
 
+  /* The quarterly supply figure is a two-year scan of supply_data — 7-8 seconds on its
+     own, which was the whole reason the Command Centre sat on skeletons. It moves only
+     when supply syncs, so the result is cached per (as-on date, unit scope): the first
+     caller after a sync pays for it and everyone else is served from memory. It is also
+     served from its own endpoint so the KPI cards never wait behind it. */
+  const QTR_CACHE = new Map();
+  const QTR_TTL_MS = 60 * 60 * 1000;
+  async function quarterlyCached(asOn, unitScope) {
+    const key = `${asOn}|${unitScope || ''}`;
+    const hit = QTR_CACHE.get(key);
+    if (hit && Date.now() - hit.at < QTR_TTL_MS) return hit.val;
+    const val = await quarterly(asOn, unitScope);
+    QTR_CACHE.set(key, { at: Date.now(), val });
+    // Keyed by as-on date, so yesterday's entries are dead weight once supply syncs.
+    if (QTR_CACHE.size > 40) {
+      for (const k of QTR_CACHE.keys()) { if (!k.startsWith(asOn)) QTR_CACHE.delete(k); }
+    }
+    return val;
+  }
+
+  app.get('/api/command/quarterly', async (req, res) => {
+    try {
+      const { asOn } = await resolveDates(req.query.as_on, req.query.compare);
+      const unitScope = String(req.query.unit_code || '').trim() || null;
+      res.json(await quarterlyCached(asOn, unitScope));
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
   // Collection receipts + field visits over an arbitrary window, all-India.
   async function rangeTotals(win, unitScope) {
     const uC = unitScope ? ' AND unit_code = ?' : '';
@@ -195,11 +249,9 @@ module.exports = function installCommandCentre({ app, q }) {
                 SUM(CASE WHEN h.supply_date = ? THEN h.sup_copies ELSE 0 END) prv
          FROM hawker_supply h WHERE h.supply_date IN (?, ?)${hCl}
          GROUP BY h.loc_id`, [asOn, prev, asOn, prev, ...uP]),
-      q(`SELECT unit, state_name, COUNT(*) c FROM agency_master
-         WHERE state_name IS NOT NULL AND state_name <> '' GROUP BY unit, state_name`),
+      unitHomeState(),
     ]);
-    const home = {};
-    uhs.rows.forEach(r => { const u = r.unit; if (!home[u] || N(r.c) > home[u].c) home[u] = { st: r.state_name, c: N(r.c) }; });
+    const home = uhs;
 
     const agentCur = blank(), agentPrev = blank(), cashCur = blank(), cashPrev = blank();
     agent.rows.forEach(r => { const b = bucketOf(r.st); agentCur[b] += N(r.cur); agentPrev[b] += N(r.prv); });
@@ -331,15 +383,14 @@ module.exports = function installCommandCentre({ app, q }) {
     return out;
   }
 
-  async function stateHeads() {
+  function stateHeads() { return memo('stateHeads', _stateHeads); }
+  async function _stateHeads() {
     const { rows } = await q(
       `SELECT m.unit_code, MAX(m.vp_circulation_name) vp, MAX(m.zonal_head_name) zh
        FROM exec_hierarchy_mapping m GROUP BY m.unit_code`);
-    const { rows: uhs } = await q(
-      `SELECT unit, state_name, COUNT(*) c FROM agency_master
-       WHERE state_name IS NOT NULL AND state_name<>'' GROUP BY unit, state_name`);
+    const hs = await unitHomeState();
     const home = {};
-    uhs.forEach(r => { const u = r.unit; if (!home[u] || N(r.c) > home[u].c) home[u] = r.state_name; });
+    Object.keys(hs).forEach(u => { home[u] = hs[u].st; });
     // Most-common VP per state bucket.
     const tally = {};
     rows.forEach(r => {
@@ -381,7 +432,6 @@ module.exports = function installCommandCentre({ app, q }) {
         stateHeads(),
         rangeTotals(win, unitScope),
       ]);
-      const qtr = await quarterly(asOn, unitScope);
 
       const states = STATES.map(s => {
         const k = s.key;
@@ -457,7 +507,6 @@ module.exports = function installCommandCentre({ app, q }) {
         range: win.key, range_label: win.label, range_from: win.from, range_to: win.to,
         unit_code: unitScope,
         totals,
-        quarterly: qtr,
         states,
         ...balance(buildAlerts(states), buildOpportunities(states)),
         market_share: buildMarketShare(states),
@@ -483,17 +532,14 @@ module.exports = function installCommandCentre({ app, q }) {
        they cannot split a unit's tally across two spellings. This is the same
        most-agencies-wins rule the state cards use, so the two views agree on which
        branches make up a state. */
-    const [tally, names] = await Promise.all([
-      q(`SELECT unit, state_name, COUNT(*) c FROM agency_master
-         WHERE state_name IS NOT NULL AND state_name <> '' GROUP BY unit, state_name`),
-      q(`SELECT unit, MAX(unit_name) unit_name FROM agency_master GROUP BY unit`),
+    const [home, nm] = await Promise.all([
+      unitHomeState(),
+      memo('unitNames', async () => {
+        const { rows } = await q(`SELECT unit, MAX(unit_name) unit_name FROM agency_master GROUP BY unit`);
+        const m = {}; rows.forEach(r => { m[r.unit] = r.unit_name; });
+        return m;
+      }),
     ]);
-    const nm = {}; names.rows.forEach(r => { nm[r.unit] = r.unit_name; });
-    const home = {};
-    tally.rows.forEach(r => {
-      const u = r.unit;
-      if (!home[u] || N(r.c) > home[u].c) home[u] = { c: N(r.c), st: r.state_name };
-    });
     return Object.entries(home)
       .filter(([, v]) => bucketOf(v.st) === stateKey)
       .map(([unit]) => ({ unit_code: unit, unit_name: nm[unit] || unit }))

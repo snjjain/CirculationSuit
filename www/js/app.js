@@ -4126,6 +4126,8 @@ window.ccSet = (k, v) => {
   if (k === 'state') { st.unit = ''; st.district = ''; }
   if (k === 'unit') st.district = '';
   st.data = null; st._loading = false;
+  // Quarterly only depends on as-on date and unit scope, so a range change keeps it.
+  if (k === 'asOn' || k === 'unit') { st.qtr = null; st._qtrLoading = false; }
   render();
 };
 window.ccReset = () => { S.live.cc = null; render(); };
@@ -4143,6 +4145,21 @@ window.ccDrill = (screen, stateKey) => {
 const _ccOsCode  = k => ({ 'RAJASTHAN': 'RPPL', 'MADHYA PRADESH': 'MP', 'CHHATTISGARH': 'CG' }[k] || 'NATIONAL');
 const _ccDcrName = k => ({ 'RAJASTHAN': 'Rajasthan', 'MADHYA PRADESH': 'Madhya Pradesh', 'CHHATTISGARH': 'Chhattisgarh' }[k] || 'National');
 
+/* Quarterly is fetched separately: it is a two-year scan of supply_data server-side, and
+   holding the KPI cards behind it left the dashboard on skeletons for ~8 seconds. The
+   charts show their own placeholder until it lands. */
+function _ccLoadQuarterly() {
+  const st = _ccState();
+  if (st._qtrLoading || st.qtr) return;
+  st._qtrLoading = true;
+  const p = new URLSearchParams();
+  if (st.asOn) p.set('as_on', st.asOn);
+  if (st.unit) p.set('unit_code', st.unit);
+  fetch(`${location.origin}/api/command/quarterly?${p}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.qtr = d && d.detail ? { _err: d.detail } : d; st._qtrLoading = false; if (S.screen === 'command') render(); })
+    .catch(e => { st.qtr = { _err: String(e && e.message || e) }; st._qtrLoading = false; if (S.screen === 'command') render(); });
+}
 function _ccLoad() {
   const st = _ccState();
   if (st._loading || st.data) return;
@@ -4802,10 +4819,17 @@ function _cmdViewNew() {
      year (Q1 Apr-Jun) and supply on the calendar year (Q1 Jan-Mar), so each states its
      own basis under the title — otherwise the same "Q1" on two adjacent charts would be
      read as the same three months. */
-  const Q = d.quarterly;
+  _ccLoadQuarterly();
+  const Q = st.qtr && !st.qtr._err ? st.qtr : null;
   const cBase = Q && (Q.collection_base || Q.fy_base), cCur = Q && (Q.collection_current || Q.fy_current);
   const sBase = Q && (Q.supply_base || Q.fy_base), sCur = Q && (Q.supply_current || Q.fy_current);
-  const charts = !Q ? '' : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
+  const chartSkel = title => `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+    <div style="font-size:14.5px;font-weight:800;color:#0f172a">${title}</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:10px">${st.qtr && st.qtr._err ? 'Could not load.' : 'Loading…'}</div>
+    <div style="height:150px;background:#f1f5f9;border-radius:8px"></div></div>`;
+  const charts = !Q ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
+    ${chartSkel('Quarterly Collection')}${chartSkel('Quarterly Supply (Net Paid)')}</div>`
+    : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
       <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Collection</div>
       <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(cBase)} (Base) vs ${esc(cCur)} · receipts banked · ${esc(Q.collection_basis || 'Financial year · Apr–Mar')}</div>
