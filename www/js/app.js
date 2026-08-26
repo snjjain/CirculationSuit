@@ -4941,6 +4941,12 @@ function _csState() {
     movers: null, _movLoading: false, movTab: 'declining', movAll: false,
     sp: null, _spLoading: false, spPage: 1, spStatus: '',
     execAll: false,
+    // Analytics controls
+    seg: 'all',          // 'all' | 'agent' | 'cash'
+    sort: null,          // null | {col: string, dir: 'asc'|'desc'}
+    activeOnly: true,    // show only is_active executives by default
+    search: '',
+    insightTab: 'top',   // 'top' | 'bottom' | 'grow' | 'risk'
   };
   return S.ccStateDash;
 }
@@ -4949,6 +4955,7 @@ function _csReset(st) {
   st.movers = null; st._movLoading = false; st.movAll = false;
   st.sp = null; st._spLoading = false; st.spPage = 1;
   st.execAll = false;
+  st.sort = null; st.search = '';
 }
 window.ccOpenState = (stateKey) => {
   const st = _csState();
@@ -4962,13 +4969,18 @@ window.ccOpenBranch = (stateKey, unitCode) => {
   st.state = stateKey; st.unit = unitCode;
   go('cc_state');
 };
-window.csSetRange   = v => { const st = _csState(); st.range = v; _csReset(st); render(); };
-window.csMovTab     = v => { const st = _csState(); st.movTab = v; st.movAll = false; render(); };
-window.csMovAll     = () => { const st = _csState(); st.movAll = !st.movAll; render(); };
-window.csExecAll    = () => { const st = _csState(); st.execAll = !st.execAll; render(); };
-window.csSpPage     = p => { const st = _csState(); st.spPage = Math.max(1, p); st.sp = null; st._spLoading = false; render(); };
-window.csSpStatus   = v => { const st = _csState(); st.spStatus = v; st.spPage = 1; st.sp = null; st._spLoading = false; render(); };
-window.csBackToState = () => { const st = _csState(); _csReset(st); st.unit = ''; render(); };
+window.csSetRange     = v => { const st = _csState(); st.range = v; _csReset(st); render(); };
+window.csMovTab       = v => { const st = _csState(); st.movTab = v; st.movAll = false; render(); };
+window.csMovAll       = () => { const st = _csState(); st.movAll = !st.movAll; render(); };
+window.csExecAll      = () => { const st = _csState(); st.execAll = !st.execAll; render(); };
+window.csSpPage       = p => { const st = _csState(); st.spPage = Math.max(1, p); st.sp = null; st._spLoading = false; render(); };
+window.csSpStatus     = v => { const st = _csState(); st.spStatus = v; st.spPage = 1; st.sp = null; st._spLoading = false; render(); };
+window.csBackToState  = () => { const st = _csState(); _csReset(st); st.unit = ''; render(); };
+window.csSetSeg       = v => { _csState().seg = v; render(); };
+window.csSetSort      = col => { const st = _csState(); st.sort = st.sort && st.sort.col === col ? { col, dir: st.sort.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'desc' }; render(); };
+window.csToggleActive = () => { const st = _csState(); st.activeOnly = !st.activeOnly; render(); };
+window.csSearch       = v => { _csState().search = v; render(); };
+window.csInsightTab   = t => { _csState().insightTab = t; render(); };
 
 /* The agency and executive panels belong to the Command Centre flyout. Opened from
    here there is no alert behind them, so the flyout starts with an empty stack and
@@ -5137,29 +5149,218 @@ function _csMovers(st, d) {
   return _csCard('Agencies Growing & Declining', sub, inner, tabs);
 }
 
-/* ── Executive performance, branch by branch ── */
-function _csExecs(st, d) {
-  const list = d.executives || [];
-  const shown = st.execAll ? list : list.slice(0, 25);
-  const inner = _csTable(['Executive', 'Branch', 'Edition Incharge', 'Zonal Head', 'Agencies', 'Supply', 'Growth', 'Collection', 'Outstanding', 'Coll %', 'Visits', 'Coverage'],
-    shown.map(e => ({
-      onClick: e.exec_code ? `ccOpenExecPanel('${_csQ(e.exec_code)}','${_csQ(e.exec_name)}')` : '',
-      title: 'Open executive performance',
-      cells: [
-        `<b style="color:#1e3a8a">${esc(e.exec_name)}</b>${e.designation ? ` <span style="font-size:10px;color:#94a3b8">${esc(e.designation)}</span>` : ''}`,
-        esc(e.unit_name || '—'), esc(e.edtn_incharge || '—'), esc(e.zonal_head || '—'),
-        _ccN(e.agencies), `<b>${_ccN(e.supply)}</b>`, _ccTrend(e.growth_pct),
-        _ccINR(e.collection),
-        `<span style="color:${e.outstanding > 0 ? '#b91c1c' : '#0f172a'}">${_ccINR(e.outstanding)}</span>`,
-        e.collection_pct == null ? '—' : e.collection_pct + '%',
-        _ccN(e.visits),
-        e.coverage_pct == null ? '—' : `<span style="color:${e.coverage_pct < 20 ? '#b91c1c' : '#15803d'}">${e.coverage_pct}%</span>`,
-      ],
-    })), { minWidth: 1080, empty: 'No executives mapped here.' })
-    + (list.length > 25 ? `<div style="margin-top:10px">${_csBtn(st.execAll ? 'Show top 25' : `Show all ${_ccN(list.length)} →`, 'csExecAll()', false)}</div>` : '');
-  return _csCard('Executive Performance',
-    `Every executive ${st.unit ? 'in this branch' : 'in the state'} with their book, movement and field activity · collection over ${esc(d.range_label)}`,
-    inner);
+/* ── Status chip for a row ── */
+function _csStatus(r, seg) {
+  const growth = seg === 'agent' ? (r.supply.agent_growth_pct != null ? r.supply.agent_growth_pct : r.supply.growth_pct)
+               : seg === 'cash'  ? (r.supply.cash_growth_pct  != null ? r.supply.cash_growth_pct  : r.supply.growth_pct)
+               : r.supply.growth_pct;
+  const coll = r.collection ? r.collection.pct : null;
+  const critAmt = r.outstanding ? r.outstanding.amount : 0;
+  const hasCrit = r.outstanding && r.outstanding.critical > 0;
+  const isRisk = (growth != null && growth < -5) || (coll != null && coll < 60) || (hasCrit && critAmt > 2000000);
+  const isWatch = !isRisk && ((growth != null && growth < 0) || (coll != null && coll < 80) || hasCrit);
+  if (isRisk)  return `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#fee2e2;color:#b91c1c">&#128308; Risk</span>`;
+  if (isWatch) return `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#fef3c7;color:#b45309">&#128993; Watch</span>`;
+  return       `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#dcfce7;color:#15803d">&#128994; Good</span>`;
+}
+
+/* ── Quick Insights panel ── */
+function _csInsights(st, d) {
+  const rows = (d.branches || []).filter(r => {
+    if (st.activeOnly && r.is_active === false) return false;
+    if (st.seg === 'agent' && !r.supply.agent) return false;
+    if (st.seg === 'cash'  && !r.supply.cash)  return false;
+    return true;
+  });
+  if (!rows.length) return '';
+
+  const bySupply   = [...rows].sort((a, b) => b.supply.current - a.supply.current);
+  const byColl     = [...rows].filter(r => r.collection.pct != null).sort((a, b) => a.collection.pct - b.collection.pct);
+  const byGrowth   = [...rows].filter(r => r.supply.growth_pct != null).sort((a, b) => b.supply.growth_pct - a.supply.growth_pct);
+  const atRisk     = rows.filter(r => {
+    const g = r.supply.growth_pct; const c = r.collection.pct;
+    return (g != null && g < -2) || (c != null && c < 70) || (r.outstanding.critical > 0 && r.outstanding.amount > 1000000);
+  });
+
+  const tabs = [['top','🏆 Top'], ['bottom','📉 Worst'], ['grow','🚀 Growth'], ['risk','⚠️ Attention']];
+  const tabBar = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+    ${tabs.map(([k, l]) => `<button onclick="csInsightTab('${k}')"
+      style="padding:5px 12px;border:1px solid ${st.insightTab===k?'#1e3a8a':'#e2e8f0'};border-radius:20px;background:${st.insightTab===k?'#1e3a8a':'#f8fafc'};color:${st.insightTab===k?'#fff':'#475569'};font-size:11.5px;font-weight:${st.insightTab===k?700:500};cursor:pointer;white-space:nowrap">${l}${k==='risk'&&atRisk.length?` <span style="background:#ef4444;color:#fff;border-radius:9px;padding:0 5px;font-size:10px">${atRisk.length}</span>`:''}</button>`).join('')}
+  </div>`;
+
+  const scoreBar = (val, max) => {
+    const pct = max ? Math.min(100, (val / max) * 100) : 0;
+    return `<div style="height:4px;background:#eef2f7;border-radius:3px;width:80px;display:inline-block;vertical-align:middle;margin-left:6px"><div style="height:4px;width:${pct}%;background:#3b82f6;border-radius:3px"></div></div>`;
+  };
+
+  let list = [], emptyMsg = '';
+  const gLabel = d.group_label;
+
+  if (st.insightTab === 'top') {
+    list = bySupply.slice(0, 5);
+    emptyMsg = 'No data';
+  } else if (st.insightTab === 'bottom') {
+    list = byColl.slice(0, 5);
+    emptyMsg = 'No data with billing available';
+  } else if (st.insightTab === 'grow') {
+    list = byGrowth.slice(0, 5);
+    emptyMsg = 'No growth data available';
+  } else {
+    list = atRisk.slice(0, 8);
+    emptyMsg = '✅ No risks detected — all rows are on track';
+  }
+
+  const maxSupply = bySupply[0] ? bySupply[0].supply.current : 1;
+  const rowClick = r => d.level === 'branch'
+    ? (r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}')` : '')
+    : `ccOpenBranch('${_csQ(d.state)}','${_csQ(r.key)}')`;
+
+  const items = !list.length ? `<div style="font-size:12.5px;color:#94a3b8;padding:8px 0">${emptyMsg}</div>` :
+    list.map((r, i) => {
+      const g = st.insightTab === 'grow' || st.insightTab === 'risk' ? r.supply.growth_pct : null;
+      const supVal = st.seg === 'agent' ? r.supply.agent : st.seg === 'cash' ? r.supply.cash : r.supply.current;
+      const badge = st.insightTab === 'top' ? `<span style="font-size:10px;font-weight:800;color:#94a3b8;min-width:16px;display:inline-block">${i + 1}</span>` : '';
+      const collBadge = r.collection.pct != null ? `<span style="font-size:11px;font-weight:700;color:${r.collection.pct<60?'#b91c1c':r.collection.pct<80?'#b45309':'#15803d'};margin-left:8px">Coll ${r.collection.pct}%</span>` : '';
+      const growBadge = g != null ? `<span style="font-size:11px;font-weight:700;color:${g<0?'#b91c1c':'#15803d'};margin-left:8px">${g>0?'+':''}${g}%</span>` : '';
+      const osBadge = r.outstanding.amount > 1000000 ? `<span style="font-size:10px;color:#b91c1c;margin-left:6px">OS ${_ccINR(r.outstanding.amount)}</span>` : '';
+      return `<div onclick="${rowClick(r)}" style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:9px;background:#f8fafc;margin-bottom:5px;cursor:pointer" onmouseenter="this.style.background='#eff6ff'" onmouseleave="this.style.background='#f8fafc'">
+        ${badge}<div style="font-size:12.5px;font-weight:700;color:#1e3a8a;min-width:110px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</div>
+        <div style="font-size:12.5px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums">${_ccN(supVal)}</div>
+        ${scoreBar(supVal, maxSupply)}${collBadge}${growBadge}${osBadge}${_csStatus(r, st.seg)}
+      </div>`;
+    }).join('');
+
+  return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:16px">
+    <div style="font-size:14px;font-weight:800;color:#1e3a8a;margin-bottom:2px">Quick Insights</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:10px">Click any row to drill down · ${esc(d.range_label)}</div>
+    ${tabBar}${items}
+  </div>`;
+}
+
+/* ── Single consolidated analytical table ── */
+function _csConsolidated(st, d) {
+  let rows = (d.branches || []).filter(r => {
+    if (st.activeOnly && r.is_active === false) return false;
+    if (st.seg === 'agent' && !r.supply.agent && !r.supply.current) return false;
+    if (st.seg === 'cash'  && !r.supply.cash  && !r.supply.current) return false;
+    if (st.search) {
+      const q = st.search.toLowerCase();
+      if (!r.name.toLowerCase().includes(q)) return false;
+    }
+    return true;
+  });
+
+  // Sorting
+  const sortKey = st.sort ? st.sort.col : null;
+  const sortDir = st.sort ? st.sort.dir : 'desc';
+  if (sortKey) {
+    rows = [...rows].sort((a, b) => {
+      let av, bv;
+      if (sortKey === 'name')      { av = a.name; bv = b.name; return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av); }
+      if (sortKey === 'agent')     { av = a.supply.agent; bv = b.supply.agent; }
+      else if (sortKey === 'cash') { av = a.supply.cash;  bv = b.supply.cash; }
+      else if (sortKey === 'supply') { av = a.supply.current; bv = b.supply.current; }
+      else if (sortKey === 'growth') { av = a.supply.growth_pct || -9999; bv = b.supply.growth_pct || -9999; }
+      else if (sortKey === 'coll')   { av = a.collection.pct || 0; bv = b.collection.pct || 0; }
+      else if (sortKey === 'os')     { av = a.outstanding.amount; bv = b.outstanding.amount; }
+      else if (sortKey === 'dcr')    { av = a.dcr ? a.dcr.coverage_pct || 0 : 0; bv = b.dcr ? b.dcr.coverage_pct || 0 : 0; }
+      else { av = a.supply.current; bv = b.supply.current; }
+      av = av == null ? -9999 : av; bv = bv == null ? -9999 : bv;
+      return sortDir === 'asc' ? av - bv : bv - av;
+    });
+  }
+
+  const isBranch = d.level === 'branch';
+  const gLabel = d.group_label;
+  const rowLink = r => isBranch
+    ? (r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}')` : '')
+    : `ccOpenBranch('${_csQ(d.state)}','${_csQ(r.key)}')`;
+
+  const thBtn = (col, label) => {
+    const active = sortKey === col;
+    const arrow = active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+    return `<th onclick="csSetSort('${col}')" style="text-align:right;padding:6px 8px;font-weight:800;white-space:nowrap;cursor:pointer;color:${active?'#1e3a8a':'#64748b'};font-size:10px;text-transform:uppercase;letter-spacing:.05em;user-select:none">${label}${arrow}</th>`;
+  };
+  const thLeft = (col, label) => {
+    const active = sortKey === col;
+    const arrow = active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+    return `<th onclick="csSetSort('${col}')" style="text-align:left;padding:6px 8px;font-weight:800;white-space:nowrap;cursor:pointer;color:${active?'#1e3a8a':'#64748b'};font-size:10px;text-transform:uppercase;letter-spacing:.05em;user-select:none">${label}${arrow}</th>`;
+  };
+
+  const showAgent = st.seg !== 'cash';
+  const showCash  = st.seg !== 'agent';
+
+  const thead = `<tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">
+    ${thLeft('name', gLabel)}
+    ${showAgent ? thBtn('agent', 'Agent Sale') : ''}
+    ${showCash  ? thBtn('cash',  'Cash Sale')  : ''}
+    ${thBtn('supply', 'Total Supply')}
+    ${thBtn('growth', 'Growth')}
+    ${thBtn('coll', 'Collection')}
+    <th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">Coll %</th>
+    ${thBtn('os', 'Outstanding')}
+    <th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">Critical</th>
+    ${thBtn('dcr', 'DCR %')}
+    <th style="text-align:center;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th>
+  </tr>`;
+
+  const shown = st.execAll ? rows : rows.slice(0, 30);
+  const trows = shown.length ? shown.map(r => {
+    const onClick = rowLink(r);
+    const nameCl = `<div><b style="color:#1e3a8a;font-size:12.5px">${esc(r.name)}</b>${r.sub ? ` <span style="font-size:10px;font-weight:600;color:#94a3b8;background:#f1f5f9;padding:1px 5px;border-radius:4px">${esc(r.sub)}</span>` : ''}</div>
+      ${isBranch && r.unit_name ? `<div style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</div>` : ''}`;
+    const agentVal = r.supply.agent;
+    const cashVal  = r.supply.cash;
+    const supVal   = r.supply.current;
+    const collPct  = r.collection.pct;
+    const isInactive = r.is_active === false;
+    const rowStyle = `cursor:pointer;border-top:1px solid #eef2f7;${isInactive ? 'opacity:.65' : ''}`;
+    return `<tr onclick="${onClick}" title="Open ${isBranch ? 'executive performance' : 'branch dashboard'}" style="${rowStyle}" onmouseenter="this.style.background='#f0f9ff'" onmouseleave="this.style.background=''">
+      <td style="padding:8px 8px;text-align:left">${nameCl}</td>
+      ${showAgent ? `<td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px;color:${agentVal?'#0f172a':'#cbd5e1'}">${agentVal ? _ccN(agentVal) : '—'}</td>` : ''}
+      ${showCash  ? `<td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px;color:${cashVal?'#0ea5e9':'#cbd5e1'}">${cashVal ? _ccN(cashVal) : '—'}</td>` : ''}
+      <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums"><b style="font-size:13px">${_ccN(supVal)}</b></td>
+      <td style="padding:8px 8px;text-align:right">${_ccTrend(r.supply.growth_pct)}</td>
+      <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px">${_ccINR(r.collection.collected)}</td>
+      <td style="padding:8px 8px;text-align:right"><b style="color:${collPct==null?'#94a3b8':collPct>=85?'#15803d':collPct>=65?'#b45309':'#b91c1c'}">${collPct == null ? '—' : collPct + '%'}</b></td>
+      <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px"><span style="color:${r.outstanding.amount>0?'#b91c1c':'#94a3b8'}">${_ccINR(r.outstanding.amount)}</span></td>
+      <td style="padding:8px 8px;text-align:right;font-size:12px"><span style="color:${r.outstanding.critical>0?'#b91c1c':'#94a3b8'}">${_ccN(r.outstanding.critical)}</span></td>
+      <td style="padding:8px 8px;text-align:right;font-size:12px">${r.dcr && r.dcr.coverage_pct != null ? `<span style="color:${r.dcr.coverage_pct<10?'#b91c1c':r.dcr.coverage_pct<30?'#b45309':'#15803d'}">${r.dcr.coverage_pct}%</span>` : '—'}</td>
+      <td style="padding:8px 8px;text-align:center">${_csStatus(r, st.seg)}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="12" style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px">No ${gLabel.toLowerCase()}s match the current filters.</td></tr>`;
+
+  const showAllBtn = rows.length > 30 ? `<div style="margin-top:11px">${_csBtn(st.execAll ? 'Show top 30' : `Show all ${_ccN(rows.length)} →`, 'csExecAll()', false)}</div>` : '';
+
+  const totalRisk  = rows.filter(r => { const s = _csStatus(r, st.seg); return s.includes('Risk'); }).length;
+  const totalWatch = rows.filter(r => { const s = _csStatus(r, st.seg); return s.includes('Watch'); }).length;
+  const totalGood  = rows.length - totalRisk - totalWatch;
+  const statusSummary = rows.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:11.5px">
+    <span style="color:#15803d;font-weight:700">&#128994; ${totalGood} Good</span>
+    <span style="color:#b45309;font-weight:700">&#128993; ${totalWatch} Watch</span>
+    <span style="color:#b91c1c;font-weight:700">&#128308; ${totalRisk} Risk</span>
+    <span style="color:#94a3b8">· ${rows.length} total${st.activeOnly ? ' (active only)' : ''}</span>
+  </div>` : '';
+
+  const inner = `${statusSummary}<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:880px">
+    <thead>${thead}</thead><tbody>${trows}</tbody></table></div>${showAllBtn}`;
+
+  const activeCount = (d.branches || []).filter(r => r.is_active !== false).length;
+  const inactiveCount = (d.branches || []).length - activeCount;
+  const activeLegend = inactiveCount > 0 ? `<span style="font-size:11px;color:#94a3b8">· ${_ccN(inactiveCount)} inactive ${gLabel.toLowerCase()}s ${st.activeOnly ? 'hidden' : 'shown at 65%'}</span>` : '';
+
+  const controls = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <button onclick="csToggleActive()" style="padding:5px 11px;border:1px solid ${st.activeOnly?'#3b82f6':'#cbd5e1'};border-radius:8px;background:${st.activeOnly?'#eff6ff':'#fff'};color:${st.activeOnly?'#1d4ed8':'#64748b'};font-size:11.5px;font-weight:600;cursor:pointer">
+      ${st.activeOnly ? '✓ Active Only' : 'All Executives'}
+    </button>
+    ${activeLegend}
+    <input oninput="csSearch(this.value)" value="${esc(st.search)}" placeholder="Search by name…"
+      style="padding:5px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#0f172a;min-width:160px;background:#fff">
+  </div>`;
+
+  return _csCard(`${esc(gLabel)}-wise Performance`,
+    `Supply, collection & outstanding in one view · ${esc(d.range_label)} · click any column header to sort`,
+    inner, controls);
 }
 
 VIEWS.cc_state = () => {
@@ -5196,15 +5397,11 @@ VIEWS.cc_state = () => {
 
   _csLoadMovers(); _csLoadShortPay();
 
-  const t = d.totals, rows = d.branches || [];
+  const t = d.totals;
   const isBranchLevel = d.level === 'branch';
   const gLabel = d.group_label;                                  // "Branch" | "Executive"
 
-  /* ── KPI cards ──
-     Agent (credit) and cash (city) sale are separate businesses — different customers,
-     different money, different people running them — so they get their own cards rather
-     than a combined supply figure with a footnote. Total supply stays as the first card
-     because that is the number the Command Centre above shows. */
+  /* ── KPI cards ── */
   const cards = `<div class="cs-strip" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px;margin-bottom:18px">
     ${_ccTopCard({ label: 'Total supply', color: '#1e3a8a',
       value: _ccN(t.supply.current) + ' cp', trend: _ccTrend(t.supply.growth_pct),
@@ -5232,52 +5429,20 @@ VIEWS.cc_state = () => {
   <style>@media(max-width:980px){.cs-strip{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
   @media(max-width:560px){.cs-strip{grid-template-columns:1fr!important}}</style>`;
 
-  // A branch row opens the branch dashboard; an executive row opens their panel.
-  const rowLink = r => isBranchLevel
-    ? (r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}')` : '')
-    : `ccOpenBranch('${_csQ(d.state)}','${_csQ(r.key)}')`;
-  const rowTitle = isBranchLevel ? 'Open executive performance' : 'Open branch dashboard';
-  const nameCell = r => `<b style="color:#1e3a8a">${esc(r.name)}</b>${r.sub ? ` <span style="font-size:10px;color:#94a3b8">${esc(r.sub)}</span>` : ''}`;
+  /* ── Segment toggle (All / Agent Sale / Cash Sale) ── */
+  const hasCash  = t.cash.current > 0 || t.cash.previous > 0;
+  const segBar = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b">View:</div>
+    ${[['all','All'], ['agent','Agent Sale (Credit)'], ...(hasCash ? [['cash','Cash Sale (City)']] : [])].map(([v,l]) =>
+      `<button onclick="csSetSeg('${v}')" style="padding:6px 14px;border:1px solid ${st.seg===v?'#1e3a8a':'#e2e8f0'};border-radius:20px;background:${st.seg===v?'#1e3a8a':'#fff'};color:${st.seg===v?'#fff':'#475569'};font-size:12px;font-weight:${st.seg===v?700:500};cursor:pointer;white-space:nowrap">${l}</button>`).join('')}
+  </div>`;
 
-  const supplyTable = _csCard(`${esc(gLabel)}-wise Supply`,
-    `Agent (credit) and cash (city) sale shown separately · copies on ${esc(d.as_on)} against ${esc(d.previous)}${isBranchLevel ? ' · city sale sits with the centre incharge who runs it' : ''}`,
-    _csTable([gLabel, 'Agent sale', 'Cash sale', 'Total', 'Previous', 'Change', 'Growth'],
-      rows.map(r => ({
-        onClick: rowLink(r), title: rowTitle,
-        cells: [nameCell(r), _ccN(r.supply.agent), _ccN(r.supply.cash),
-          `<b>${_ccN(r.supply.current)}</b>`, _ccN(r.supply.previous),
-          `<span style="color:${r.supply.diff < 0 ? '#b91c1c' : r.supply.diff > 0 ? '#15803d' : '#94a3b8'}">${r.supply.diff > 0 ? '+' : ''}${_ccN(r.supply.diff)}</span>`,
-          _ccTrend(r.supply.growth_pct)],
-      }))));
-
-  const collTable = _csCard(`${esc(gLabel)}-wise Collection`,
-    isBranchLevel
-      ? `Receipts banked in ${esc(d.range_label)}. Billing has no executive dimension, so an executive is measured against their own dues plus receipts — realisation, not billing coverage.`
-      : `Receipts banked in ${esc(d.range_label)} against ${esc(d.prev_month_label)} billing`,
-    _csTable([gLabel, isBranchLevel ? 'Dues + received' : 'Billed', 'Collected', 'Gap', 'Coll %', 'Receipts', 'Agencies paid'],
-      rows.map(r => ({
-        onClick: rowLink(r), title: rowTitle,
-        cells: [nameCell(r), _ccINR(r.collection.billed), `<b>${_ccINR(r.collection.collected)}</b>`,
-          `<span style="color:#b91c1c">${_ccINR(r.collection.gap)}</span>`,
-          r.collection.pct == null ? '—' : `<b style="color:${r.collection.pct >= 85 ? '#15803d' : r.collection.pct >= 60 ? '#b45309' : '#b91c1c'}">${r.collection.pct}%</b>`,
-          _ccN(r.collection.txn), _ccN(r.collection.agencies_paid)],
-      }))));
-
-  const osTable = _csCard(`${esc(gLabel)}-wise Outstanding`,
-    'Live balance as on today · agencies above ₹1 L counted as critical',
-    _csTable([gLabel, 'Agencies', 'Billed', 'Collected', 'Outstanding', 'Per agency', 'Critical', 'Coll %'],
-      rows.map(r => ({
-        onClick: rowLink(r), title: rowTitle,
-        cells: [nameCell(r), _ccN(r.outstanding.agencies), _ccINR(r.collection.billed),
-          _ccINR(r.collection.collected),
-          `<b style="color:#b91c1c">${_ccINR(r.outstanding.amount)}</b>`,
-          _ccINR(r.outstanding.per_agency),
-          `<span style="color:${r.outstanding.critical > 0 ? '#b91c1c' : '#94a3b8'}">${_ccN(r.outstanding.critical)}</span>`,
-          r.collection.pct == null ? '—' : r.collection.pct + '%'],
-      }))));
-
-  return bar + cards + supplyTable + collTable + osTable
-    + _csShortPay(st, d) + _csMovers(st, d) + _csExecs(st, d) + _ccFlyout();
+  return bar + cards + segBar
+    + _csInsights(st, d)
+    + _csConsolidated(st, d)
+    + _csShortPay(st, d)
+    + _csMovers(st, d)
+    + _ccFlyout();
 };
 
 

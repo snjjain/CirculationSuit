@@ -578,7 +578,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const lbl = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`;
       const prevMonthLabel = lbl(pm), prevPrevLabel = lbl(pm2);
 
-      const [agentSup, cashSup, coll, os, billing, master, hier, visits] = await Promise.all([
+      const [agentSup, cashSup, coll, os, billing, master, hier, visits, execActive] = await Promise.all([
         // Agent (credit) supply, agency level, on both dates.
         q(`SELECT s.unit_code, s.agcd,
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
@@ -629,7 +629,13 @@ module.exports = function installCommandCentre({ app, q }) {
            FROM dcr_agency_visit
            WHERE mark_attn_date BETWEEN ? AND ? AND unit_code IN (${IN})
            GROUP BY unit_code, emp_code`, [win.from, win.to, ...codes]),
+        // Active exec flag — used by the frontend to default to active-only view.
+        q(`SELECT executive_code, is_active_pli FROM exec_master`),
       ]);
+
+      // ── Active executive map from exec_master ──
+      const activeMap = new Map();
+      (execActive.rows || []).forEach(r => activeMap.set(r.executive_code, r.is_active_pli === 'Y'));
 
       // ── Roll everything up per branch and per executive ──
       const mk = () => ({
@@ -651,7 +657,8 @@ module.exports = function installCommandCentre({ app, q }) {
         if (!code) return null;
         E[code] = E[code] || {
           exec_code: code, exec_name: name || code, units: new Set(),
-          agencies: 0, supply_cur: 0, supply_prev: 0, cash_cur: 0, collection: 0, billed: 0, os: 0,
+          is_active: activeMap.has(code) ? activeMap.get(code) : null,
+          agencies: 0, supply_cur: 0, supply_prev: 0, cash_cur: 0, cash_prev: 0, collection: 0, billed: 0, os: 0,
           txn: 0, agencies_paid: 0, os_agencies: 0, critical: 0,
           visits: 0, agencies_visited: 0,
         };
@@ -671,7 +678,7 @@ module.exports = function installCommandCentre({ app, q }) {
         const b = B[r.unit_code]; if (b) { b.cash_cur += N(r.cur); b.cash_prev += N(r.prv); }
         // City sale belongs to the centre incharge, who is an executive in their own right.
         const e = exec(r.center_incharge, r.center_incharge_name, r.unit_code);
-        if (e) { e.supply_cur += N(r.cur); e.supply_prev += N(r.prv); e.cash_cur += N(r.cur); }
+        if (e) { e.supply_cur += N(r.cur); e.supply_prev += N(r.prv); e.cash_cur += N(r.cur); e.cash_prev += N(r.prv); }
       });
       coll.rows.forEach(r => {
         const b = B[r.unit_code];
@@ -726,7 +733,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const branches = groupBy === 'unit'
         ? units.map(u => {
             const b = B[u.unit_code];
-            return rowOf(u.unit_code, u.unit_name, null, {
+            const br = rowOf(u.unit_code, u.unit_name, null, {
               unit_code: u.unit_code, unit_name: u.unit_name,
               supply_cur: b.agent_cur + b.cash_cur, supply_prev: b.agent_prev + b.cash_prev,
               agent_cur: b.agent_cur, cash_cur: b.cash_cur,
@@ -734,6 +741,11 @@ module.exports = function installCommandCentre({ app, q }) {
               os: b.os, os_agencies: b.os_agencies, critical: b.critical,
               visits: b.visits, agencies_visited: b.agencies_visited, book: b.book, execs: b.execs.size,
             });
+            br.supply.agent_prev = b.agent_prev;
+            br.supply.cash_prev = b.cash_prev;
+            br.supply.agent_growth_pct = r1(pct(b.agent_cur, b.agent_prev));
+            br.supply.cash_growth_pct = r1(pct(b.cash_cur, b.cash_prev));
+            return br;
           }).sort((a, x) => x.supply.current - a.supply.current)
         : Object.values(E).map(e => {
             const h = hier.rows.find(x => x.exec_code === e.exec_code) || {};
@@ -742,7 +754,7 @@ module.exports = function installCommandCentre({ app, q }) {
                hold. Only the branch has a differenced monthly figure, so at executive level
                collection % is measured against collection + dues instead, and the column
                header says so rather than quietly changing meaning. */
-            return rowOf(e.exec_code, e.exec_name, h.desig || null, {
+            const execRow = rowOf(e.exec_code, e.exec_name, h.desig || null, {
               unit_code: [...e.units][0] || unitScope,
               unit_name: [...e.units].map(u => unitName[u] || u).join(' / '),
               exec_code: e.exec_code,
@@ -753,6 +765,12 @@ module.exports = function installCommandCentre({ app, q }) {
               os: e.os, os_agencies: e.os_agencies, critical: e.critical,
               visits: e.visits, agencies_visited: e.agencies_visited, book: e.agencies, execs: 1,
             });
+            execRow.is_active = e.is_active;
+            execRow.supply.agent_prev = e.supply_prev - e.cash_prev;
+            execRow.supply.cash_prev = e.cash_prev;
+            execRow.supply.agent_growth_pct = r1(pct(execRow.supply.agent, execRow.supply.agent_prev));
+            execRow.supply.cash_growth_pct = r1(pct(execRow.supply.cash, execRow.supply.cash_prev));
+            return execRow;
           }).filter(r => r.supply.current || r.outstanding.amount || r.dcr.book)
             .sort((a, x) => x.supply.current - a.supply.current);
 
@@ -761,10 +779,12 @@ module.exports = function installCommandCentre({ app, q }) {
         const us = [...e.units];
         return {
           exec_code: e.exec_code, exec_name: e.exec_name, designation: h.desig || null,
+          is_active: e.is_active,
           unit_code: us[0] || null,
           unit_name: us.map(u => unitName[u] || u).join(' / '),
           edtn_incharge: h.edtn || null, circ_incharge: h.circ || null, zonal_head: h.zonal || null,
           agencies: e.agencies, supply: e.supply_cur, supply_prev: e.supply_prev,
+          agent_supply: e.supply_cur - e.cash_cur, cash_supply: e.cash_cur,
           growth_pct: r1(pct(e.supply_cur, e.supply_prev)),
           collection: e.collection, outstanding: e.os,
           collection_pct: e.os + e.collection ? r1((e.collection / (e.os + e.collection)) * 100) : null,
