@@ -398,6 +398,11 @@ module.exports = function installCommandCentre({ app, q }) {
           supply: {
             current: supCur, previous: supPrev, diff: supCur - supPrev, growth_pct: r1(supPct),
             agent: sup.agentCur[k], cash: sup.cashCur[k],
+            // Agent (credit) and cash (city) sale are separate businesses, so each carries
+            // its own previous figure and movement rather than only a combined one.
+            agent_previous: sup.agentPrev[k], cash_previous: sup.cashPrev[k],
+            agent_growth_pct: r1(pct(sup.agentCur[k], sup.agentPrev[k])),
+            cash_growth_pct: r1(pct(sup.cashCur[k], sup.cashPrev[k])),
             status: statusOf(supPct),
           },
           collection: {
@@ -456,6 +461,395 @@ module.exports = function installCommandCentre({ app, q }) {
         states,
         ...balance(buildAlerts(states), buildOpportunities(states)),
         market_share: buildMarketShare(states),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  /* ── One state, branch by branch ────────────────────────────────────────────
+     The state cards answer "which region is in trouble". This answers the next
+     question — "where in that region" — with the same four KPIs plus branch-wise
+     supply, collection, outstanding, the agencies moving most, and the executives
+     carrying them.
+
+     Everything is fetched ONCE, scoped to the state's unit list, and aggregated in JS.
+     Per-unit round trips would mean ~30 queries for Rajasthan, and SQL joins across
+     agency_master (utf8mb4_0900_ai_ci) and dcr_agency_visit (utf8mb4_unicode_ci) throw
+     "Illegal mix of collations" — so the merge happens here either way. */
+  async function unitsOfState(stateKey) {
+    /* A unit belongs to the state most of its agencies sit in; agency_master.state_name is
+       per-agency and a handful are mistagged, so the majority wins rather than MAX().
+       Blank state_name is excluded from the tally — a unit with many unfilled rows would
+       otherwise "win" with '' and fall into NATIONAL. Unit names are read separately so
+       they cannot split a unit's tally across two spellings. This is the same
+       most-agencies-wins rule the state cards use, so the two views agree on which
+       branches make up a state. */
+    const [tally, names] = await Promise.all([
+      q(`SELECT unit, state_name, COUNT(*) c FROM agency_master
+         WHERE state_name IS NOT NULL AND state_name <> '' GROUP BY unit, state_name`),
+      q(`SELECT unit, MAX(unit_name) unit_name FROM agency_master GROUP BY unit`),
+    ]);
+    const nm = {}; names.rows.forEach(r => { nm[r.unit] = r.unit_name; });
+    const home = {};
+    tally.rows.forEach(r => {
+      const u = r.unit;
+      if (!home[u] || N(r.c) > home[u].c) home[u] = { c: N(r.c), st: r.state_name };
+    });
+    return Object.entries(home)
+      .filter(([, v]) => bucketOf(v.st) === stateKey)
+      .map(([unit]) => ({ unit_code: unit, unit_name: nm[unit] || unit }))
+      .sort((a, b) => String(a.unit_name).localeCompare(String(b.unit_name)));
+  }
+
+  app.get('/api/command/state-dashboard', async (req, res) => {
+    try {
+      const stateKey = String(req.query.state || '').toUpperCase();
+      const meta = STATES.find(s => s.key === stateKey);
+      if (!meta) return res.status(400).json({ detail: 'Unknown state' });
+
+      const { asOn, prev, label, mode } = await resolveDates(req.query.as_on, req.query.compare);
+      const win = resolveRangeWindow(asOn, req.query.range);
+      const allUnits = await unitsOfState(stateKey);
+      const unitName = {}; allUnits.forEach(u => { unitName[u.unit_code] = u.unit_name; });
+
+      /* Same screen, two levels. Without unit_code it is the state and the rows are its
+         branches; with one it is that branch and the rows are its executives. Cash (city)
+         supply carries a centre-incharge code but no agency, so at executive level it is
+         attributed to the CI and at branch level it simply sums. */
+      const unitScope = String(req.query.unit_code || '').trim();
+      const isBranch = !!unitScope && allUnits.some(u => u.unit_code === unitScope);
+      if (unitScope && !isBranch) return res.status(400).json({ detail: 'Branch is not in this state' });
+      const units = isBranch ? allUnits.filter(u => u.unit_code === unitScope) : allUnits;
+      const codes = units.map(u => u.unit_code);
+      const groupBy = isBranch ? 'exec' : 'unit';
+      if (!codes.length) return res.json({ state: stateKey, state_name: meta.name, branches: [] });
+      const IN = codes.map(() => '?').join(',');
+
+      // Last month's billing needs two consecutive cumulative snapshots differenced —
+      // agency_outstanding.bill_amt is cumulative for the FY, not the month.
+      const d = new Date(asOn + 'T00:00:00');
+      const pm  = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+      const pm2 = new Date(d.getFullYear(), d.getMonth() - 2, 1);
+      const lbl = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`;
+      const prevMonthLabel = lbl(pm), prevPrevLabel = lbl(pm2);
+
+      const [agentSup, cashSup, coll, os, billing, master, hier, visits] = await Promise.all([
+        // Agent (credit) supply, agency level, on both dates.
+        q(`SELECT s.unit_code, s.agcd,
+                  SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
+                  SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
+           FROM supply_data s FORCE INDEX (idx_sd_dateunit)
+           JOIN (SELECT DISTINCT unit, agcd FROM agency_master
+                 WHERE ag_class_name='CREDIT SALE' AND COALESCE(supply_stop_flag,'N')='N'
+                   AND (suspend_date IS NULL OR suspend_date > CURDATE())) cm
+             ON cm.unit = s.unit_code AND cm.agcd = s.agcd
+           WHERE s.supply_date IN (?, ?) AND s.unit_code IN (${IN})
+             AND s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')
+           GROUP BY s.unit_code, s.agcd`, [asOn, prev, asOn, prev, ...codes]),
+        // Cash (city) supply exists only in the 9 hawker branches. There is no agency
+        // dimension, but there is a centre incharge — which is who carries it.
+        q(`SELECT loc_id unit_code, center_incharge, MAX(center_incharge_name) center_incharge_name,
+                  SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) cur,
+                  SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prv
+           FROM hawker_supply WHERE supply_date IN (?, ?) AND loc_id IN (${IN})
+           GROUP BY loc_id, center_incharge`, [asOn, prev, asOn, prev, ...codes]),
+        q(`SELECT unit_code, ag_code, -COALESCE(SUM(amount),0) amt, COUNT(*) txn
+           FROM agency_collection
+           WHERE is_valid=1 AND coll_date BETWEEN ? AND ? AND unit_code IN (${IN})
+           GROUP BY unit_code, ag_code`, [win.from, win.to, ...codes]),
+        q(`SELECT unit_code, ag_code, MAX(ag_name) ag_name, MAX(exec_code) exec_code,
+                  MAX(exec_name) exec_name,
+                  SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) os,
+                  SUM(CASE WHEN CAST(dp_code AS UNSIGNED)=1 THEN 1 ELSE 0 END) is_main,
+                  SUM(CASE WHEN CAST(dp_code AS UNSIGNED)=1 AND cl_amt>=100000 THEN 1 ELSE 0 END) critical
+           FROM agency_outstanding
+           WHERE period_label='CURRENT' AND unit_code IN (${IN})
+           GROUP BY unit_code, ag_code`, codes),
+        q(`SELECT period_label, unit_code, SUM(bill_amt) amt FROM agency_outstanding
+           WHERE period_label IN (?, ?) AND unit_code IN (${IN})
+           GROUP BY period_label, unit_code`, [prevMonthLabel, prevPrevLabel, ...codes]),
+        q(`SELECT unit, agcd, MAX(ag_name) ag_name, MAX(executive_code) exec_code,
+                  MAX(executive_name) exec_name, MAX(dist_name) dist_name
+           FROM agency_master
+           WHERE unit IN (${IN}) AND CAST(dpcd AS UNSIGNED)=1
+             AND COALESCE(supply_stop_flag,'N')='N'
+             AND (suspend_date IS NULL OR suspend_date > CURDATE())
+           GROUP BY unit, agcd`, codes),
+        q(`SELECT exec_code, MAX(exec_desig) desig, MAX(edtn_incharge_name) edtn,
+                  MAX(circ_incharge_name) circ, MAX(zonal_head_name) zonal
+           FROM exec_hierarchy_mapping GROUP BY exec_code`),
+        // Field visits over the selected window, by unit and by executive.
+        q(`SELECT unit_code, emp_code, COUNT(*) visits,
+                  COUNT(DISTINCT visit_to_main_code) agencies
+           FROM dcr_agency_visit
+           WHERE mark_attn_date BETWEEN ? AND ? AND unit_code IN (${IN})
+           GROUP BY unit_code, emp_code`, [win.from, win.to, ...codes]),
+      ]);
+
+      // ── Roll everything up per branch and per executive ──
+      const mk = () => ({
+        agent_cur: 0, agent_prev: 0, cash_cur: 0, cash_prev: 0,
+        collection: 0, txn: 0, agencies_paid: 0, billed: 0,
+        os: 0, os_agencies: 0, critical: 0, book: 0,
+        visits: 0, agencies_visited: 0, execs: new Set(),
+      });
+      const B = {}; codes.forEach(c => { B[c] = mk(); });
+      const E = {};                                     // exec_code -> aggregate
+      const execOf = {};                                // "unit|agcd" -> {code,name}
+
+      master.rows.forEach(r => {
+        const k = `${r.unit}|${r.agcd}`;
+        execOf[k] = { code: r.exec_code, name: r.exec_name };
+        if (B[r.unit]) B[r.unit].book += 1;
+      });
+      const exec = (code, name, unit) => {
+        if (!code) return null;
+        E[code] = E[code] || {
+          exec_code: code, exec_name: name || code, units: new Set(),
+          agencies: 0, supply_cur: 0, supply_prev: 0, cash_cur: 0, collection: 0, billed: 0, os: 0,
+          txn: 0, agencies_paid: 0, os_agencies: 0, critical: 0,
+          visits: 0, agencies_visited: 0,
+        };
+        if (name && E[code].exec_name === code) E[code].exec_name = name;
+        if (unit) E[code].units.add(unit);
+        return E[code];
+      };
+      master.rows.forEach(r => { const e = exec(r.exec_code, r.exec_name, r.unit); if (e) e.agencies += 1; });
+
+      agentSup.rows.forEach(r => {
+        const b = B[r.unit_code]; if (b) { b.agent_cur += N(r.cur); b.agent_prev += N(r.prv); }
+        const k = `${r.unit_code}|${r.agcd}`;
+        const e = execOf[k] && exec(execOf[k].code, execOf[k].name, r.unit_code);
+        if (e) { e.supply_cur += N(r.cur); e.supply_prev += N(r.prv); }
+      });
+      cashSup.rows.forEach(r => {
+        const b = B[r.unit_code]; if (b) { b.cash_cur += N(r.cur); b.cash_prev += N(r.prv); }
+        // City sale belongs to the centre incharge, who is an executive in their own right.
+        const e = exec(r.center_incharge, r.center_incharge_name, r.unit_code);
+        if (e) { e.supply_cur += N(r.cur); e.supply_prev += N(r.prv); e.cash_cur += N(r.cur); }
+      });
+      coll.rows.forEach(r => {
+        const b = B[r.unit_code];
+        if (b) { b.collection += N(r.amt); b.txn += N(r.txn); if (N(r.amt) > 0) b.agencies_paid += 1; }
+        const k = `${r.unit_code}|${r.ag_code}`;
+        const e = execOf[k] && exec(execOf[k].code, execOf[k].name, r.unit_code);
+        if (e) { e.collection += N(r.amt); e.txn += N(r.txn); if (N(r.amt) > 0) e.agencies_paid += 1; }
+      });
+      os.rows.forEach(r => {
+        const b = B[r.unit_code];
+        if (b) { b.os += N(r.os); b.os_agencies += N(r.is_main); b.critical += N(r.critical); }
+        const k = `${r.unit_code}|${r.ag_code}`;
+        // agency_outstanding carries its own exec — the authority when master is stale.
+        const e = exec(r.exec_code || (execOf[k] && execOf[k].code), r.exec_name || (execOf[k] && execOf[k].name), r.unit_code);
+        if (e) { e.os += N(r.os); e.os_agencies += N(r.is_main); e.critical += N(r.critical); }
+      });
+      const cumThis = {}, cumPrev = {};
+      billing.rows.forEach(r => {
+        (r.period_label === prevMonthLabel ? cumThis : cumPrev)[r.unit_code] =
+          ((r.period_label === prevMonthLabel ? cumThis : cumPrev)[r.unit_code] || 0) + N(r.amt);
+      });
+      const havePrev = billing.rows.some(r => r.period_label === prevPrevLabel);
+      codes.forEach(c => {
+        B[c].billed = havePrev ? Math.max(0, (cumThis[c] || 0) - (cumPrev[c] || 0)) : (cumThis[c] || 0);
+      });
+      visits.rows.forEach(r => {
+        const b = B[r.unit_code];
+        if (b) { b.visits += N(r.visits); b.agencies_visited += N(r.agencies); b.execs.add(r.emp_code); }
+        const e = E[r.emp_code];
+        if (e) { e.visits += N(r.visits); e.agencies_visited += N(r.agencies); }
+      });
+
+      /* The three breakdown tables all read from one row shape, so the same screen can
+         render the state's branches or a branch's executives without a second layout. */
+      const rowOf = (key, name, sub, a) => {
+        const supCur = a.supply_cur, supPrev = a.supply_prev;
+        return {
+          key, name, sub,
+          unit_code: a.unit_code || null, unit_name: a.unit_name || null,
+          exec_code: a.exec_code || null,
+          supply: { current: supCur, previous: supPrev, diff: supCur - supPrev,
+                    growth_pct: r1(pct(supCur, supPrev)), agent: a.agent_cur, cash: a.cash_cur },
+          collection: { collected: a.collection, billed: a.billed, gap: Math.max(0, a.billed - a.collection),
+                        pct: a.billed ? r1((a.collection / a.billed) * 100) : null,
+                        txn: a.txn, agencies_paid: a.agencies_paid },
+          outstanding: { amount: a.os, agencies: a.os_agencies, critical: a.critical,
+                         per_agency: a.os_agencies ? Math.round(a.os / a.os_agencies) : 0 },
+          dcr: { visits: a.visits, agencies_visited: a.agencies_visited, book: a.book,
+                 execs: a.execs, coverage_pct: a.book ? r1((a.agencies_visited / a.book) * 100) : null },
+        };
+      };
+      const branches = groupBy === 'unit'
+        ? units.map(u => {
+            const b = B[u.unit_code];
+            return rowOf(u.unit_code, u.unit_name, null, {
+              unit_code: u.unit_code, unit_name: u.unit_name,
+              supply_cur: b.agent_cur + b.cash_cur, supply_prev: b.agent_prev + b.cash_prev,
+              agent_cur: b.agent_cur, cash_cur: b.cash_cur,
+              collection: b.collection, billed: b.billed, txn: b.txn, agencies_paid: b.agencies_paid,
+              os: b.os, os_agencies: b.os_agencies, critical: b.critical,
+              visits: b.visits, agencies_visited: b.agencies_visited, book: b.book, execs: b.execs.size,
+            });
+          }).sort((a, x) => x.supply.current - a.supply.current)
+        : Object.values(E).map(e => {
+            const h = hier.rows.find(x => x.exec_code === e.exec_code) || {};
+            /* Billing has no executive dimension — agency_outstanding's bill_amt snapshots
+               are per agency, so an executive's "billed" is the sum over the agencies they
+               hold. Only the branch has a differenced monthly figure, so at executive level
+               collection % is measured against collection + dues instead, and the column
+               header says so rather than quietly changing meaning. */
+            return rowOf(e.exec_code, e.exec_name, h.desig || null, {
+              unit_code: [...e.units][0] || unitScope,
+              unit_name: [...e.units].map(u => unitName[u] || u).join(' / '),
+              exec_code: e.exec_code,
+              supply_cur: e.supply_cur, supply_prev: e.supply_prev,
+              agent_cur: e.supply_cur - e.cash_cur, cash_cur: e.cash_cur,
+              collection: e.collection, billed: e.collection + e.os,
+              txn: e.txn, agencies_paid: e.agencies_paid,
+              os: e.os, os_agencies: e.os_agencies, critical: e.critical,
+              visits: e.visits, agencies_visited: e.agencies_visited, book: e.agencies, execs: 1,
+            });
+          }).filter(r => r.supply.current || r.outstanding.amount || r.dcr.book)
+            .sort((a, x) => x.supply.current - a.supply.current);
+
+      const executives = Object.values(E).map(e => {
+        const h = hier.rows.find(x => x.exec_code === e.exec_code) || {};
+        const us = [...e.units];
+        return {
+          exec_code: e.exec_code, exec_name: e.exec_name, designation: h.desig || null,
+          unit_code: us[0] || null,
+          unit_name: us.map(u => unitName[u] || u).join(' / '),
+          edtn_incharge: h.edtn || null, circ_incharge: h.circ || null, zonal_head: h.zonal || null,
+          agencies: e.agencies, supply: e.supply_cur, supply_prev: e.supply_prev,
+          growth_pct: r1(pct(e.supply_cur, e.supply_prev)),
+          collection: e.collection, outstanding: e.os,
+          collection_pct: e.os + e.collection ? r1((e.collection / (e.os + e.collection)) * 100) : null,
+          visits: e.visits, agencies_visited: e.agencies_visited,
+          coverage_pct: e.agencies ? r1((e.agencies_visited / e.agencies) * 100) : null,
+        };
+      }).filter(e => e.agencies > 0 || e.supply > 0 || e.outstanding > 0)
+        .sort((a, b) => b.supply - a.supply);
+
+      const sum = f => branches.reduce((a, b) => a + f(b), 0);
+      /* Totals come from the per-BRANCH aggregates, never from the group rows. At branch
+         level the rows are executives, whose "billed" is a stand-in (dues + receipts)
+         because billing has no executive dimension — summing those would have made the
+         branch's collection card read 6.4% of ₹4.99 Cr instead of the real 44.4% of
+         ₹72.56 L. Supply, outstanding and DCR would double-count the same way wherever an
+         agency's exec differs between master and the outstanding snapshot. */
+      const bsum = f => codes.reduce((a, c) => a + f(B[c]), 0);
+      const supCur = bsum(b => b.agent_cur + b.cash_cur), supPrev = bsum(b => b.agent_prev + b.cash_prev);
+      const agentCur = bsum(b => b.agent_cur), agentPrev = bsum(b => b.agent_prev);
+      const cashCur = bsum(b => b.cash_cur), cashPrev = bsum(b => b.cash_prev);
+      const collected = bsum(b => b.collection), billed = bsum(b => b.billed);
+      const osTot = bsum(b => b.os);
+      const bookTot = bsum(b => b.book), seenTot = bsum(b => b.agencies_visited);
+
+      res.json({
+        state: stateKey, state_name: meta.name,
+        level: isBranch ? 'branch' : 'state',
+        unit_code: isBranch ? unitScope : null,
+        unit_name: isBranch ? (unitName[unitScope] || unitScope) : null,
+        group_by: groupBy, group_label: groupBy === 'unit' ? 'Branch' : 'Executive',
+        os_code: meta.os,
+        as_on: asOn, previous: prev, compare: mode, compare_label: label,
+        range: win.key, range_label: win.label, range_from: win.from, range_to: win.to,
+        prev_month_label: prevMonthLabel,
+        totals: {
+          supply: { current: supCur, previous: supPrev, growth_pct: r1(pct(supCur, supPrev)),
+                    agent: agentCur, cash: cashCur },
+          // Agent (credit) and cash (city) sale are separate businesses and are reported
+          // as such, each with its own movement, rather than folded into one supply line.
+          agent: { current: agentCur, previous: agentPrev, growth_pct: r1(pct(agentCur, agentPrev)),
+                   share_pct: supCur ? r1((agentCur / supCur) * 100) : null },
+          cash:  { current: cashCur, previous: cashPrev, growth_pct: r1(pct(cashCur, cashPrev)),
+                   share_pct: supCur ? r1((cashCur / supCur) * 100) : null,
+                   centres: codes.filter(c => B[c].cash_cur > 0).length },
+          collection: { collected, billed, pct: billed ? r1((collected / billed) * 100) : null,
+                        gap: Math.max(0, billed - collected), txn: bsum(b => b.txn),
+                        agencies_paid: bsum(b => b.agencies_paid) },
+          outstanding: { amount: osTot, agencies: bsum(b => b.os_agencies),
+                         critical: bsum(b => b.critical) },
+          dcr: { visits: bsum(b => b.visits), agencies_visited: seenTot, book: bookTot,
+                 execs: bsum(b => b.execs.size), coverage_pct: bookTot ? r1((seenTot / bookTot) * 100) : null },
+        },
+        branches, executives,
+      });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  /* ── Agencies growing and declining fastest ─────────────────────────────────
+     Its own endpoint because it is the expensive part: a ~50-day scan of supply_data
+     while everything else on the dashboard is two dates and a snapshot. Fetched after
+     the first paint so the KPIs and branch tables are not held up by it.
+
+     Day-over-day is the wrong lens: agent supply barely moves between two consecutive
+     days (Rajasthan shifted 7 copies), so a day comparison surfaces rounding wobbles
+     instead of the agencies actually growing or dying. Movers are the DAILY AVERAGE over
+     the selected window against the equal window immediately before — capped at 31 days
+     a side so a full-FY range does not become a 300-day scan. The window is returned and
+     printed above the table rather than left implied. */
+  app.get('/api/command/state-movers', async (req, res) => {
+    try {
+      const stateKey = String(req.query.state || '').toUpperCase();
+      const meta = STATES.find(s => s.key === stateKey);
+      if (!meta) return res.status(400).json({ detail: 'Unknown state' });
+      const { asOn } = await resolveDates(req.query.as_on, req.query.compare);
+      const win = resolveRangeWindow(asOn, req.query.range);
+      const allUnits = await unitsOfState(stateKey);
+      const unitName = {}; allUnits.forEach(u => { unitName[u.unit_code] = u.unit_name; });
+      const unitScope = String(req.query.unit_code || '').trim();
+      const units = unitScope ? allUnits.filter(u => u.unit_code === unitScope) : allUnits;
+      const codes = units.map(u => u.unit_code);
+      if (!codes.length) return res.json({ growing: [], declining: [], growing_total: 0, declining_total: 0 });
+      const IN = codes.map(() => '?').join(',');
+
+      const dayMs = 86400000;
+      const shift = (iso, n) => new Date(new Date(iso + 'T00:00:00').getTime() + n * dayMs).toISOString().slice(0, 10);
+      const rawLen = Math.max(1, Math.round((new Date(win.to + 'T00:00:00') - new Date(win.from + 'T00:00:00')) / dayMs) + 1);
+      const mLen = Math.min(31, rawLen);
+      const mTo = win.to, mFrom = shift(mTo, -(mLen - 1));
+      const mPrevTo = shift(mFrom, -1), mPrevFrom = shift(mPrevTo, -(mLen - 1));
+
+      const [mov, master, os] = await Promise.all([
+        q(`SELECT s.unit_code, s.agcd,
+                  SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) cur_sum,
+                  COUNT(DISTINCT CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.supply_date END) cur_days,
+                  SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prv_sum,
+                  COUNT(DISTINCT CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.supply_date END) prv_days
+           FROM supply_data s FORCE INDEX (idx_sd_dateunit)
+           WHERE s.supply_date BETWEEN ? AND ? AND s.unit_code IN (${IN})
+             AND s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')
+           GROUP BY s.unit_code, s.agcd`,
+          [mFrom, mTo, mFrom, mTo, mPrevFrom, mPrevTo, mPrevFrom, mPrevTo, mPrevFrom, mTo, ...codes]),
+        q(`SELECT unit, agcd, MAX(ag_name) ag_name, MAX(executive_name) exec_name,
+                  MAX(executive_code) exec_code, MAX(dist_name) dist_name
+           FROM agency_master WHERE unit IN (${IN}) GROUP BY unit, agcd`, codes),
+        q(`SELECT unit_code, ag_code, SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) os
+           FROM agency_outstanding WHERE period_label='CURRENT' AND unit_code IN (${IN})
+           GROUP BY unit_code, ag_code`, codes),
+      ]);
+      const M = {}; master.rows.forEach(r => { M[`${r.unit}|${r.agcd}`] = r; });
+      const O = {}; os.rows.forEach(r => { O[`${r.unit_code}|${r.ag_code}`] = N(r.os); });
+
+      const movers = mov.rows.map(r => {
+        const k = `${r.unit_code}|${r.agcd}`, m = M[k] || {};
+        const cur = N(r.cur_days) ? Math.round(N(r.cur_sum) / N(r.cur_days)) : 0;
+        const prv = N(r.prv_days) ? Math.round(N(r.prv_sum) / N(r.prv_days)) : 0;
+        return {
+          unit_code: r.unit_code, unit_name: unitName[r.unit_code] || r.unit_code, agcd: r.agcd,
+          ag_name: m.ag_name || r.agcd, dist_name: m.dist_name || null,
+          exec: m.exec_name || null, exec_code: m.exec_code || null,
+          current: cur, previous: prv, diff: cur - prv, growth_pct: r1(pct(cur, prv)),
+          outstanding: O[k] || 0,
+        };
+      }).filter(m => m.diff !== 0);
+
+      res.json({
+        state: stateKey, unit_code: unitScope || null,
+        window: { from: mFrom, to: mTo, prev_from: mPrevFrom, prev_to: mPrevTo, days: mLen, capped: mLen < rawLen },
+        growing: movers.filter(m => m.diff > 0).sort((a, b) => b.diff - a.diff).slice(0, 300),
+        declining: movers.filter(m => m.diff < 0).sort((a, b) => a.diff - b.diff).slice(0, 300),
+        growing_total: movers.filter(m => m.diff > 0).length,
+        declining_total: movers.filter(m => m.diff < 0).length,
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });

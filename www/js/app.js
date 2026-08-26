@@ -4215,6 +4215,8 @@ window.ccFlyClose = () => { const st = _ccState(); st.fly = null; render(); };
    The panels form a STACK, not two flags — an agency can be reached from the executive's
    book just as an executive is reached from the agency, so Back has to unwind whatever
    path was actually taken. The full screens stay one button away. */
+// The flyout renders on the Command Centre and on the state/branch dashboard.
+function _ccFlyLive() { return S.screen === 'command' || S.screen === 'cc_state'; }
 function _ccFlyPush(panel, url, key) {
   const st = _ccState();
   if (!st.fly) return;
@@ -4228,12 +4230,12 @@ function _ccFlyPush(panel, url, key) {
       const p = st.fly && (st.fly.stack || [])[depth - 1];
       if (!p || p[key] !== panel[key]) return;      // user moved on before this landed
       if (d && d.detail) p.err = String(d.detail); else p.data = d;
-      p.loading = false; if (S.screen === 'command') render();
+      p.loading = false; if (_ccFlyLive()) render();
     })
     .catch(e => {
       const p = st.fly && (st.fly.stack || [])[depth - 1];
       if (!p || p[key] !== panel[key]) return;
-      p.err = String(e && e.message || e); p.loading = false; if (S.screen === 'command') render();
+      p.err = String(e && e.message || e); p.loading = false; if (_ccFlyLive()) render();
     });
 }
 window.ccFlyAgency = (unitCode, agcd, name) => {
@@ -4250,7 +4252,10 @@ window.ccFlyExec = (execCode, name) => {
 };
 window.ccFlyBack = () => {
   const st = _ccState(); if (!st.fly || !st.fly.stack) return;
-  st.fly.stack.pop(); render();
+  st.fly.stack.pop();
+  // Opened straight from a table there is no alert underneath, so the last Back closes.
+  if (st.fly.kind === 'direct' && !st.fly.stack.length) st.fly = null;
+  render();
 };
 window.ccFlyExecFull = () => {
   const st = _ccState(); const x = _ccFlyTop(); if (!x || x.kind !== 'exec') return;
@@ -4308,6 +4313,10 @@ function _ccFlyExecPanel(x) {
 
   const visited = N_(e.agencies_visited), book = N_(e.agency_count);
   const cov = book ? Math.round((visited / book) * 1000) / 10 : null;
+  /* A centre incharge runs hawker centres, not credit agencies, and this endpoint builds
+     everything from agency_master.executive_code — so a CI legitimately comes back empty
+     rather than the figures being missing. Say so instead of showing a wall of zeros. */
+  const isCentreOnly = !book && !N_(e.total_supply) && !N_(e.total_outstanding);
 
   return `<div>
     <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:9px">
@@ -4315,6 +4324,10 @@ function _ccFlyExecPanel(x) {
       <span style="font-size:10.5px;color:#64748b">${esc(e.executive_code || '')}${e.state_name ? ' · ' + esc(e.state_name) : ''}</span>
     </div>
     <div style="font-size:11px;color:#64748b;margin-bottom:9px">Window: ${esc(d.from || '')} → ${esc(d.to || '')}</div>
+    ${isCentreOnly ? `<div style="font-size:11.5px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 11px;margin-bottom:10px;line-height:1.55">
+      No credit agencies are mapped to ${esc(e.exec_name || 'this person')}${e.exec_designation ? ` (${esc(e.exec_designation)})` : ''}.
+      City-sale centre incharges carry hawker centres rather than agencies, so their copies appear as
+      <b>Cash sale</b> on the branch dashboard, not here.</div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
       ${kpi('Agencies', _apFmtN(e.agency_count))}
       ${/* window TOTAL, unlike the Command Centre cards which are copies per day */ ''}
@@ -4422,6 +4435,9 @@ function _ccFlyout() {
   const st = _ccState();
   const f = st.fly;
   if (!f) return '';
+  // A flyout opened straight from a table has no alert behind it; if its stack is empty
+  // there is nothing to draw.
+  if (!f.item && !(f.stack || []).length) return '';
   const it = f.item;
   const isAlert = f.kind === 'alert';
   const accent = isAlert ? (_CC_PRI[it.priority] || _CC_PRI.medium).bar : '#16a34a';
@@ -4640,33 +4656,41 @@ function _ccStateCard(s) {
   return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;display:flex;flex-direction:column">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px">
       <div style="min-width:0">
-        <div onclick="ccDrill('supply_dash','${q(s.key)}')" style="cursor:pointer;font-size:16px;font-weight:800;color:#1e3a8a">${esc(s.name)}</div>
+        <div onclick="ccOpenState('${q(s.key)}')" title="Open ${esc(s.name)} dashboard"
+          style="cursor:pointer;font-size:16px;font-weight:800;color:#1e3a8a;text-decoration:underline;text-decoration-color:#c7d2fe;text-underline-offset:3px">${esc(s.name)}</div>
         <div style="font-size:11px;color:#64748b;margin-top:1px">${s.head ? esc(s.head) : 'State Head —'}</div>
       </div>
       <span style="flex:none;background:${w.bg};color:${w.fg};font-size:10.5px;font-weight:800;padding:3px 10px;border-radius:11px">${w.label}</span>
     </div>
 
-    ${_ccKpiRow('SUPPLY', _ccN(s.supply.current) + ' cp',
-      `Agent ${_ccN(s.supply.agent)} · Cash ${_ccN(s.supply.cash)}`,
-      _ccTrend(s.supply.growth_pct),
-      null, null, `ccDrill('supply_dash','${q(s.key)}')`)}
+    ${/* Agent (credit) and cash (city) sale are separate businesses, so the card reports
+          them on their own lines instead of one supply figure with a footnote. */''}
+    ${_ccKpiRow('AGENT SALE (CREDIT)', _ccN(s.supply.agent) + ' cp',
+      `was ${_ccN(s.supply.agent_previous)}`,
+      _ccTrend(s.supply.agent_growth_pct),
+      null, null, `ccOpenState('${q(s.key)}')`)}
+
+    ${_ccKpiRow('CASH SALE (CITY)', _ccN(s.supply.cash) + ' cp',
+      s.supply.cash || s.supply.cash_previous ? `was ${_ccN(s.supply.cash_previous)}` : 'agent sale only — no city centres',
+      _ccTrend(s.supply.cash_growth_pct),
+      null, null, `ccOpenState('${q(s.key)}')`)}
 
     ${_ccKpiRow('COLLECTION', _ccINR(s.collection.current),
       `of ${_ccINR(s.collection.prev_month_billing)} billed ${esc(s.collection.prev_month_label || '')}`,
       `<span style="font-size:11.5px;font-weight:800;color:${s.collection.collection_pct >= 85 ? '#15803d' : s.collection.collection_pct >= 60 ? '#b45309' : '#b91c1c'}">${s.collection.collection_pct == null ? '—' : s.collection.collection_pct + '%'}</span>`,
       s.collection.collection_pct, s.collection.collection_pct >= 85 ? '#22c55e' : s.collection.collection_pct >= 60 ? '#f59e0b' : '#ef4444',
-      `ccDrill('collections','${q(s.key)}')`)}
+      `ccOpenState('${q(s.key)}')`)}
 
     ${_ccKpiRow('OUTSTANDING', _ccINR(s.os.current),
       `${_ccN(s.os.critical_agencies)} agencies above ₹1 L`,
       _ccTrend(s.os.growth_pct, true),
-      null, null, `ccDrill('outstanding','${q(s.key)}')`)}
+      null, null, `ccOpenState('${q(s.key)}')`)}
 
     ${_ccKpiRow('DCR — FIELD VISITS', _ccN(s.dcr.current),
       `${_ccN(s.dcr.agencies_visited)} of ${_ccN(s.dcr.agencies_total)} agencies`,
       `<span style="font-size:11.5px;font-weight:800;color:${s.dcr.coverage_pct >= 5 ? '#15803d' : s.dcr.coverage_pct >= 2 ? '#b45309' : '#b91c1c'}">${s.dcr.coverage_pct == null ? '—' : s.dcr.coverage_pct + '%'}</span>`,
       s.dcr.coverage_pct, s.dcr.coverage_pct >= 5 ? '#22c55e' : s.dcr.coverage_pct >= 2 ? '#f59e0b' : '#ef4444',
-      `ccDrill('dcr_analytics','${q(s.key)}')`)}
+      `ccOpenState('${q(s.key)}')`)}
   </div>`;
 }
 
@@ -4876,6 +4900,362 @@ window.cmdSetDesign = (d) => {
   render();
 };
 VIEWS.command = () => (cmdDesign() === 'new' ? _cmdViewNew() : _cmdViewLegacy());
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   STATE / BRANCH DASHBOARD — the level below the Command Centre.
+
+   One screen serves both levels. At state level the breakdown rows are the state's
+   branches; click a branch and the same screen re-renders for that branch with its
+   executives as the rows. Everything else — the KPI cards, the three breakdown
+   tables, short payment, the movers, the executive table — keeps its shape, so the
+   drill reads as zooming in rather than arriving somewhere new.
+   ══════════════════════════════════════════════════════════════════════════════ */
+function _csState() {
+  S.ccStateDash = S.ccStateDash || {
+    state: 'RAJASTHAN', unit: '', range: 'mtd',
+    data: null, _loading: false,
+    movers: null, _movLoading: false, movTab: 'declining', movAll: false,
+    sp: null, _spLoading: false, spPage: 1, spStatus: '',
+    execAll: false,
+  };
+  return S.ccStateDash;
+}
+function _csReset(st) {
+  st.data = null; st._loading = false;
+  st.movers = null; st._movLoading = false; st.movAll = false;
+  st.sp = null; st._spLoading = false; st.spPage = 1;
+  st.execAll = false;
+}
+window.ccOpenState = (stateKey) => {
+  const st = _csState();
+  if (st.state !== stateKey || st.unit) _csReset(st);
+  st.state = stateKey; st.unit = '';
+  go('cc_state');
+};
+window.ccOpenBranch = (stateKey, unitCode) => {
+  const st = _csState();
+  _csReset(st);
+  st.state = stateKey; st.unit = unitCode;
+  go('cc_state');
+};
+window.csSetRange   = v => { const st = _csState(); st.range = v; _csReset(st); render(); };
+window.csMovTab     = v => { const st = _csState(); st.movTab = v; st.movAll = false; render(); };
+window.csMovAll     = () => { const st = _csState(); st.movAll = !st.movAll; render(); };
+window.csExecAll    = () => { const st = _csState(); st.execAll = !st.execAll; render(); };
+window.csSpPage     = p => { const st = _csState(); st.spPage = Math.max(1, p); st.sp = null; st._spLoading = false; render(); };
+window.csSpStatus   = v => { const st = _csState(); st.spStatus = v; st.spPage = 1; st.sp = null; st._spLoading = false; render(); };
+window.csBackToState = () => { const st = _csState(); _csReset(st); st.unit = ''; render(); };
+
+/* The agency and executive panels belong to the Command Centre flyout. Opened from
+   here there is no alert behind them, so the flyout starts with an empty stack and
+   closes when the last panel is popped. */
+window.ccOpenAgencyPanel = (unitCode, agcd, name) => {
+  const cc = _ccState(); if (!cc.fly) cc.fly = { kind: 'direct', stack: [] };
+  ccFlyAgency(unitCode, agcd, name);
+};
+window.ccOpenExecPanel = (execCode, name) => {
+  const cc = _ccState(); if (!cc.fly) cc.fly = { kind: 'direct', stack: [] };
+  ccFlyExec(execCode, name);
+};
+
+function _csParams(st) {
+  const p = new URLSearchParams({ state: st.state, range: st.range });
+  if (st.unit) p.set('unit_code', st.unit);
+  return p;
+}
+function _csLoad() {
+  const st = _csState();
+  if (st._loading || st.data) return;
+  st._loading = true;
+  fetch(`${api.base}/api/command/state-dashboard?${_csParams(st)}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.data = d; st._loading = false; if (S.screen === 'cc_state') render(); })
+    .catch(e => { st.data = { _err: String(e && e.message || e) }; st._loading = false; if (S.screen === 'cc_state') render(); });
+}
+/* Movers and short payment load after the first paint. The movers query is a ~50-day
+   scan of supply_data and short payment telescopes six monthly snapshots; holding the
+   KPI cards behind either of them would double the time to something readable. */
+function _csLoadMovers() {
+  const st = _csState();
+  if (st._movLoading || st.movers) return;
+  st._movLoading = true;
+  fetch(`${api.base}/api/command/state-movers?${_csParams(st)}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.movers = d; st._movLoading = false; if (S.screen === 'cc_state') render(); })
+    .catch(e => { st.movers = { _err: String(e && e.message || e) }; st._movLoading = false; if (S.screen === 'cc_state') render(); });
+}
+function _csLoadShortPay() {
+  const st = _csState();
+  if (st._spLoading || st.sp || !st.data || st.data._err) return;
+  st._spLoading = true;
+  const p = new URLSearchParams({ page: String(st.spPage), limit: '15' });
+  // The report filters on group_unit_name (RPPL/MP/CG/NATIONAL), not the state name.
+  if (st.unit) p.set('unit_code', st.unit); else p.set('state', st.data.os_code || '');
+  if (st.spStatus) p.set('payment_status', st.spStatus);
+  fetch(`${api.base}/api/shortpayment/report?${p}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.sp = d; st._spLoading = false; if (S.screen === 'cc_state') render(); })
+    .catch(e => { st.sp = { _err: String(e && e.message || e) }; st._spLoading = false; if (S.screen === 'cc_state') render(); });
+}
+
+const _csQ = v => String(v == null ? '' : v).replace(/'/g, "\\'");
+function _csCard(title, sub, inner, actions) {
+  return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:16px">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:11px">
+      <div><div style="font-size:15px;font-weight:800;color:#1e3a8a">${title}</div>
+        ${sub ? `<div style="font-size:11px;color:#64748b;margin-top:2px">${sub}</div>` : ''}</div>
+      ${actions || ''}
+    </div>${inner}</div>`;
+}
+function _csTable(cols, rows, opts) {
+  const o = opts || {};
+  if (!rows.length) return `<div style="font-size:12.5px;color:#64748b;padding:12px 2px">${o.empty || 'Nothing to show for this selection.'}</div>`;
+  return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:${o.minWidth || 680}px">
+    <thead><tr style="color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.05em">
+      ${cols.map((c, i) => `<th style="text-align:${i === 0 ? 'left' : 'right'};padding:6px 8px;font-weight:800;white-space:nowrap">${esc(c)}</th>`).join('')}
+    </tr></thead><tbody>${rows.map(r => `<tr ${r.onClick ? `onclick="${r.onClick}" title="${esc(r.title || '')}" style="cursor:pointer;border-top:1px solid #eef2f7" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''"` : 'style="border-top:1px solid #eef2f7"'}>
+      ${r.cells.map((c, i) => `<td style="padding:7px 8px;text-align:${i === 0 ? 'left' : 'right'};${i === 0 ? '' : 'font-variant-numeric:tabular-nums;white-space:nowrap'}">${c}</td>`).join('')}
+    </tr>`).join('')}</tbody></table></div>`;
+}
+const _csBtn = (label, onclick, active) => `<button onclick="${onclick}"
+  style="padding:6px 13px;border:1px solid ${active ? '#1e3a8a' : '#cbd5e1'};border-radius:8px;background:${active ? '#1e3a8a' : '#fff'};color:${active ? '#fff' : '#475569'};font-size:12px;font-weight:${active ? 700 : 500};cursor:pointer">${label}</button>`;
+
+/* ── Short Payment, the same report the Collections dashboard runs ──
+   Scoped to this state or branch instead of run all-India. Billing telescopes two
+   cumulative snapshots, which is why the figures match the ERP rather than the raw
+   bill_amt column. */
+function _csShortPay(st, d) {
+  const sp = st.sp;
+  const filters = `<div style="display:flex;gap:7px;flex-wrap:wrap">
+    ${_csBtn('All', 'csSpStatus(\'\')', !st.spStatus)}
+    ${_csBtn('Short Paid', 'csSpStatus(\'Short Paid\')', st.spStatus === 'Short Paid')}
+    ${_csBtn('Unpaid', 'csSpStatus(\'Unpaid\')', st.spStatus === 'Unpaid')}
+  </div>`;
+  let inner;
+  if (st._spLoading || !sp) inner = `<div style="padding:20px;text-align:center;color:#64748b;font-size:12.5px">Loading short payment…</div>`;
+  else if (sp._err || sp.detail) inner = `<div style="padding:14px;color:#b91c1c;font-size:12.5px">Could not load short payment.<div style="color:#64748b;font-size:11.5px;margin-top:4px">${esc(sp._err || sp.detail)}</div></div>`;
+  else if (sp.error) inner = `<div style="padding:14px;color:#64748b;font-size:12.5px">No monthly billing snapshots available for this range.</div>`;
+  else {
+    const s = sp.summary || {};
+    const chips = `<div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:11px">
+      ${[['Agencies billed', _ccN(s.total_agencies), '#0f172a'],
+         ['Short paid', _ccN(s.short_agencies), '#b45309'],
+         ['Unpaid', _ccN(s.unpaid_agencies), '#b91c1c'],
+         ['Billed', _ccINR(s.total_billed), '#0f172a'],
+         ['Received', _ccINR(s.total_received), '#15803d'],
+         ['Short', _ccINR(s.total_short), '#b91c1c'],
+         ['Collected', (s.coll_pct == null ? '—' : s.coll_pct + '%'), '#1e3a8a']]
+        .map(([k, v, c]) => `<div style="background:#f8fafc;border:1px solid #eef2f7;border-radius:9px;padding:7px 11px">
+          <div style="font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8">${k}</div>
+          <div style="font-size:14px;font-weight:800;color:${c};font-variant-numeric:tabular-nums">${v}</div></div>`).join('')}
+    </div>`;
+    const per = 15, total = sp.total || 0, pages = Math.max(1, Math.ceil(total / per));
+    const table = _csTable(['Agency', 'Branch', 'Executive', 'Billed', 'Received', 'Short', 'Coll %', 'O/S', 'Status'],
+      (sp.agencies || []).map(a => ({
+        onClick: a.unit_code && a.ag_code ? `ccOpenAgencyPanel('${_csQ(a.unit_code)}','${_csQ(a.ag_code)}','${_csQ(a.ag_name)}')` : '',
+        title: 'Open agency profile',
+        cells: [
+          `<b style="color:#1e3a8a">${esc(a.ag_name || a.ag_code)}</b><div style="font-size:10px;color:#94a3b8">${esc(a.ag_code)}${a.city_name ? ' · ' + esc(a.city_name) : ''}</div>`,
+          esc(a.unit_name || a.unit_code || ''), esc(a.exec_name || '—'),
+          _ccINR(a.tot_bill), _ccINR(a.tot_rcpt),
+          `<b style="color:#b91c1c">${_ccINR(a.tot_diff)}</b>`,
+          `${a.coll_pct}%`, _ccINR(a.cur_os),
+          `<span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:9px;background:${a.pay_status === 'Unpaid' ? '#fee2e2' : a.pay_status === 'Short Paid' ? '#fef3c7' : '#dcfce7'};color:${a.pay_status === 'Unpaid' ? '#b91c1c' : a.pay_status === 'Short Paid' ? '#b45309' : '#15803d'}">${esc(a.pay_status)}</span>`,
+        ],
+      })), { minWidth: 900, empty: 'No agencies match this payment status.' });
+    const pager = total > per ? `<div style="display:flex;align-items:center;gap:9px;margin-top:10px;font-size:12px;color:#64748b">
+      ${_csBtn('‹ Prev', `csSpPage(${st.spPage - 1})`, false)}
+      <span>Page <b style="color:#0f172a">${st.spPage}</b> of ${pages} · ${_ccN(total)} agencies</span>
+      ${_csBtn('Next ›', `csSpPage(${st.spPage + 1})`, false)}
+    </div>` : '';
+    inner = chips + table + pager;
+  }
+  return _csCard('Short Payment Agencies',
+    `Billed vs actually received over the last six months, ${st.unit ? 'in this branch' : 'across the state'} · biggest shortfall first.`
+    + ` Receipts in the window also clear earlier arrears, so a fully-paid agency can show over 100%.`,
+    inner, filters);
+}
+
+/* ── Top growing and declining agencies ── */
+function _csMovers(st, d) {
+  const m = st.movers;
+  let inner, sub = 'Loading…';
+  if (st._movLoading || !m) inner = `<div style="padding:20px;text-align:center;color:#64748b;font-size:12.5px">Loading agency movement…</div>`;
+  else if (m._err || m.detail) { inner = `<div style="padding:14px;color:#b91c1c;font-size:12.5px">Could not load agency movement.<div style="color:#64748b;font-size:11.5px;margin-top:4px">${esc(m._err || m.detail)}</div></div>`; sub = ''; }
+  else {
+    const w = m.window || {};
+    sub = `Average copies per day, ${esc(w.from)} → ${esc(w.to)} against ${esc(w.prev_from)} → ${esc(w.prev_to)}`
+      + (w.capped ? ` · window capped at ${w.days} days each side` : '');
+    const list = st.movTab === 'growing' ? (m.growing || []) : (m.declining || []);
+    const total = st.movTab === 'growing' ? m.growing_total : m.declining_total;
+    const shown = st.movAll ? list : list.slice(0, 15);
+    inner = _csTable(['Agency', 'Branch', 'Executive', 'Now', 'Was', 'Change', 'Growth', 'O/S'],
+      shown.map(a => ({
+        onClick: `ccOpenAgencyPanel('${_csQ(a.unit_code)}','${_csQ(a.agcd)}','${_csQ(a.ag_name)}')`,
+        title: 'Open agency profile',
+        cells: [
+          `<b style="color:#1e3a8a">${esc(a.ag_name)}</b><div style="font-size:10px;color:#94a3b8">${esc(a.agcd)}${a.dist_name ? ' · ' + esc(a.dist_name) : ''}</div>`,
+          esc(a.unit_name), esc(a.exec || '—'),
+          `<b>${_ccN(a.current)}</b>`, _ccN(a.previous),
+          `<b style="color:${a.diff < 0 ? '#b91c1c' : '#15803d'}">${a.diff > 0 ? '+' : ''}${_ccN(a.diff)}</b>`,
+          _ccTrend(a.growth_pct), _ccINR(a.outstanding),
+        ],
+      })), { minWidth: 880, empty: 'No agency moved in this window.' })
+      + (list.length > 15 ? `<div style="margin-top:10px">
+          ${_csBtn(st.movAll ? `Show top 15` : `Show all ${_ccN(total)} →`, 'csMovAll()', false)}
+          ${!st.movAll && total > list.length ? `<span style="font-size:11px;color:#94a3b8;margin-left:9px">listing the ${_ccN(list.length)} largest movers of ${_ccN(total)}</span>` : ''}
+        </div>` : '');
+  }
+  const tabs = `<div style="display:flex;gap:7px">
+    ${_csBtn('Declining', 'csMovTab(\'declining\')', st.movTab === 'declining')}
+    ${_csBtn('Growing', 'csMovTab(\'growing\')', st.movTab === 'growing')}
+  </div>`;
+  return _csCard('Agencies Growing & Declining', sub, inner, tabs);
+}
+
+/* ── Executive performance, branch by branch ── */
+function _csExecs(st, d) {
+  const list = d.executives || [];
+  const shown = st.execAll ? list : list.slice(0, 25);
+  const inner = _csTable(['Executive', 'Branch', 'Edition Incharge', 'Zonal Head', 'Agencies', 'Supply', 'Growth', 'Collection', 'Outstanding', 'Coll %', 'Visits', 'Coverage'],
+    shown.map(e => ({
+      onClick: e.exec_code ? `ccOpenExecPanel('${_csQ(e.exec_code)}','${_csQ(e.exec_name)}')` : '',
+      title: 'Open executive performance',
+      cells: [
+        `<b style="color:#1e3a8a">${esc(e.exec_name)}</b>${e.designation ? ` <span style="font-size:10px;color:#94a3b8">${esc(e.designation)}</span>` : ''}`,
+        esc(e.unit_name || '—'), esc(e.edtn_incharge || '—'), esc(e.zonal_head || '—'),
+        _ccN(e.agencies), `<b>${_ccN(e.supply)}</b>`, _ccTrend(e.growth_pct),
+        _ccINR(e.collection),
+        `<span style="color:${e.outstanding > 0 ? '#b91c1c' : '#0f172a'}">${_ccINR(e.outstanding)}</span>`,
+        e.collection_pct == null ? '—' : e.collection_pct + '%',
+        _ccN(e.visits),
+        e.coverage_pct == null ? '—' : `<span style="color:${e.coverage_pct < 20 ? '#b91c1c' : '#15803d'}">${e.coverage_pct}%</span>`,
+      ],
+    })), { minWidth: 1080, empty: 'No executives mapped here.' })
+    + (list.length > 25 ? `<div style="margin-top:10px">${_csBtn(st.execAll ? 'Show top 25' : `Show all ${_ccN(list.length)} →`, 'csExecAll()', false)}</div>` : '');
+  return _csCard('Executive Performance',
+    `Every executive ${st.unit ? 'in this branch' : 'in the state'} with their book, movement and field activity · collection over ${esc(d.range_label)}`,
+    inner);
+}
+
+VIEWS.cc_state = () => {
+  const st = _csState();
+  _csLoad();
+  const d = st.data;
+
+  const sel = `<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">Date range</div>
+    <select onchange="csSetRange(this.value)" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#0f172a;font-size:12.5px;min-width:150px">
+      ${[['today', 'Today'], ['mtd', 'This Month'], ['last_month', 'Last Month'], ['fytd', 'Current FY (YTD)'], ['last_90', 'Last 90 Days']]
+        .map(([v, l]) => `<option value="${v}" ${st.range === v ? 'selected' : ''}>${l}</option>`).join('')}
+    </select></div>`;
+
+  const crumb = `<div style="font-size:12px;color:#64748b">
+    <a onclick="go('command')" style="cursor:pointer;color:#1e3a8a;text-decoration:underline">Command Centre</a>
+    ${d && !d._err && !d.detail ? ` › ${st.unit
+      ? `<a onclick="csBackToState()" style="cursor:pointer;color:#1e3a8a;text-decoration:underline">${esc(d.state_name)}</a> › <b style="color:#0f172a">${esc(d.unit_name || st.unit)}</b>`
+      : `<b style="color:#0f172a">${esc(d.state_name)}</b>`}` : ''}
+  </div>`;
+
+  const bar = `<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+    <div>
+      <div style="font-size:20px;font-weight:800;color:#0f172a;margin-bottom:3px">${d && !d._err && !d.detail ? esc(d.unit_name || d.state_name) : 'Loading…'}</div>
+      ${crumb}
+      ${d && !d._err && !d.detail ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px">Snapshot ${esc(d.as_on)} vs ${esc(d.previous)} · ${esc(d.range_label)} ${esc(d.range_from)} → ${esc(d.range_to)}</div>` : ''}
+    </div>
+    ${sel}
+  </div>`;
+
+  if (st._loading || !d) return bar + _cmdSkel() + _cmdSkel();
+  if (d._err || d.detail) return bar
+    + `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:18px;color:#b91c1c">
+        Could not load this dashboard.<div style="font-size:11.5px;color:#64748b;margin-top:5px">${esc(d._err || d.detail)}</div></div>`;
+
+  _csLoadMovers(); _csLoadShortPay();
+
+  const t = d.totals, rows = d.branches || [];
+  const isBranchLevel = d.level === 'branch';
+  const gLabel = d.group_label;                                  // "Branch" | "Executive"
+
+  /* ── KPI cards ──
+     Agent (credit) and cash (city) sale are separate businesses — different customers,
+     different money, different people running them — so they get their own cards rather
+     than a combined supply figure with a footnote. Total supply stays as the first card
+     because that is the number the Command Centre above shows. */
+  const cards = `<div class="cs-strip" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px;margin-bottom:18px">
+    ${_ccTopCard({ label: 'Total supply', color: '#1e3a8a',
+      value: _ccN(t.supply.current) + ' cp', trend: _ccTrend(t.supply.growth_pct),
+      sub: `Agent + Cash · on ${esc(d.as_on)}` })}
+    ${_ccTopCard({ label: 'Agent sale (credit)', color: '#3b82f6',
+      value: _ccN(t.agent.current) + ' cp', trend: _ccTrend(t.agent.growth_pct),
+      sub: `${t.agent.share_pct == null ? '—' : t.agent.share_pct + '%'} of supply · was ${_ccN(t.agent.previous)}` })}
+    ${_ccTopCard({ label: 'Cash sale (city)', color: '#0ea5e9',
+      value: _ccN(t.cash.current) + ' cp', trend: _ccTrend(t.cash.growth_pct),
+      sub: t.cash.current || t.cash.previous
+        ? `${t.cash.share_pct == null ? '—' : t.cash.share_pct + '%'} of supply · ${_ccN(t.cash.centres)} branch${t.cash.centres === 1 ? '' : 'es'} with city sale`
+        : 'No city sale here — agent (credit) sale only' })}
+    ${_ccTopCard({ label: 'Collection vs billing', color: '#22c55e',
+      value: t.collection.pct == null ? '—' : t.collection.pct + '%',
+      sub: `${_ccINR(t.collection.collected)} of ${_ccINR(t.collection.billed)} billed ${esc(d.prev_month_label)}`,
+      barPct: t.collection.pct })}
+    ${_ccTopCard({ label: 'Outstanding', color: '#f59e0b',
+      value: _ccINR(t.outstanding.amount),
+      sub: `${_ccN(t.outstanding.critical)} of ${_ccN(t.outstanding.agencies)} agencies above ₹1 L` })}
+    ${_ccTopCard({ label: 'DCR activity', color: '#8b5cf6',
+      value: t.dcr.coverage_pct == null ? '—' : t.dcr.coverage_pct + '%',
+      sub: `${_ccN(t.dcr.agencies_visited)} of ${_ccN(t.dcr.book)} agencies · ${_ccN(t.dcr.visits)} visits · ${esc(d.range_label)}`,
+      barPct: t.dcr.coverage_pct })}
+  </div>
+  <style>@media(max-width:980px){.cs-strip{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+  @media(max-width:560px){.cs-strip{grid-template-columns:1fr!important}}</style>`;
+
+  // A branch row opens the branch dashboard; an executive row opens their panel.
+  const rowLink = r => isBranchLevel
+    ? (r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}')` : '')
+    : `ccOpenBranch('${_csQ(d.state)}','${_csQ(r.key)}')`;
+  const rowTitle = isBranchLevel ? 'Open executive performance' : 'Open branch dashboard';
+  const nameCell = r => `<b style="color:#1e3a8a">${esc(r.name)}</b>${r.sub ? ` <span style="font-size:10px;color:#94a3b8">${esc(r.sub)}</span>` : ''}`;
+
+  const supplyTable = _csCard(`${esc(gLabel)}-wise Supply`,
+    `Agent (credit) and cash (city) sale shown separately · copies on ${esc(d.as_on)} against ${esc(d.previous)}${isBranchLevel ? ' · city sale sits with the centre incharge who runs it' : ''}`,
+    _csTable([gLabel, 'Agent sale', 'Cash sale', 'Total', 'Previous', 'Change', 'Growth'],
+      rows.map(r => ({
+        onClick: rowLink(r), title: rowTitle,
+        cells: [nameCell(r), _ccN(r.supply.agent), _ccN(r.supply.cash),
+          `<b>${_ccN(r.supply.current)}</b>`, _ccN(r.supply.previous),
+          `<span style="color:${r.supply.diff < 0 ? '#b91c1c' : r.supply.diff > 0 ? '#15803d' : '#94a3b8'}">${r.supply.diff > 0 ? '+' : ''}${_ccN(r.supply.diff)}</span>`,
+          _ccTrend(r.supply.growth_pct)],
+      }))));
+
+  const collTable = _csCard(`${esc(gLabel)}-wise Collection`,
+    isBranchLevel
+      ? `Receipts banked in ${esc(d.range_label)}. Billing has no executive dimension, so an executive is measured against their own dues plus receipts — realisation, not billing coverage.`
+      : `Receipts banked in ${esc(d.range_label)} against ${esc(d.prev_month_label)} billing`,
+    _csTable([gLabel, isBranchLevel ? 'Dues + received' : 'Billed', 'Collected', 'Gap', 'Coll %', 'Receipts', 'Agencies paid'],
+      rows.map(r => ({
+        onClick: rowLink(r), title: rowTitle,
+        cells: [nameCell(r), _ccINR(r.collection.billed), `<b>${_ccINR(r.collection.collected)}</b>`,
+          `<span style="color:#b91c1c">${_ccINR(r.collection.gap)}</span>`,
+          r.collection.pct == null ? '—' : `<b style="color:${r.collection.pct >= 85 ? '#15803d' : r.collection.pct >= 60 ? '#b45309' : '#b91c1c'}">${r.collection.pct}%</b>`,
+          _ccN(r.collection.txn), _ccN(r.collection.agencies_paid)],
+      }))));
+
+  const osTable = _csCard(`${esc(gLabel)}-wise Outstanding`,
+    'Live balance as on today · agencies above ₹1 L counted as critical',
+    _csTable([gLabel, 'Agencies', 'Billed', 'Collected', 'Outstanding', 'Per agency', 'Critical', 'Coll %'],
+      rows.map(r => ({
+        onClick: rowLink(r), title: rowTitle,
+        cells: [nameCell(r), _ccN(r.outstanding.agencies), _ccINR(r.collection.billed),
+          _ccINR(r.collection.collected),
+          `<b style="color:#b91c1c">${_ccINR(r.outstanding.amount)}</b>`,
+          _ccINR(r.outstanding.per_agency),
+          `<span style="color:${r.outstanding.critical > 0 ? '#b91c1c' : '#94a3b8'}">${_ccN(r.outstanding.critical)}</span>`,
+          r.collection.pct == null ? '—' : r.collection.pct + '%'],
+      }))));
+
+  return bar + cards + supplyTable + collTable + osTable
+    + _csShortPay(st, d) + _csMovers(st, d) + _csExecs(st, d) + _ccFlyout();
+};
+
 
 
 /* ═══════════ VZ — data-viz component library ═══════════

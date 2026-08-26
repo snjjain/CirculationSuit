@@ -3145,8 +3145,16 @@ app.get('/api/shortpayment/report', async (req, res) => {
     // JOIN pub_unit_master to translate branch_code (doc_no prefix) → unit_code
     // (e.g. INDORE PT: branch=PA1 → unit=IN0)
     const collFrom = `${fromM}-01`;
+    /* Receipts are stored as NEGATIVE amounts in agency_collection, so the raw SUM came
+       out sign-flipped — every agency showed a negative "received" and a negative
+       collection %. Negating fixes it, and it must be the sum over ALL valid rows, not
+       just the negative ones: a mis-keyed receipt is cancelled by a positive "CREDIT
+       ENTRY REVERT" debit note, and dropping those left MADHAV NEWS AGENCY (M1442, BH3)
+       claiming ₹4,454 Cr received against ₹7.56 L billed. Same convention as
+       collectionByState in command_centre.js. */
     const collTotR = await q(
-      `SELECT ac.ag_code, COALESCE(ubm.unit_code, LEFT(ac.doc_no,3)) unit_code, SUM(ac.amount) tot_rcpt
+      `SELECT ac.ag_code, COALESCE(ubm.unit_code, LEFT(ac.doc_no,3)) unit_code,
+              -SUM(ac.amount) tot_rcpt
        FROM agency_collection ac
        LEFT JOIN pub_unit_master ubm ON ubm.branch_code = LEFT(ac.doc_no,3) AND ubm.comp_code = 'RP001'
        WHERE ac.is_valid=1 AND ac.coll_date >= ? AND ac.coll_date <= LAST_DAY(?)
@@ -3256,8 +3264,9 @@ app.get('/api/shortpayment/report', async (req, res) => {
              AND ag_code IN (${phCodes}) AND unit_code IN (${phUnits})
            GROUP BY unit_code, ag_code, period_label`,
           [...queryLabels, ...agCodes, ...unitCodes]),
+        // Same sign convention as the totals query above.
         q(`SELECT ac.ag_code, COALESCE(ubm.unit_code, LEFT(ac.doc_no,3)) unit_code,
-                  DATE_FORMAT(ac.coll_date,'%Y-%m') month_key, SUM(ac.amount) collected
+                  DATE_FORMAT(ac.coll_date,'%Y-%m') month_key, -SUM(ac.amount) collected
            FROM agency_collection ac
            LEFT JOIN pub_unit_master ubm ON ubm.branch_code = LEFT(ac.doc_no,3) AND ubm.comp_code = 'RP001'
            WHERE ac.is_valid=1 AND DATE_FORMAT(ac.coll_date,'%Y-%m') IN (${selectedLabels.map(() => '?').join(',')})
