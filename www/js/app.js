@@ -4294,7 +4294,7 @@ function _ccCIFetch(x, execCode, unitCode) {
   const uc = unitCode || '';
   const url = `${api.base}/api/command/ci-panel?exec_code=${encodeURIComponent(execCode)}&unit_code=${encodeURIComponent(uc)}`;
   fetch(url, { headers: api.h() })
-    .then(r => r.json())
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(d => { x.ciData = d; x.ciLoading = false; if (_ccFlyLive()) render(); })
     .catch(e => { x.ciData = { _err: String(e && e.message || e) }; x.ciLoading = false; if (_ccFlyLive()) render(); });
 }
@@ -4440,7 +4440,27 @@ function _ccFlyAgencyPanel(a) {
       ${r.map((c, i) => `<td style="padding:5px 6px;text-align:${i ? 'right' : 'left'};${i ? 'font-variant-numeric:tabular-nums' : ''}">${c}</td>`).join('')}
     </tr>`).join('')}</tbody></table>`;
 
-  const visits = (d.visits || []).slice(0, 6).map(v => [esc(v.date || '—'), esc(v.executive || '—'), esc(v.purpose || v.remarks || '')]);
+  // Store visits on the flyout item so ccFlyVisitDetail can look them up by index
+  a._visits = d.visits || [];
+  const visitRows = a._visits.slice(0, 6).map((v, vi) => {
+    const purpose = fmtPurpose(v.purpose) || '';
+    return `<tr onclick="ccFlyVisitDetail(${vi})" style="cursor:pointer;border-top:1px solid #f1f5f9" onmouseenter="this.style.background='#f0f9ff'" onmouseleave="this.style.background=''">
+      <td style="padding:5px 6px;white-space:nowrap;font-size:11.5px">${esc(v.date || '—')}</td>
+      <td style="padding:5px 6px;text-align:left;font-size:11.5px">${esc(v.executive || '—')}</td>
+      <td style="padding:5px 6px;text-align:left;font-size:11.5px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(purpose || v.remarks || '')}">${esc(purpose || (v.remarks ? v.remarks.slice(0, 30) + (v.remarks.length > 30 ? '…' : '') : '—'))}</td>
+      <td style="padding:5px 6px;text-align:right;font-size:10px;color:#94a3b8">›</td>
+    </tr>`;
+  }).join('');
+  const visitTableHtml = a._visits.length
+    ? `<table style="width:100%;border-collapse:collapse;font-size:11.5px">
+        <thead><tr style="color:#94a3b8;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em">
+          <th style="text-align:left;padding:4px 6px;font-weight:700">Date</th>
+          <th style="text-align:left;padding:4px 6px;font-weight:700">Executive</th>
+          <th style="text-align:left;padding:4px 6px;font-weight:700">Purpose / Remarks</th>
+          <th></th>
+        </tr></thead><tbody>${visitRows}</tbody></table>`
+    : '<div style="font-size:11.5px;color:#94a3b8">No visits in last 6 months</div>';
+
   const colls = (d.collection_recent || []).slice(0, 6).map(c => [esc(c.date || '—'), esc(c.payment_mode || c.payment_cat || '—'), `<b>${_apFmtC(c.amount)}</b>`]);
   const tags = (orx.tags || []).map(t => `<span style="display:inline-block;font-size:9.5px;font-weight:700;color:#1e3a8a;background:#eef4ff;border:1px solid #dbe6ff;border-radius:9px;padding:2px 8px;margin:0 5px 5px 0">${esc(AP_TAG_LABEL[t] || t)}</span>`).join('');
   // issues are visit remarks flagged as possible complaints — {date, executive, remarks}
@@ -4479,9 +4499,43 @@ function _ccFlyAgencyPanel(a) {
       ${nba.filter(Boolean).map(r => `<div style="display:flex;gap:7px"><span style="color:#16a34a">›</span><span>${esc(r)}</span></div>`).join('')}</div>` : '')}
     ${sec('Open issues', issues)}
     ${sec('Recent collections', miniTable(['Date', 'Mode', 'Amount'], colls))}
-    ${sec('Recent visits', miniTable(['Date', 'Executive', 'Purpose'], visits))}
+    ${sec('Recent visits', visitTableHtml)}
   </div>`;
 }
+
+/* Visit detail popup — called when a visit row in the agency flyout is clicked */
+window.ccFlyVisitDetail = function(idx) {
+  const top = _ccFlyTop();
+  const v = top && top._visits && top._visits[idx];
+  if (!v) return;
+  const purpose = fmtPurpose(v.purpose) || v.purpose || '';
+  const modal = document.createElement('div');
+  modal.className = 'visit-detail-overlay';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9998;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.onclick = e => { if (e.target === modal) modal.remove(); };
+  const kv = (label, val, color) => val ? `<div style="display:flex;gap:8px;font-size:12px;line-height:1.8">
+    <span style="flex:none;width:110px;color:#94a3b8;font-weight:600">${label}</span>
+    <span style="color:${color || '#0f172a'}">${val}</span></div>` : '';
+  modal.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:440px;width:100%;padding:22px;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div style="font-size:15px;font-weight:800;color:#0f172a">Visit Detail</div>
+      <button onclick="document.querySelector('.visit-detail-overlay').remove()" style="width:28px;height:28px;border-radius:7px;border:1px solid #e2e8f0;background:#f8fafc;cursor:pointer;font-size:16px;color:#64748b;line-height:1">×</button>
+    </div>
+    ${kv('Date', esc(v.date || '—'))}
+    ${kv('Time', esc(v.time || '—'))}
+    ${kv('Executive', esc(v.executive || '—'), '#1e3a8a')}
+    ${purpose ? kv('Purpose', esc(purpose)) : ''}
+    ${kv('Call status', esc(v.call_status || '—'))}
+    ${v.commitment_amount ? kv('Commitment', _apFmtC(v.commitment_amount) + (v.commitment_date ? ' by ' + v.commitment_date : ''), '#b45309') : ''}
+    ${v.amount_collected ? kv('Collected', _apFmtC(v.amount_collected), '#15803d') : ''}
+    ${v.remarks ? `<div style="margin-top:12px;padding:10px 12px;background:#f8fafc;border-radius:8px;border-left:3px solid #3b82f6">
+      <div style="font-size:10px;font-weight:800;letter-spacing:.04em;color:#94a3b8;margin-bottom:5px">REMARKS</div>
+      <div style="font-size:12.5px;color:#1e293b;line-height:1.55">${remHtml(v.remarks)}</div>
+    </div>` : ''}
+    ${v.lat ? `<div style="margin-top:8px;font-size:11px;color:#94a3b8">📍 GPS recorded: ${v.lat}, ${v.lng}</div>` : ''}
+  </div>`;
+  document.body.appendChild(modal);
+};
 
 function _ccFlyout() {
   const st = _ccState();
@@ -4981,7 +5035,8 @@ function _csState() {
     sort: null,          // null | {col: string, dir: 'asc'|'desc'}
     activeOnly: true,    // show only is_active executives by default
     search: '',
-    insightTab: 'top',   // 'top' | 'bottom' | 'grow' | 'risk'
+    insightTab: 'all',   // 'all' | 'top' | 'bottom' | 'grow' | 'risk'
+    perfType: 'exec',    // 'exec' | 'ci'
   };
   return S.ccStateDash;
 }
@@ -5016,6 +5071,7 @@ window.csSetSort      = col => { const st = _csState(); st.sort = st.sort && st.
 window.csToggleActive = () => { const st = _csState(); st.activeOnly = !st.activeOnly; render(); };
 window.csSearch       = v => { _csState().search = v; render(); };
 window.csInsightTab   = t => { _csState().insightTab = t; render(); };
+window.csPerfType     = t => { _csState().perfType = t; render(); };
 
 /* The agency and executive panels belong to the Command Centre flyout. Opened from
    here there is no alert behind them, so the flyout starts with an empty stack and
@@ -5199,6 +5255,21 @@ function _csStatusClass(r, seg) {
 const _csStatusBadge = { good: `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#dcfce7;color:#15803d">&#128994; Good</span>`, watch: `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#fef3c7;color:#b45309">&#128993; Watch</span>`, risk: `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;background:#fee2e2;color:#b91c1c">&#128308; Risk</span>` };
 function _csStatus(r, seg) { return _csStatusBadge[_csStatusClass(r, seg)]; }
 
+/* Returns a short phrase explaining WHY the status is what it is */
+function _csStatusReason(r, seg) {
+  const growth = seg === 'agent' ? (r.supply.agent_growth_pct != null ? r.supply.agent_growth_pct : r.supply.growth_pct)
+               : seg === 'cash'  ? (r.supply.cash_growth_pct  != null ? r.supply.cash_growth_pct  : r.supply.growth_pct)
+               : r.supply.growth_pct;
+  const coll = r.collection ? r.collection.pct : null;
+  const hasCrit = r.outstanding && r.outstanding.critical > 0;
+  const critAmt = r.outstanding ? r.outstanding.amount : 0;
+  const reasons = [];
+  if (growth != null) reasons.push(`Growth ${growth > 0 ? '+' : ''}${growth}%`);
+  if (coll != null)   reasons.push(`Coll ${coll}%`);
+  if (hasCrit)        reasons.push(`${r.outstanding.critical} critical OS${critAmt > 0 ? ' ₹' + _ccN(Math.round(critAmt / 100000)) + 'L' : ''}`);
+  return reasons.join(' · ') || 'No data';
+}
+
 /* ── Quick Insights panel ── */
 function _csInsights(st, d) {
   const rows = (d.branches || []).filter(r => {
@@ -5217,10 +5288,10 @@ function _csInsights(st, d) {
     return (g != null && g < -2) || (c != null && c < 70) || (r.outstanding.critical > 0 && r.outstanding.amount > 1000000);
   });
 
-  const tabs = [['top','🏆 Top'], ['bottom','📉 Worst'], ['grow','🚀 Growth'], ['risk','⚠️ Attention']];
+  const tabs = [['all','All'], ['top','🏆 Top'], ['bottom','📉 Worst'], ['grow','🚀 Growth'], ['risk','⚠️ Attention']];
   const tabBar = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
     ${tabs.map(([k, l]) => `<button onclick="csInsightTab('${k}')"
-      style="padding:5px 12px;border:1px solid ${st.insightTab===k?'#1e3a8a':'#e2e8f0'};border-radius:20px;background:${st.insightTab===k?'#1e3a8a':'#f8fafc'};color:${st.insightTab===k?'#fff':'#475569'};font-size:11.5px;font-weight:${st.insightTab===k?700:500};cursor:pointer;white-space:nowrap">${l}${k==='risk'&&atRisk.length?` <span style="background:#ef4444;color:#fff;border-radius:9px;padding:0 5px;font-size:10px">${atRisk.length}</span>`:''}</button>`).join('')}
+      style="padding:5px 12px;border:1px solid ${st.insightTab===k?'#1e3a8a':'#e2e8f0'};border-radius:20px;background:${st.insightTab===k?'#1e3a8a':'#f8fafc'};color:${st.insightTab===k?'#fff':'#475569'};font-size:11.5px;font-weight:${st.insightTab===k?700:500};cursor:pointer;white-space:nowrap">${l}${k==='risk'&&atRisk.length?` <span style="background:#ef4444;color:#fff;border-radius:9px;padding:0 5px;font-size:10px">${atRisk.length}</span>`:k==='all'?` <span style="background:#64748b;color:#fff;border-radius:9px;padding:0 5px;font-size:10px">${rows.length}</span>`:''}</button>`).join('')}
   </div>`;
 
   const scoreBar = (val, max) => {
@@ -5231,7 +5302,10 @@ function _csInsights(st, d) {
   let list = [], emptyMsg = '';
   const gLabel = d.group_label;
 
-  if (st.insightTab === 'top') {
+  if (st.insightTab === 'all') {
+    list = bySupply;
+    emptyMsg = 'No data';
+  } else if (st.insightTab === 'top') {
     list = bySupply.slice(0, 5);
     emptyMsg = 'No data';
   } else if (st.insightTab === 'bottom') {
@@ -5242,7 +5316,7 @@ function _csInsights(st, d) {
     emptyMsg = 'No growth data available';
   } else {
     list = atRisk.slice(0, 8);
-    emptyMsg = '✅ No risks detected — all rows are on track';
+    emptyMsg = 'No risks detected — all rows are on track';
   }
 
   const maxSupply = bySupply[0] ? bySupply[0].supply.current : 1;
@@ -5252,15 +5326,21 @@ function _csInsights(st, d) {
 
   const items = !list.length ? `<div style="font-size:12.5px;color:#94a3b8;padding:8px 0">${emptyMsg}</div>` :
     list.map((r, i) => {
-      const g = st.insightTab === 'grow' || st.insightTab === 'risk' ? r.supply.growth_pct : null;
+      const g = st.insightTab !== 'top' && st.insightTab !== 'bottom' ? r.supply.growth_pct : null;
       const supVal = st.seg === 'agent' ? r.supply.agent : st.seg === 'cash' ? r.supply.cash : r.supply.current;
-      const badge = st.insightTab === 'top' ? `<span style="font-size:10px;font-weight:800;color:#94a3b8;min-width:16px;display:inline-block">${i + 1}</span>` : '';
+      const badge = (st.insightTab === 'top' || st.insightTab === 'all') ? `<span style="font-size:10px;font-weight:800;color:#94a3b8;min-width:16px;display:inline-block">${i + 1}</span>` : '';
       const collBadge = r.collection.pct != null ? `<span style="font-size:11px;font-weight:700;color:${r.collection.pct<60?'#b91c1c':r.collection.pct<80?'#b45309':'#15803d'};margin-left:8px">Coll ${r.collection.pct}%</span>` : '';
       const growBadge = g != null ? `<span style="font-size:11px;font-weight:700;color:${g<0?'#b91c1c':'#15803d'};margin-left:8px">${g>0?'+':''}${g}%</span>` : '';
       const osBadge = r.outstanding.amount > 1000000 ? `<span style="font-size:10px;color:#b91c1c;margin-left:6px">OS ${_ccINR(r.outstanding.amount)}</span>` : '';
-      const subInfo = r.is_ci
-        ? `<span style="font-size:10px;color:#0ea5e9">${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk</span>`
+      const _isCi = r.is_ci || (!r.supply.agent && r.supply.cash > 0);
+      const subInfo = _isCi
+        ? (r.hawker_centres || r.hawker_count
+            ? `<span style="font-size:10px;color:#0ea5e9">${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk</span>`
+            : `<span style="font-size:10px;color:#0ea5e9">Centre Incharge</span>`)
         : (r.unit_name ? `<span style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</span>` : '');
+      const stClass = _csStatusClass(r, st.seg);
+      const stReason = _csStatusReason(r, st.seg);
+      const stBadge = `<div title="${esc(stReason)}" style="text-align:center">${_csStatusBadge[stClass]}<div style="font-size:9.5px;color:#94a3b8;margin-top:2px;max-width:80px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(stReason)}</div></div>`;
       return `<div onclick="${rowClick(r)}" style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:9px;background:#f8fafc;margin-bottom:5px;cursor:pointer" onmouseenter="this.style.background='#eff6ff'" onmouseleave="this.style.background='#f8fafc'">
         ${badge}
         <div style="flex:1;overflow:hidden">
@@ -5268,15 +5348,96 @@ function _csInsights(st, d) {
           ${subInfo}
         </div>
         <div style="font-size:12.5px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums">${_ccN(supVal)} <span style="font-size:10px;color:#94a3b8;font-weight:500">cp</span></div>
-        ${scoreBar(supVal, maxSupply)}${collBadge}${growBadge}${osBadge}${_csStatus(r, st.seg)}
+        ${scoreBar(supVal, maxSupply)}${collBadge}${growBadge}${osBadge}${stBadge}
       </div>`;
     }).join('');
+
+  const aiBlock = st.insightTab === 'all' ? _csAIInsights(rows, st.seg) : '';
 
   return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:16px">
     <div style="font-size:14px;font-weight:800;color:#1e3a8a;margin-bottom:2px">Quick Insights</div>
     <div style="font-size:11px;color:#64748b;margin-bottom:10px">Click any row to drill down · ${esc(d.range_label)}</div>
-    ${tabBar}${items}
+    ${tabBar}${items}${aiBlock}
   </div>`;
+}
+
+/* ── AI text observations computed from current filtered rows ── */
+function _csAIInsights(rows, seg) {
+  if (rows.length < 2) return '';
+  const obs = [];
+  const supKey = seg === 'agent' ? 'agent' : seg === 'cash' ? 'cash' : 'current';
+  const supOf = r => seg === 'agent' ? r.supply.agent : seg === 'cash' ? r.supply.cash : r.supply.current;
+  const sorted = [...rows].sort((a, b) => supOf(b) - supOf(a));
+
+  const leader = sorted[0];
+  if (leader && supOf(leader) > 0) obs.push(`📰 <b>${esc(leader.name)}</b> leads supply with ${_ccN(supOf(leader))} cp.`);
+
+  const declining = rows.filter(r => r.supply.growth_pct != null && r.supply.growth_pct < -5);
+  if (declining.length) obs.push(`📉 ${declining.length} ${declining.length === 1 ? 'executive' : 'executives'} with &gt;5% supply drop: ${declining.slice(0, 3).map(r => `<b>${esc(r.name)}</b>`).join(', ')}${declining.length > 3 ? '…' : ''}.`);
+
+  const growing = rows.filter(r => r.supply.growth_pct != null && r.supply.growth_pct > 10);
+  if (growing.length) obs.push(`🚀 ${growing.length} showing &gt;10% growth: ${growing.slice(0, 3).map(r => `<b>${esc(r.name)}</b> (+${r.supply.growth_pct}%)`).join(', ')}.`);
+
+  const collProb = rows.filter(r => r.collection.pct != null && r.collection.pct < 70);
+  if (collProb.length) obs.push(`⚠️ ${collProb.length} with collection below 70%: ${collProb.slice(0, 2).map(r => `<b>${esc(r.name)}</b> (${r.collection.pct}%)`).join(', ')}.`);
+
+  const noDcr = rows.filter(r => !r.dcr || !r.dcr.visits);
+  if (noDcr.length) obs.push(`🚫 ${noDcr.length} with zero field visits this period.`);
+
+  const hasCrit = rows.filter(r => r.outstanding.critical > 0);
+  if (hasCrit.length) obs.push(`🔴 ${hasCrit.length} with critical overdue agencies.`);
+
+  const perfect = rows.filter(r => r.collection.pct != null && r.collection.pct >= 100);
+  if (perfect.length) obs.push(`✅ ${perfect.length} at 100% collection.`);
+
+  if (!obs.length) return '';
+  return `<div style="margin-top:12px;padding:11px 13px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px">
+    <div style="font-size:11px;font-weight:800;color:#0369a1;margin-bottom:6px;letter-spacing:.04em">AI OBSERVATIONS</div>
+    ${obs.map(o => `<div style="font-size:11.5px;color:#1e293b;margin-bottom:4px;line-height:1.45">${o}</div>`).join('')}
+  </div>`;
+}
+
+/* ── Center Wise (CI) table — dedicated layout for Centre Incharges ── */
+function _csCITable(st, d, rows) {
+  const gLabel = 'Centre Incharge';
+  const rowLink = r => r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}')` : '';
+  const thL = label => `<th style="text-align:left;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">${label}</th>`;
+  const thR = label => `<th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">${label}</th>`;
+  const thead = `<tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">${thL('Name')}${thR('Centres')}${thR('Hawkers')}${thR('Supply (cp)')}${thR('Growth')}${thR('Coll %')}<th style="text-align:center;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th></tr>`;
+  const rowStatus = rows.map(r => _csStatusClass(r, 'cash'));
+  const trows = rows.length ? rows.map((r, ri) => {
+    const onClick = rowLink(r);
+    const isInactive = r.is_active === false;
+    const centres = r.hawker_centres || 0;
+    const hawkers = r.hawker_count || 0;
+    const growth = r.supply.cash_growth_pct != null ? r.supply.cash_growth_pct : r.supply.growth_pct;
+    return `<tr onclick="${onClick}" style="cursor:pointer;border-top:1px solid #eef2f7;${isInactive?'opacity:.65':''}" onmouseenter="this.style.background='#f0f9ff'" onmouseleave="this.style.background=''">
+      <td style="padding:8px 8px;text-align:left">
+        <div><b style="color:#0ea5e9;font-size:12.5px">${esc(r.name)}</b></div>
+        ${centres || hawkers ? `<div style="font-size:10px;color:#0ea5e9">${centres} ctr · ${hawkers} hwk</div>` : ''}
+      </td>
+      <td style="padding:8px 8px;text-align:right;font-size:13px;font-weight:700">${centres || '—'}</td>
+      <td style="padding:8px 8px;text-align:right;font-size:12.5px">${hawkers || '—'}</td>
+      <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums"><b style="font-size:13px">${_ccN(r.supply.cash || r.supply.current)}</b></td>
+      <td style="padding:8px 8px;text-align:right">${_ccTrend(growth)}</td>
+      <td style="padding:8px 8px;text-align:right"><b style="color:#15803d">100%</b></td>
+      <td style="padding:8px 8px;text-align:center">${_csStatusBadge[rowStatus[ri] || 'good']}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="7" style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px">No Centre Incharges match the current filters.</td></tr>`;
+
+  const ptab = t => `<button onclick="csPerfType('${t}')" style="padding:5px 14px;border:1px solid ${st.perfType===t?'#1e3a8a':'#e2e8f0'};border-radius:20px;background:${st.perfType===t?'#1e3a8a':'#f8fafc'};color:${st.perfType===t?'#fff':'#475569'};font-size:11.5px;font-weight:${st.perfType===t?700:500};cursor:pointer">`;
+  const controls = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <div style="display:flex;gap:6px">${ptab('exec')}Executive Wise</button>${ptab('ci')}Center Wise</button></div>
+    <input oninput="csSearch(this.value)" value="${esc(st.search)}" placeholder="Search by name…"
+      style="padding:5px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#0f172a;min-width:160px;background:#fff">
+  </div>`;
+
+  const inner = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:600px">
+    <thead>${thead}</thead><tbody>${trows}</tbody></table></div>`;
+
+  return _csCard(`Centre Incharge Performance`,
+    `Cash sale, centre-managed supply · Collection is always 100% for city centres · ${esc(d.range_label)}`,
+    inner, controls);
 }
 
 /* ── Single consolidated analytical table ── */
@@ -5313,6 +5474,18 @@ function _csConsolidated(st, d) {
   }
 
   const isBranch = d.level === 'branch';
+
+  // Apply Executive Wise / Center Wise type filter (branch level only)
+  if (isBranch) {
+    if (st.perfType === 'exec') rows = rows.filter(r => !r.is_ci && !(r.supply.cash > 0 && !r.supply.agent));
+    if (st.perfType === 'ci')   rows = rows.filter(r => r.is_ci || (r.supply.cash > 0 && !r.supply.agent));
+  }
+
+  // CI table (Center Wise) uses a dedicated simpler layout
+  if (isBranch && st.perfType === 'ci') {
+    return _csCITable(st, d, rows);
+  }
+
   const gLabel = d.group_label;
   const rowLink = r => isBranch
     ? (r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}')` : '')
@@ -5355,8 +5528,11 @@ function _csConsolidated(st, d) {
   const shown = st.execAll ? rows : rows.slice(0, 30);
   const trows = shown.length ? shown.map((r, ri) => {
     const onClick = rowLink(r);
-    const ciSub = r.is_ci && (r.hawker_centres || r.hawker_count)
-      ? `<span style="font-size:10px;color:#0ea5e9">${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hawkers</span>`
+    const _effectiveCi = r.is_ci || (!r.supply.agent && r.supply.cash > 0);
+    const ciSub = _effectiveCi
+      ? (r.hawker_centres || r.hawker_count
+          ? `<span style="font-size:10px;color:#0ea5e9">${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hawkers</span>`
+          : `<span style="font-size:10px;color:#0ea5e9">Centre Incharge</span>`)
       : (isBranch && r.unit_name ? `<div style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</div>` : '');
     const nameCl = `<div><b style="color:#1e3a8a;font-size:12.5px">${esc(r.name)}</b>${r.sub ? ` <span style="font-size:10px;font-weight:600;color:${r.is_ci?'#0ea5e9':'#94a3b8'};background:#f1f5f9;padding:1px 5px;border-radius:4px">${esc(r.sub)}</span>` : ''}</div>
       ${ciSub}`;
@@ -5377,7 +5553,7 @@ function _csConsolidated(st, d) {
       <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px"><span style="color:${r.outstanding.amount>0?'#b91c1c':'#94a3b8'}">${_ccINR(r.outstanding.amount)}</span></td>
       <td style="padding:8px 8px;text-align:right;font-size:12px"><span style="color:${r.outstanding.critical>0?'#b91c1c':'#94a3b8'}">${_ccN(r.outstanding.critical)}</span></td>
       <td style="padding:8px 8px;text-align:right;font-size:12px">${r.dcr && r.dcr.coverage_pct != null ? `<span style="color:${r.dcr.coverage_pct<10?'#b91c1c':r.dcr.coverage_pct<30?'#b45309':'#15803d'}">${r.dcr.coverage_pct}%</span>` : '—'}</td>
-      <td style="padding:8px 8px;text-align:center">${_csStatusBadge[rowStatus[ri] || 'good']}</td>
+      <td style="padding:8px 8px;text-align:center" title="${esc(_csStatusReason(r, st.seg))}">${_csStatusBadge[rowStatus[ri] || 'good']}<div style="font-size:9px;color:#94a3b8;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px">${esc(_csStatusReason(r, st.seg))}</div></td>
     </tr>`;
   }).join('') : `<tr><td colspan="12" style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px">No ${gLabel.toLowerCase()}s match the current filters.</td></tr>`;
 
@@ -5397,9 +5573,13 @@ function _csConsolidated(st, d) {
   const inactiveCount = (d.branches || []).length - activeCount;
   const activeLegend = inactiveCount > 0 ? `<span style="font-size:11px;color:#94a3b8">· ${_ccN(inactiveCount)} inactive ${gLabel.toLowerCase()}s ${st.activeOnly ? 'hidden' : 'shown at 65%'}</span>` : '';
 
+  const ptab = t => `<button onclick="csPerfType('${t}')" style="padding:5px 14px;border:1px solid ${st.perfType===t?'#1e3a8a':'#e2e8f0'};border-radius:20px;background:${st.perfType===t?'#1e3a8a':'#f8fafc'};color:${st.perfType===t?'#fff':'#475569'};font-size:11.5px;font-weight:${st.perfType===t?700:500};cursor:pointer;white-space:nowrap">`;
+  const perfTypeTabs = isBranch ? `${ptab('exec')}Executive Wise</button>${ptab('ci')}Center Wise</button>` : '';
+
   const controls = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    ${perfTypeTabs ? `<div style="display:flex;gap:6px;margin-right:4px">${perfTypeTabs}</div>` : ''}
     <button onclick="csToggleActive()" style="padding:5px 11px;border:1px solid ${st.activeOnly?'#3b82f6':'#cbd5e1'};border-radius:8px;background:${st.activeOnly?'#eff6ff':'#fff'};color:${st.activeOnly?'#1d4ed8':'#64748b'};font-size:11.5px;font-weight:600;cursor:pointer">
-      ${st.activeOnly ? '✓ Active Only' : 'All Executives'}
+      ${st.activeOnly ? '✓ Active Only' : 'All'}
     </button>
     ${activeLegend}
     <input oninput="csSearch(this.value)" value="${esc(st.search)}" placeholder="Search by name…"
