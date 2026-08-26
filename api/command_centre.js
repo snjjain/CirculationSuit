@@ -987,9 +987,17 @@ module.exports = function installCommandCentre({ app, q }) {
     try {
       const execCode = String(req.query.exec_code || '').trim();
       if (!execCode) return res.status(400).json({ detail: 'exec_code required' });
-      const unitCode = String(req.query.unit_code || '').trim();
+      let unitCode = String(req.query.unit_code || '').trim();
       const { asOn, prev } = await resolveDates(req.query.as_on, req.query.compare);
       const win = resolveRangeWindow(asOn, req.query.range || 'mtd');
+
+      // Auto-detect unit from hawker_master if not provided (exec_code may exist across units)
+      if (!unitCode) {
+        const { rows: uRows } = await q(
+          `SELECT unit_code FROM hawker_master WHERE center_incharge_code = ? AND unit_code IS NOT NULL AND unit_code != '' LIMIT 1`,
+          [execCode]);
+        unitCode = uRows[0]?.unit_code || '';
+      }
 
       const ucWhere = unitCode ? ' AND loc_id = ?' : '';
       const ucP    = unitCode ? [unitCode] : [];
@@ -1059,7 +1067,8 @@ module.exports = function installCommandCentre({ app, q }) {
         const todayCp  = N(s.today_cp);
         const prevCp   = N(s.prev_cp);
         const mtdCp    = N(s.mtd_cp);
-        const patrikaCp= N(c.patrika_cp);
+        // Use our_supply from competitor_data; fall back to mtd_cp when blank
+        const patrikaCp= c.patrika_cp != null ? N(c.patrika_cp) : mtdCp;
         const compTotal= N(c.comp_total);
         const dbTotal  = patrikaCp + compTotal;
         const msPct    = dbTotal > 0 ? r1(patrikaCp / dbTotal * 100) : null;

@@ -4261,10 +4261,10 @@ window.ccFlyAgency = (unitCode, agcd, name) => {
   _ccFlyPush({ kind: 'agency', unitCode, agcd, name: name || agcd, data: null, loading: true, err: null },
     `${api.base}/api/agency-profile/${encodeURIComponent(unitCode)}/${encodeURIComponent(agcd)}`, 'agcd');
 };
-window.ccFlyExec = (execCode, name) => {
+window.ccFlyExec = (execCode, name, unitCode) => {
   if (!_ccState().fly) return;
   if (!execCode) { toast('Cannot open performance — executive code missing'); return; }
-  _ccFlyPush({ kind: 'exec', execCode, name: name || execCode, data: null, loading: true, err: null },
+  _ccFlyPush({ kind: 'exec', execCode, name: name || execCode, unitCode: unitCode || '', data: null, loading: true, err: null },
     `${api.base}/api/exec-perf/executive/${encodeURIComponent(execCode)}`, 'execCode');
 };
 window.ccFlyBack = () => {
@@ -4279,7 +4279,7 @@ window.ccFlyExecFull = () => {
   st.fly = null;
   go('exec_perf');
   // Drill after the screen switch so epDrillExec's render lands on the right view.
-  try { epDrillExec(x.execCode, x.name); } catch (_) {}
+  try { epDrillExec(x.execCode, x.name, x.unitCode); } catch (_) {}
 };
 function _ccFlyTop() {
   const st = _ccState(); const s = st.fly && st.fly.stack;
@@ -5118,9 +5118,9 @@ window.ccOpenAgencyPanel = (unitCode, agcd, name) => {
   const cc = _ccState(); if (!cc.fly) cc.fly = { kind: 'direct', stack: [] };
   ccFlyAgency(unitCode, agcd, name);
 };
-window.ccOpenExecPanel = (execCode, name) => {
+window.ccOpenExecPanel = (execCode, name, unitCode) => {
   const cc = _ccState(); if (!cc.fly) cc.fly = { kind: 'direct', stack: [] };
-  ccFlyExec(execCode, name);
+  ccFlyExec(execCode, name, unitCode);
 };
 
 function _csParams(st) {
@@ -5440,7 +5440,8 @@ function _csAIInsights(rows, seg) {
 /* ── Center Wise (CI) table — dedicated layout for Centre Incharges ── */
 function _csCITable(st, d, rows) {
   const gLabel = 'Centre Incharge';
-  const rowLink = r => r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}')` : '';
+  const ciUnit = st.drillUnit || '';
+  const rowLink = r => r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}','${_csQ(ciUnit)}')` : '';
   const thL = label => `<th style="text-align:left;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">${label}</th>`;
   const thR = label => `<th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">${label}</th>`;
   const thead = `<tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">${thL('Name')}${thR('Centres')}${thR('Hawkers')}${thR('Supply (cp)')}${thR('Growth')}${thR('Coll %')}<th style="text-align:center;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th></tr>`;
@@ -5527,8 +5528,9 @@ function _csConsolidated(st, d) {
   }
 
   const gLabel = d.group_label;
+  const _brUnit = st.drillUnit || '';
   const rowLink = r => isBranch
-    ? (r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}')` : '')
+    ? (r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}','${_csQ(_brUnit)}')` : '')
     : `ccOpenBranch('${_csQ(d.state)}','${_csQ(r.key)}')`;
 
   const thBtn = (col, label) => {
@@ -10764,10 +10766,10 @@ const epMetricVal = (r, m) => m === 'supply' ? epFmtN(r.total_supply) : m === 'c
 const epMetricColor = (r, m) => m === 'collection_pct' ? epPctColor(r.collection_pct) : m === 'outstanding' ? 'var(--red)' : m === 'collection' ? 'var(--grn)' : 'var(--ink)';
 
 // ── Drill / navigation functions (window-scoped for inline onclick) ───────────
-window.epDrillExec = (code, name) => {
+window.epDrillExec = (code, name, unitCode) => {
   if (!code) return;
   const st = epState();
-  st.drillExec = code; st.drillExecName = name || code;
+  st.drillExec = code; st.drillExecName = name || code; st.drillUnitCode = unitCode || '';
   st.drillExecData = null; st.drillAgency = ''; st.drillAgencyData = null;
   st.ciDetail = null; st.ciDetailLoading = false;
   render();
@@ -11545,8 +11547,8 @@ function epExecDetailView() {
   const _isCI = (exec.agency_count === 0 && !exec.total_supply && exec.exec_designation && exec.exec_designation.toUpperCase().includes('CI'))
     || (exec.agency_count === 0 && exec.total_supply === 0 && exec.collection_pct === 0);
   if (_isCI) {
-    // Trigger hawker detail fetch lazily
-    const unitCode = (exec.units || '').split('/')[0].trim();
+    // Trigger hawker detail fetch lazily; use drillUnitCode set by epDrillExec (passed from ccFlyExecFull)
+    const unitCode = st.drillUnitCode || '';
     _epCIFetch(st.drillExec, unitCode);
     const cd = st.ciDetail;
     const cdLoading = st.ciDetailLoading;
