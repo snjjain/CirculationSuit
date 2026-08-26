@@ -578,7 +578,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const lbl = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`;
       const prevMonthLabel = lbl(pm), prevPrevLabel = lbl(pm2);
 
-      const [agentSup, cashSup, coll, os, billing, master, hier, visits, execActive] = await Promise.all([
+      const [agentSup, cashSup, coll, os, billing, master, hier, visits, execActive, execBilling] = await Promise.all([
         // Agent (credit) supply, agency level, on both dates.
         q(`SELECT s.unit_code, s.agcd,
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
@@ -617,7 +617,8 @@ module.exports = function installCommandCentre({ app, q }) {
            WHERE period_label IN (?, ?) AND unit_code IN (${IN})
            GROUP BY period_label, unit_code`, [prevMonthLabel, prevPrevLabel, ...codes]),
         q(`SELECT unit, agcd, MAX(ag_name) ag_name, MAX(executive_code) exec_code,
-                  MAX(executive_name) exec_name, MAX(dist_name) dist_name
+                  MAX(executive_name) exec_name, MAX(dist_name) dist_name,
+                  MAX(ag_class_name) ag_class
            FROM agency_master
            WHERE unit IN (${IN}) AND CAST(dpcd AS UNSIGNED)=1
              AND COALESCE(supply_stop_flag,'N')='N'
@@ -634,6 +635,16 @@ module.exports = function installCommandCentre({ app, q }) {
            GROUP BY unit_code, emp_code`, [win.from, win.to, ...codes]),
         // Active exec flag — scoped to unit_code IN scope so the scan stays small.
         q(`SELECT executive_code, is_active_pli FROM exec_master WHERE unit_code IN (${IN})`, codes),
+        // Exec-level billing: join agency_outstanding snapshots with agency_master for exec_code.
+        // Two consecutive cumulative snapshots are differenced (same method as branch billing).
+        q(`SELECT ao.period_label, am.executive_code exec_code, SUM(ao.bill_amt) amt
+           FROM agency_outstanding ao
+           JOIN agency_master am ON am.unit = ao.unit_code AND am.agcd = ao.ag_code
+             AND CAST(am.dpcd AS UNSIGNED) = 1
+           WHERE ao.period_label IN (?, ?) AND ao.unit_code IN (${IN})
+             AND CAST(ao.dp_code AS UNSIGNED) = 1
+           GROUP BY ao.period_label, am.executive_code`,
+          [prevMonthLabel, prevPrevLabel, ...codes]),
       ]);
 
       // ── Active executive map from exec_master ──
@@ -644,7 +655,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const mk = () => ({
         agent_cur: 0, agent_prev: 0, cash_cur: 0, cash_prev: 0,
         collection: 0, txn: 0, agencies_paid: 0, billed: 0,
-        os: 0, os_agencies: 0, critical: 0, book: 0,
+        os: 0, os_agencies: 0, critical: 0, book: 0, dcrBook: 0,
         visits: 0, agencies_visited: 0, execs: new Set(),
       });
       const B = {}; codes.forEach(c => { B[c] = mk(); });
@@ -654,7 +665,11 @@ module.exports = function installCommandCentre({ app, q }) {
       master.rows.forEach(r => {
         const k = `${r.unit}|${r.agcd}`;
         execOf[k] = { code: r.exec_code, name: r.exec_name };
-        if (B[r.unit]) B[r.unit].book += 1;
+        if (B[r.unit]) {
+          B[r.unit].book += 1;
+          // DCR coverage denominator = credit agencies only (executives visit credit agencies)
+          if (r.ag_class === 'CREDIT SALE') B[r.unit].dcrBook += 1;
+        }
       });
       const exec = (code, name, unit) => {
         if (!code) return null;
@@ -708,6 +723,18 @@ module.exports = function installCommandCentre({ app, q }) {
       codes.forEach(c => {
         B[c].billed = havePrev ? Math.max(0, (cumThis[c] || 0) - (cumPrev[c] || 0)) : (cumThis[c] || 0);
       });
+      // Exec-level billing: same differenced-snapshot method, grouped by executive_code
+      const exBillThis = {}, exBillPrev = {};
+      (execBilling.rows || []).forEach(r => {
+        if (!r.exec_code) return;
+        const t = r.period_label === prevMonthLabel ? exBillThis : exBillPrev;
+        t[r.exec_code] = (t[r.exec_code] || 0) + N(r.amt);
+      });
+      Object.keys(E).forEach(code => {
+        E[code].billed = havePrev
+          ? Math.max(0, (exBillThis[code] || 0) - (exBillPrev[code] || 0))
+          : (exBillThis[code] || 0);
+      });
       visits.rows.forEach(r => {
         const b = B[r.unit_code];
         if (b) { b.visits += N(r.visits); b.agencies_visited += N(r.agencies); b.execs.add(r.emp_code); }
@@ -730,8 +757,8 @@ module.exports = function installCommandCentre({ app, q }) {
                         txn: a.txn, agencies_paid: a.agencies_paid },
           outstanding: { amount: a.os, agencies: a.os_agencies, critical: a.critical,
                          per_agency: a.os_agencies ? Math.round(a.os / a.os_agencies) : 0 },
-          dcr: { visits: a.visits, agencies_visited: a.agencies_visited, book: a.book,
-                 execs: a.execs, coverage_pct: a.book ? r1((a.agencies_visited / a.book) * 100) : null },
+          dcr: { visits: a.visits, agencies_visited: a.agencies_visited, book: a.dcrBook || a.book,
+                 execs: a.execs, coverage_pct: (a.dcrBook || a.book) ? r1((a.agencies_visited / (a.dcrBook || a.book)) * 100) : null },
         };
       };
       const branches = groupBy === 'unit'
@@ -743,7 +770,7 @@ module.exports = function installCommandCentre({ app, q }) {
               agent_cur: b.agent_cur, cash_cur: b.cash_cur,
               collection: b.collection, billed: b.billed, txn: b.txn, agencies_paid: b.agencies_paid,
               os: b.os, os_agencies: b.os_agencies, critical: b.critical,
-              visits: b.visits, agencies_visited: b.agencies_visited, book: b.book, execs: b.execs.size,
+              visits: b.visits, agencies_visited: b.agencies_visited, book: b.book, dcrBook: b.dcrBook, execs: b.execs.size,
             });
             br.supply.agent_prev = b.agent_prev;
             br.supply.cash_prev = b.cash_prev;
@@ -753,18 +780,13 @@ module.exports = function installCommandCentre({ app, q }) {
           }).sort((a, x) => x.supply.current - a.supply.current)
         : Object.values(E).map(e => {
             const h = hier.rows.find(x => x.exec_code === e.exec_code) || {};
-            /* Billing has no executive dimension — agency_outstanding's bill_amt snapshots
-               are per agency, so an executive's "billed" is the sum over the agencies they
-               hold. Only the branch has a differenced monthly figure, so at executive level
-               collection % is measured against collection + dues instead, and the column
-               header says so rather than quietly changing meaning. */
             const execRow = rowOf(e.exec_code, e.exec_name, h.desig || null, {
               unit_code: [...e.units][0] || unitScope,
               unit_name: [...e.units].map(u => unitName[u] || u).join(' / '),
               exec_code: e.exec_code,
               supply_cur: e.supply_cur, supply_prev: e.supply_prev,
               agent_cur: e.supply_cur - e.cash_cur, cash_cur: e.cash_cur,
-              collection: e.collection, billed: e.collection + e.os,
+              collection: e.collection, billed: e.billed > 0 ? e.billed : (e.collection + e.os),
               txn: e.txn, agencies_paid: e.agencies_paid,
               os: e.os, os_agencies: e.os_agencies, critical: e.critical,
               visits: e.visits, agencies_visited: e.agencies_visited, book: e.agencies, execs: 1,
@@ -795,7 +817,7 @@ module.exports = function installCommandCentre({ app, q }) {
           agent_supply: e.supply_cur - e.cash_cur, cash_supply: e.cash_cur,
           growth_pct: r1(pct(e.supply_cur, e.supply_prev)),
           collection: e.collection, outstanding: e.os,
-          collection_pct: e.os + e.collection ? r1((e.collection / (e.os + e.collection)) * 100) : null,
+          collection_pct: e.billed > 0 ? r1((e.collection / e.billed) * 100) : null,
           visits: e.visits, agencies_visited: e.agencies_visited,
           coverage_pct: e.agencies ? r1((e.agencies_visited / e.agencies) * 100) : null,
         };

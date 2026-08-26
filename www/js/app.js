@@ -4908,15 +4908,15 @@ function _cmdViewNew() {
   // auto-fitting into a ragged 5/3 split at common widths.
   const topStrip = !t.supply ? '' : `<div class="cc-strip" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:18px">
     ${_ccTopCard({ label: st.state ? esc(shown[0] ? shown[0].name : '') + ' Supply' : 'Total Supply', color: '#3b82f6',
-      value: _ccN(t.supply.value) + ' <span style="font-size:12px;font-weight:600;color:#64748b">cp</span>',
+      value: _ccN(t.supply.value),
       trend: _ccTrend(t.supply.growth_pct), sub: `Agent + Cash · ${esc(t.supply.window)}`,
       onClick: `ccDrill('supply_dash','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Agent Sale', color: '#6366f1',
-      value: _ccN(t.agent.value) + ' <span style="font-size:12px;font-weight:600;color:#64748b">cp</span>',
+      value: _ccN(t.agent.value),
       sub: `${t.agent.share_pct == null ? '' : t.agent.share_pct + '% of supply · '}credit agencies`,
       barPct: t.agent.share_pct, onClick: `ccDrill('supply_dash','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Cash Sale', color: '#f59e0b',
-      value: _ccN(t.cash.value) + ' <span style="font-size:12px;font-weight:600;color:#64748b">cp</span>',
+      value: _ccN(t.cash.value),
       sub: `${t.cash.share_pct == null ? '' : t.cash.share_pct + '% of supply · '}city / hawker`,
       barPct: t.cash.share_pct, onClick: `ccDrill('supply_dash','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Collection', color: '#22c55e',
@@ -5320,7 +5320,7 @@ function _csInsights(st, d) {
 
   const bySupply   = [...rows].sort((a, b) => b.supply.current - a.supply.current);
   const byColl     = [...rows].filter(r => r.collection.pct != null).sort((a, b) => a.collection.pct - b.collection.pct);
-  const byGrowth   = [...rows].filter(r => r.supply.growth_pct != null).sort((a, b) => b.supply.growth_pct - a.supply.growth_pct);
+  const byGrowth   = [...rows].filter(r => r.supply.growth_pct > 0).sort((a, b) => b.supply.growth_pct - a.supply.growth_pct);
   const atRisk     = rows.filter(r => {
     const g = r.supply.growth_pct; const c = r.collection.pct;
     return (g != null && g < -2) || (c != null && c < 70) || (r.outstanding.critical > 0 && r.outstanding.amount > 1000000);
@@ -5351,7 +5351,7 @@ function _csInsights(st, d) {
     emptyMsg = 'No data with billing available';
   } else if (st.insightTab === 'grow') {
     list = byGrowth.slice(0, 5);
-    emptyMsg = 'No growth data available';
+    emptyMsg = 'No executives with positive growth this period';
   } else {
     list = atRisk.slice(0, 8);
     emptyMsg = 'No risks detected — all rows are on track';
@@ -5387,7 +5387,7 @@ function _csInsights(st, d) {
           <div style="font-size:12.5px;font-weight:700;color:#1e3a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</div>
           ${subInfo}
         </div>
-        <div style="font-size:12.5px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums">${_ccN(supVal)} <span style="font-size:10px;color:#94a3b8;font-weight:500">cp</span></div>
+        <div style="font-size:12.5px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums">${_ccN(supVal)}</div>
         ${scoreBar(supVal, maxSupply)}${collBadge}${growBadge}${osBadge}${stBadge}
       </div>`;
     }).join('');
@@ -5507,6 +5507,7 @@ function _csConsolidated(st, d) {
       else if (sortKey === 'growth') { av = a.supply.growth_pct || -9999; bv = b.supply.growth_pct || -9999; }
       else if (sortKey === 'coll')   { av = a.collection.pct || 0; bv = b.collection.pct || 0; }
       else if (sortKey === 'os')     { av = a.outstanding.amount; bv = b.outstanding.amount; }
+      else if (sortKey === 'prevbill') { av = a.collection.billed || 0; bv = b.collection.billed || 0; }
       else if (sortKey === 'dcr')    { av = a.dcr ? a.dcr.coverage_pct || 0 : 0; bv = b.dcr ? b.dcr.coverage_pct || 0 : 0; }
       else { av = a.supply.current; bv = b.supply.current; }
       av = av == null ? -9999 : av; bv = bv == null ? -9999 : bv;
@@ -5544,17 +5545,19 @@ function _csConsolidated(st, d) {
     return `<th onclick="csSetSort('${col}')" style="text-align:left;padding:6px 8px;font-weight:800;white-space:nowrap;cursor:pointer;color:${active?'#1e3a8a':'#64748b'};font-size:10px;text-transform:uppercase;letter-spacing:.05em;user-select:none">${label}${arrow}</th>`;
   };
 
-  const showAgent = st.seg !== 'cash';
+  const isExecView = isBranch && st.perfType === 'exec';
+  const showAgent = st.seg !== 'cash' && !isExecView;
   const showCash  = st.seg !== 'agent';
 
   const thead = `<tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">
     ${thLeft('name', gLabel)}
-    ${showAgent ? thBtn('agent', 'Agent Sale (cp)') : ''}
-    ${showCash  ? thBtn('cash',  'Cash Sale (cp)')  : ''}
-    ${thBtn('supply', 'Total (cp)')}
+    ${showAgent ? thBtn('agent', 'Agent Sale') : ''}
+    ${showCash  ? thBtn('cash',  'Cash Sale')  : ''}
+    ${thBtn('supply', 'Supply')}
     ${thBtn('growth', 'Growth')}
     ${thBtn('coll', 'Collection')}
     <th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">Coll %</th>
+    ${thBtn('prevbill', 'Prev Bill')}
     ${thBtn('os', 'Outstanding')}
     <th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">Critical</th>
     ${thBtn('dcr', 'DCR %')}
@@ -5592,12 +5595,13 @@ function _csConsolidated(st, d) {
       <td style="padding:8px 8px;text-align:right">${_ccTrend(r.supply.growth_pct)}</td>
       <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px">${_ccINR(r.collection.collected)}</td>
       <td style="padding:8px 8px;text-align:right"><b style="color:${collPct==null?'#94a3b8':collPct>=85?'#15803d':collPct>=65?'#b45309':'#b91c1c'}">${collPct == null ? '—' : collPct + '%'}</b></td>
+      <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px;color:#64748b">${_ccINR(r.collection.billed)}</td>
       <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px"><span style="color:${r.outstanding.amount>0?'#b91c1c':'#94a3b8'}">${_ccINR(r.outstanding.amount)}</span></td>
       <td style="padding:8px 8px;text-align:right;font-size:12px"><span style="color:${r.outstanding.critical>0?'#b91c1c':'#94a3b8'}">${_ccN(r.outstanding.critical)}</span></td>
       <td style="padding:8px 8px;text-align:right;font-size:12px">${r.dcr && r.dcr.coverage_pct != null ? `<span style="color:${r.dcr.coverage_pct<10?'#b91c1c':r.dcr.coverage_pct<30?'#b45309':'#15803d'}">${r.dcr.coverage_pct}%</span>` : '—'}</td>
       <td style="padding:8px 8px;text-align:center" title="${esc(_csStatusReason(r, st.seg))}">${_csStatusBadge[rowStatus[ri] || 'good']}<div style="font-size:9px;color:#94a3b8;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px">${esc(_csStatusReason(r, st.seg))}</div></td>
     </tr>`;
-  }).join('') : `<tr><td colspan="12" style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px">No ${gLabel.toLowerCase()}s match the current filters.</td></tr>`;
+  }).join('') : `<tr><td colspan="13" style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px">No ${gLabel.toLowerCase()}s match the current filters.</td></tr>`;
 
   const showAllBtn = rows.length > 30 ? `<div style="margin-top:11px">${_csBtn(st.execAll ? 'Show top 30' : `Show all ${_ccN(rows.length)} →`, 'csExecAll()', false)}</div>` : '';
 
@@ -5629,7 +5633,7 @@ function _csConsolidated(st, d) {
   </div>`;
 
   return _csCard(`${esc(gLabel)}-wise Performance`,
-    `Supply in copies (cp) · Collection & Outstanding in ₹ · ${esc(d.range_label)} · click any column header to sort`,
+    `Supply · Collection, Prev Bill & Outstanding in ₹ · ${esc(d.range_label)} · click any column header to sort`,
     inner, controls);
 }
 
