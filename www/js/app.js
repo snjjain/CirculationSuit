@@ -5225,7 +5225,7 @@ function _csInsights(st, d) {
       const osBadge = r.outstanding.amount > 1000000 ? `<span style="font-size:10px;color:#b91c1c;margin-left:6px">OS ${_ccINR(r.outstanding.amount)}</span>` : '';
       return `<div onclick="${rowClick(r)}" style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:9px;background:#f8fafc;margin-bottom:5px;cursor:pointer" onmouseenter="this.style.background='#eff6ff'" onmouseleave="this.style.background='#f8fafc'">
         ${badge}<div style="font-size:12.5px;font-weight:700;color:#1e3a8a;min-width:110px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</div>
-        <div style="font-size:12.5px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums">${_ccN(supVal)}</div>
+        <div style="font-size:12.5px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums">${_ccN(supVal)} <span style="font-size:10px;color:#94a3b8;font-weight:500">cp</span></div>
         ${scoreBar(supVal, maxSupply)}${collBadge}${growBadge}${osBadge}${_csStatus(r, st.seg)}
       </div>`;
     }).join('');
@@ -5292,9 +5292,9 @@ function _csConsolidated(st, d) {
 
   const thead = `<tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">
     ${thLeft('name', gLabel)}
-    ${showAgent ? thBtn('agent', 'Agent Sale') : ''}
-    ${showCash  ? thBtn('cash',  'Cash Sale')  : ''}
-    ${thBtn('supply', 'Total Supply')}
+    ${showAgent ? thBtn('agent', 'Agent Sale (cp)') : ''}
+    ${showCash  ? thBtn('cash',  'Cash Sale (cp)')  : ''}
+    ${thBtn('supply', 'Total (cp)')}
     ${thBtn('growth', 'Growth')}
     ${thBtn('coll', 'Collection')}
     <th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">Coll %</th>
@@ -5362,7 +5362,7 @@ function _csConsolidated(st, d) {
   </div>`;
 
   return _csCard(`${esc(gLabel)}-wise Performance`,
-    `Supply, collection & outstanding in one view · ${esc(d.range_label)} · click any column header to sort`,
+    `Supply in copies (cp) · Collection & Outstanding in ₹ · ${esc(d.range_label)} · click any column header to sort`,
     inner, controls);
 }
 
