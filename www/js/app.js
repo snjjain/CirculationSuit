@@ -5495,7 +5495,7 @@ function _csAIInsights(rows, seg) {
 /* ── Center Wise (CI) table — dedicated layout for Centre Incharges ── */
 function _csCITable(st, d, rows) {
   const gLabel = 'Centre Incharge';
-  const ciUnit = st.drillUnit || '';
+  const ciUnit = st.unit || '';
   const rowLink = r => r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}','${_csQ(ciUnit)}')` : '';
   const thL = label => `<th style="text-align:left;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">${label}</th>`;
   const thR = label => `<th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">${label}</th>`;
@@ -5510,7 +5510,7 @@ function _csCITable(st, d, rows) {
     return `<tr onclick="${onClick}" style="cursor:pointer;border-top:1px solid #eef2f7;${isInactive?'opacity:.65':''}" onmouseenter="this.style.background='#f0f9ff'" onmouseleave="this.style.background=''">
       <td style="padding:8px 8px;text-align:left">
         <div><b style="color:#0ea5e9;font-size:12.5px">${esc(r.name)}</b></div>
-        ${centres || hawkers ? `<div style="font-size:10px;color:#0ea5e9">${centres} ctr · <span onclick="event.stopPropagation();csHwkPopup('${_csQ(r.exec_code||'')}','${_csQ(r.name||'')}','${_csQ(ciUnit)}')" style="text-decoration:underline;cursor:pointer;color:#0284c7">${hawkers} hwk</span></div>` : ''}
+        ${centres || hawkers ? `<div style="font-size:10px;color:#0ea5e9">${centres} ctr · <span onclick="event.stopPropagation();csHwkPopup('${_csQ(r.exec_code||'')}','${_csQ(r.name||'')}','${_csQ(r.unit_code || ciUnit)}')" style="text-decoration:underline;cursor:pointer;color:#0284c7">${hawkers} hwk</span></div>` : ''}
       </td>
       <td style="padding:8px 8px;text-align:right;font-size:13px;font-weight:700">${centres || '—'}</td>
       <td style="padding:8px 8px;text-align:right;font-size:12.5px">${hawkers || '—'}</td>

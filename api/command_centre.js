@@ -898,7 +898,9 @@ module.exports = function installCommandCentre({ app, q }) {
     try {
       const execCode = String(req.query.exec_code || '').trim();
       const unit     = String(req.query.unit     || '').trim();
-      if (!execCode || !unit) return res.status(400).json({ detail: 'exec_code and unit required' });
+      if (!execCode) return res.status(400).json({ detail: 'exec_code required' });
+      const unitCl = unit ? ' AND loc_id = ?' : '';
+      const unitP  = unit ? [unit] : [];
 
       const { asOn } = await resolveDates(req.query.as_on);
       const mtdFrom  = asOn.slice(0, 7) + '-01';
@@ -914,11 +916,11 @@ module.exports = function installCommandCentre({ app, q }) {
                 SUM(CASE WHEN supply_date BETWEEN ? AND ? THEN sup_copies ELSE 0 END) mtd,
                 SUM(CASE WHEN supply_date BETWEEN ? AND ? THEN sup_copies ELSE 0 END) prev_mtd
          FROM hawker_supply
-         WHERE center_incharge = ? AND loc_id = ?
+         WHERE center_incharge = ?${unitCl}
            AND supply_date BETWEEN ? AND ?
          GROUP BY hawker_id
          ORDER BY mtd DESC`,
-        [mtdFrom, asOn, prevFrom, prevTo, execCode, unit, prevFrom, asOn]);
+        [mtdFrom, asOn, prevFrom, prevTo, execCode, ...unitP, prevFrom, asOn]);
 
       return res.json({
         exec_code: execCode, unit, as_on: asOn,
