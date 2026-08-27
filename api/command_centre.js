@@ -342,10 +342,13 @@ module.exports = function installCommandCentre({ app, q }) {
   async function dcrByState(asOn, prev, unitScope) {
     const uCl = unitScope ? ' AND v.unit_code = ?' : '';
     const uP  = unitScope ? [unitScope] : [];
+    const monthStart = asOn.slice(0, 7) + '-01';
     // dcr_agency_visit is utf8mb4_unicode_ci while agency_master is
     // utf8mb4_0900_ai_ci, so joining them in SQL throws "Illegal mix of
     // collations". Both sides are fetched keyed by unit and merged in JS instead —
     // the same pattern the rest of the codebase uses for this table pair.
+    // Book = agencies that actually received agent (credit) supply this month;
+    // this matches the user expectation of "active agencies with supply going".
     const [visits, book, unitState] = await Promise.all([
       q(`SELECT v.unit_code unit, SUM(v.cur) cur, SUM(v.prv) prv,
                 SUM(v.ag_cur) agencies_visited, COUNT(DISTINCT v.emp) execs
@@ -356,12 +359,17 @@ module.exports = function installCommandCentre({ app, q }) {
                WHERE mark_attn_date IN (?, ?) GROUP BY unit_code, emp_code) v
          WHERE 1=1${uCl} GROUP BY v.unit_code`,
         [asOn, prev, asOn, asOn, prev, ...uP]),
-      q(`SELECT unit_state_nm st, COUNT(DISTINCT CONCAT(unit,'|',agcd)) agencies
-         FROM agency_master
-         WHERE CAST(dpcd AS UNSIGNED)=1 AND COALESCE(supply_stop_flag,'N')='N'
-           AND ag_class_name = 'CREDIT SALE'
-           AND (suspend_date IS NULL OR suspend_date > CURDATE())${unitScope ? ' AND unit = ?' : ''}
-         GROUP BY unit_state_nm`, uP),
+      q(`SELECT am.unit_state_nm st, COUNT(DISTINCT CONCAT(s.unit_code,'|',s.agcd)) agencies
+         FROM supply_data s
+         JOIN (SELECT DISTINCT unit, agcd, unit_state_nm FROM agency_master
+               WHERE CAST(dpcd AS UNSIGNED)=1
+                 AND COALESCE(supply_stop_flag,'N')='N'
+                 AND (suspend_date IS NULL OR suspend_date > CURDATE())${unitScope ? ' AND unit = ?' : ''}) am
+           ON am.unit = s.unit_code AND am.agcd = s.agcd
+         WHERE s.supply_date BETWEEN ? AND ?
+           AND s.sup_type_code = 'S01'
+           AND COALESCE(s.publ,'') NOT IN ('P14')
+         GROUP BY am.unit_state_nm`, [...uP, monthStart, asOn]),
       q(`SELECT unit, MAX(unit_state_nm) st FROM agency_master GROUP BY unit`),
     ]);
     const uState = {};
@@ -506,7 +514,7 @@ module.exports = function installCommandCentre({ app, q }) {
       res.json({
         as_on: asOn, previous: prev, compare: mode, compare_label: label,
         range: win.key, range_label: win.label, range_from: win.from, range_to: win.to,
-        unit_code: unitScope,
+        unit_code: unitScope, prev_month_label: col.prev_month_label,
         totals,
         states,
         ...balance(buildAlerts(states), buildOpportunities(states)),
@@ -579,7 +587,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const lbl = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`;
       const prevMonthLabel = lbl(pm), prevPrevLabel = lbl(pm2);
 
-      const [agentSup, cashSup, coll, os, billing, master, hier, visits, execActive, execBilling] = await Promise.all([
+      const [agentSup, cashSup, coll, os, billing, master, hier, visits, execActive, execBilling, monthSup] = await Promise.all([
         // Agent (credit) supply, agency level, on both dates.
         q(`SELECT s.unit_code, s.agcd,
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
@@ -645,11 +653,18 @@ module.exports = function installCommandCentre({ app, q }) {
            WHERE ao.period_label IN (?, ?) AND ao.unit_code IN (${IN})
            GROUP BY ao.period_label, ao.unit_code, ao.ag_code`,
           [prevMonthLabel, prevPrevLabel, ...codes]),
+        // Distinct agencies that received agent supply this month — used as DCR book denominator.
+        q(`SELECT s.unit_code, s.agcd FROM supply_data s FORCE INDEX (idx_sd_dateunit)
+           WHERE s.supply_date BETWEEN ? AND ? AND s.unit_code IN (${IN})
+             AND s.sup_type_code = 'S01' AND COALESCE(s.publ,'') NOT IN ('P14')
+           GROUP BY s.unit_code, s.agcd`, [win.from, win.to, ...codes]),
       ]);
 
       // ── Active executive map from exec_master ──
       const activeMap = new Map();
       (execActive.rows || []).forEach(r => activeMap.set(r.executive_code, r.is_active_pli === 'Y'));
+      // Set of "unit|agcd" keys that received agent supply this month — DCR book denominator.
+      const supplySet = new Set((monthSup.rows || []).map(r => `${r.unit_code}|${r.agcd}`));
 
       // ── Roll everything up per branch and per executive ──
       const mk = () => ({
@@ -667,8 +682,8 @@ module.exports = function installCommandCentre({ app, q }) {
         execOf[k] = { code: r.exec_code, name: r.exec_name };
         if (B[r.unit]) {
           B[r.unit].book += 1;
-          // DCR coverage denominator = credit agencies only (executives visit credit agencies)
-          if (r.ag_class === 'CREDIT SALE') B[r.unit].dcrBook += 1;
+          // DCR coverage denominator = agencies that received agent supply this month
+          if (supplySet.has(k)) B[r.unit].dcrBook += 1;
         }
       });
       const exec = (code, name, unit) => {
