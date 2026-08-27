@@ -359,7 +359,7 @@ module.exports = function installCommandCentre({ app, q }) {
       q(`SELECT unit_state_nm st, COUNT(DISTINCT CONCAT(unit,'|',agcd)) agencies
          FROM agency_master
          WHERE CAST(dpcd AS UNSIGNED)=1 AND COALESCE(supply_stop_flag,'N')='N'
-           AND ag_class = 'CREDIT SALE'
+           AND ag_class_name = 'CREDIT SALE'
            AND (suspend_date IS NULL OR suspend_date > CURDATE())${unitScope ? ' AND unit = ?' : ''}
          GROUP BY unit_state_nm`, uP),
       q(`SELECT unit, MAX(unit_state_nm) st FROM agency_master GROUP BY unit`),
