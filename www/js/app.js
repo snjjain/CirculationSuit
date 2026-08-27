@@ -5485,8 +5485,12 @@ function _csCITable(st, d, rows) {
 function _csConsolidated(st, d) {
   let rows = (d.branches || []).filter(r => {
     if (st.activeOnly && r.is_active === false) return false;
-    if (st.seg === 'agent' && !r.supply.agent) return false;
-    if (st.seg === 'cash'  && !r.supply.cash)  return false;
+    // Seg filter applies to exec view only — CIs only ever have cash supply so
+    // filtering by 'agent' would always wipe them from the CI tab.
+    if (st.perfType !== 'ci') {
+      if (st.seg === 'agent' && !r.supply.agent) return false;
+      if (st.seg === 'cash'  && !r.supply.cash)  return false;
+    }
     if (st.search) {
       const q = st.search.toLowerCase();
       if (!r.name.toLowerCase().includes(q)) return false;
