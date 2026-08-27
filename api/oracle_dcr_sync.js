@@ -218,7 +218,11 @@ function buildAttendanceSql(from, to, spoolFile) {
     // trailing CHR(28) sentinel so split count is reliable
     `  CHR(28)`,
     `FROM employee_attendance d`,
-    `WHERE d.attn_date BETWEEN TO_DATE('${from}','YYYY-MM-DD') AND TO_DATE('${to}','YYYY-MM-DD')`,
+    // attn_date carries a time component, so a plain BETWEEN drops every row that is not
+    // exactly midnight — a single-day period then returns nothing at all. Half-open range
+    // catches the whole `to` day and, unlike TRUNC(), still lets Oracle use the index.
+    `WHERE d.attn_date >= TO_DATE('${from}','YYYY-MM-DD')`,
+    `  AND d.attn_date <  TO_DATE('${to}','YYYY-MM-DD') + 1`,
     `ORDER BY d.attn_date, d.unit_code;`,
     'SPOOL OFF', 'EXIT',
   ].join('\n');
@@ -249,6 +253,17 @@ async function syncAttendance(conn, from, to, onLog) {
   const raw  = fs.readFileSync(spoolFile, 'utf8');
   const rows = raw.split('\n').filter(l => l.includes(SEP));
   onLog(`  [attendance] ${rows.length} rows from Oracle`);
+
+  // An empty fetch must never blank a period that already holds rows — that is a silent
+  // wipe whether the cause is a query bug, a filter change, or a source-side outage.
+  if (!rows.length) {
+    const [[have]] = await conn.execute(
+      `SELECT COUNT(*) n FROM dcr_center_attendance WHERE attn_date BETWEEN ? AND ?`, [from, to]);
+    if (have.n > 0) {
+      onLog(`  [attendance] Oracle returned 0 rows but MySQL has ${have.n} — keeping them, NOT deleting`);
+      return 0;
+    }
+  }
 
   const [del] = await conn.execute(
     `DELETE FROM dcr_center_attendance WHERE attn_date BETWEEN ? AND ?`, [from, to]);
@@ -376,6 +391,16 @@ async function syncVisit(conn, from, to, onLog) {
   const rows = raw.split('\n').filter(l => l.includes(SEP));
   onLog(`  [agency-visit] ${rows.length} rows from Oracle`);
 
+  // Same wipe guard as syncAttendance.
+  if (!rows.length) {
+    const [[have]] = await conn.execute(
+      `SELECT COUNT(*) n FROM dcr_agency_visit WHERE mark_attn_date BETWEEN ? AND ?`, [from, to]);
+    if (have.n > 0) {
+      onLog(`  [agency-visit] Oracle returned 0 rows but MySQL has ${have.n} — keeping them, NOT deleting`);
+      return 0;
+    }
+  }
+
   const [del] = await conn.execute(
     `DELETE FROM dcr_agency_visit WHERE mark_attn_date BETWEEN ? AND ?`, [from, to]);
   onLog(`  [agency-visit] deleted ${del.affectedRows} old rows`);
@@ -418,6 +443,27 @@ async function syncVisit(conn, from, to, onLog) {
   return inserted;
 }
 
+/* ── DAY RANGE GENERATOR ──────────────────────────────────────────────────────
+   The Oracle attendance/visit queries call three PL/SQL scalar functions per row
+   (~12 rows/sec), so a whole month cannot finish inside SQLPLUS_TIMEOUT_MS. Each
+   period is also the DELETE window, so a timed-out month used to cost the whole
+   month's rows. Slicing into small periods caps that blast radius at CHUNK days
+   and keeps every fetch well inside the timeout. */
+function dayRanges(fromDate, toDate, chunkDays = 1) {
+  const ranges = [];
+  const step = Math.max(1, Number(chunkDays) || 1);
+  const end  = new Date(`${toDate}T00:00:00`);
+  let cur    = new Date(`${fromDate}T00:00:00`);
+  const fmt  = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  while (cur <= end) {
+    const last = new Date(cur);
+    last.setDate(last.getDate() + step - 1);
+    ranges.push({ from: fmt(cur), to: fmt(last > end ? end : last) });
+    cur.setDate(cur.getDate() + step);
+  }
+  return ranges;
+}
+
 // ── MONTH RANGE GENERATOR ─────────────────────────────────────────────────────
 
 function monthRanges(fromYM, toYM) {
@@ -444,19 +490,19 @@ async function runSync(opts = {}) {
   const setupConn = await mysql.createConnection(MYSQL_CFG);
   try { await ensureTables(setupConn); } finally { await setupConn.end(); }
 
+  const chunk = Math.max(1, Number(opts.chunk) || 1);
+
   let periods;
   if (opts.backfill) {
+    const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     const today = new Date();
-    const toYM  = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
     const twoYrsAgo = new Date(today.getFullYear() - 2, today.getMonth(), 1);
-    const fromYM = `${twoYrsAgo.getFullYear()}-${String(twoYrsAgo.getMonth() + 1).padStart(2, '0')}`;
-    periods = monthRanges(fromYM, toYM).reverse(); // newest first
-    onLog(`[dcr-sync] Backfill: ${periods.length} months (newest first) from ${fromYM}`);
+    periods = dayRanges(fmt(twoYrsAgo), fmt(today), chunk).reverse(); // newest first
+    onLog(`[dcr-sync] Backfill: ${periods.length} period(s) of ${chunk} day(s), newest first, from ${fmt(twoYrsAgo)}`);
   } else if (opts.from && opts.to) {
-    const fromYM = opts.from.slice(0, 7);
-    const toYM   = opts.to.slice(0, 7);
-    periods = monthRanges(fromYM, toYM);
-    onLog(`[dcr-sync] Range ${opts.from}→${opts.to}: ${periods.length} month(s)`);
+    // Exact dates — no snapping to whole months, so --from/--to mean what they say.
+    periods = dayRanges(opts.from, opts.to, chunk);
+    onLog(`[dcr-sync] Range ${opts.from}→${opts.to}: ${periods.length} period(s) of ${chunk} day(s)`);
   } else {
     // Live sync (manual button): today only. Yesterday is handled by the 6 AM scheduled sync.
     const fmt = d => d.toISOString().slice(0, 10);
@@ -464,22 +510,28 @@ async function runSync(opts = {}) {
     periods = [{ from: fmt(today), to: fmt(today) }];
   }
 
-  let totalAttn = 0, totalVisit = 0;
-  for (const { from, to } of periods) {
-    onLog(`[dcr-sync] Period ${from} → ${to}`);
+  let totalAttn = 0, totalVisit = 0, failed = 0;
+  for (let i = 0; i < periods.length; i++) {
+    const { from, to } = periods[i];
+    onLog(`[dcr-sync] Period ${from} → ${to}  (${i + 1}/${periods.length})`);
     // Fresh connection per period: Oracle sqlplus fetch can take 1-2 min, leaving MySQL idle;
     // a per-period connection avoids wait_timeout drops poisoning the entire backfill run.
     const conn = await mysql.createConnection(MYSQL_CFG);
     try {
       totalAttn  += await syncAttendance(conn, from, to, onLog);
       totalVisit += await syncVisit(conn, from, to, onLog);
+    } catch (e) {
+      // One bad day must not abort a 700-period backfill — the day keeps whatever it had.
+      failed++;
+      onLog(`  [dcr-sync] Period ${from}→${to} FAILED: ${e.message} — continuing`);
     } finally {
-      await conn.end();
+      try { await conn.end(); } catch (_) {}
     }
   }
 
-  onLog(`[dcr-sync] Complete — attendance: ${totalAttn}, agency-visits: ${totalVisit}`);
-  return { totalAttn, totalVisit, periods: periods.length };
+  onLog(`[dcr-sync] Complete — attendance: ${totalAttn}, agency-visits: ${totalVisit}` +
+        (failed ? `, ${failed} period(s) failed` : ''));
+  return { totalAttn, totalVisit, periods: periods.length, failed };
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -488,8 +540,9 @@ if (require.main === module) {
   const args = process.argv.slice(2);
   const opts = {};
   if (args.includes('--backfill')) opts.backfill = true;
-  const fi = args.indexOf('--from'); if (fi >= 0) opts.from = args[fi + 1];
-  const ti = args.indexOf('--to');   if (ti >= 0) opts.to   = args[ti + 1];
+  const fi = args.indexOf('--from');  if (fi >= 0) opts.from  = args[fi + 1];
+  const ti = args.indexOf('--to');    if (ti >= 0) opts.to    = args[ti + 1];
+  const ci = args.indexOf('--chunk'); if (ci >= 0) opts.chunk = Number(args[ci + 1]);
   runSync(opts)
     .then(r => { console.log(r); process.exit(0); })
     .catch(e => { console.error(e.message); process.exit(1); });
