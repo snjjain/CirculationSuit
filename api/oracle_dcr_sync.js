@@ -442,10 +442,10 @@ async function runSync(opts = {}) {
     periods = monthRanges(fromYM, toYM);
     onLog(`[dcr-sync] Range ${opts.from}→${opts.to}: ${periods.length} month(s)`);
   } else {
+    // Live sync (manual button): today only. Yesterday is handled by the 6 AM scheduled sync.
     const fmt = d => d.toISOString().slice(0, 10);
     const today = new Date();
-    const yest  = new Date(today); yest.setDate(today.getDate() - 1);
-    periods = [{ from: fmt(yest), to: fmt(today) }];
+    periods = [{ from: fmt(today), to: fmt(today) }];
   }
 
   let totalAttn = 0, totalVisit = 0;
