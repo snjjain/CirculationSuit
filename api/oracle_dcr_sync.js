@@ -225,8 +225,8 @@ function buildAttendanceSql(from, to, spoolFile) {
 }
 
 async function syncAttendance(conn, from, to, onLog) {
-  const spoolFile = path.join(os.tmpdir(), 'dcr_attn_spool.txt');
-  const sqlFile   = path.join(os.tmpdir(), 'dcr_attn.sql');
+  const spoolFile = path.join(os.tmpdir(), `dcr_attn_spool_${process.pid}.txt`);
+  const sqlFile   = path.join(os.tmpdir(), `dcr_attn_${process.pid}.sql`);
   fs.writeFileSync(sqlFile, buildAttendanceSql(from, to, spoolFile));
   if (fs.existsSync(spoolFile)) fs.unlinkSync(spoolFile);
 
@@ -344,8 +344,8 @@ function buildVisitSql(from, to, spoolFile) {
 }
 
 async function syncVisit(conn, from, to, onLog) {
-  const spoolFile = path.join(os.tmpdir(), 'dcr_visit_spool.txt');
-  const sqlFile   = path.join(os.tmpdir(), 'dcr_visit.sql');
+  const spoolFile = path.join(os.tmpdir(), `dcr_visit_spool_${process.pid}.txt`);
+  const sqlFile   = path.join(os.tmpdir(), `dcr_visit_${process.pid}.sql`);
   fs.writeFileSync(sqlFile, buildVisitSql(from, to, spoolFile));
   if (fs.existsSync(spoolFile)) fs.unlinkSync(spoolFile);
 
