@@ -27,11 +27,13 @@ require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
-const HISTORICAL = args.includes('--historical');
-const REVERSE    = args.includes('--reverse');  // process monthly chunks newest → oldest
-const ARG_DATE   = args.find((_, i) => args[i - 1] === '--date');
-const ARG_FROM   = args.find((_, i) => args[i - 1] === '--from');
-const ARG_TO     = args.find((_, i) => args[i - 1] === '--to');
+const HISTORICAL  = args.includes('--historical');
+const REVERSE     = args.includes('--reverse');  // process monthly chunks newest → oldest
+const TODAY_MODE  = args.includes('--today');    // intraday sync: today's supply
+const RECHECK     = args.includes('--recheck');  // morning recheck: yesterday + D-2
+const ARG_DATE    = args.find((_, i) => args[i - 1] === '--date');
+const ARG_FROM    = args.find((_, i) => args[i - 1] === '--from');
+const ARG_TO      = args.find((_, i) => args[i - 1] === '--to');
 
 const SQLPLUS = process.env.SQLPLUS_PATH ||
   'C:\\oraclexe\\app\\oracle\\product\\11.2.0\\server\\bin\\sqlplus.exe';
@@ -62,6 +64,9 @@ function log(msg) {
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 function fmtDate(d) { return d.toISOString().slice(0, 10); }
+
+function today()    { return fmtDate(new Date()); }
+function dayBefore() { const d = new Date(); d.setDate(d.getDate() - 2); return fmtDate(d); }
 
 function yesterday() {
   const d = new Date();
@@ -491,6 +496,17 @@ async function main() {
       log(`Custom range: ${ARG_FROM} → ${ARG_TO}`);
       const total = await historicalSync(conn, ARG_FROM, ARG_TO);
       log(`Custom range complete. Total: ${total} rows`);
+
+    } else if (TODAY_MODE) {
+      const todayStr = today();
+      log(`Intraday sync: ${todayStr}`);
+      await dailySync(conn, todayStr);
+
+    } else if (RECHECK) {
+      const d1 = yesterday(), d2 = dayBefore();
+      log(`Recheck sync: ${d2} and ${d1}`);
+      await dailySync(conn, d2);
+      await dailySync(conn, d1);
 
     } else {
       // Daily mode
