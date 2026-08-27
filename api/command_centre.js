@@ -958,9 +958,13 @@ module.exports = function installCommandCentre({ app, q }) {
       // execCode (e.g. E01827) is the circulation exec code from exec_master/hawker_supply.
       // dcr_center_attendance.emp_code (e.g. R02073) is the Oracle HR employee code — different system.
       // Resolve by matching center_incharge_name (from hawker_supply) against executive_name in dcr_center_attendance.
+      // Bound by supply_date: idx_hs_ci covers center_incharge alone, so an unbounded
+      // lookup walks every row this CI has ever had across 10.9M rows (~40 s). Narrowing
+      // to the two dates the panel already reads lets idx_hs_unit/idx_hs_date drive it (~0.1 s).
       const { rows: nameRows } = await q(
-        `SELECT MAX(center_incharge_name) exec_name FROM hawker_supply WHERE center_incharge = ?${unitCode ? ' AND loc_id = ?' : ''} LIMIT 1`,
-        [execCode, ...(unitCode ? [unitCode] : [])]);
+        `SELECT MAX(center_incharge_name) exec_name FROM hawker_supply
+         WHERE center_incharge = ? AND supply_date BETWEEN ? AND ?${unitCode ? ' AND loc_id = ?' : ''}`,
+        [execCode, prev, asOn, ...(unitCode ? [unitCode] : [])]);
       const execName = nameRows[0]?.exec_name || null;
       let empCode = execCode; // fallback
       if (execName) {
@@ -988,7 +992,7 @@ module.exports = function installCommandCentre({ app, q }) {
         q(`SELECT
              COUNT(*) total,
              COUNT(DISTINCT attn_date) active_days,
-             SUM(CASE WHEN attn_type = 'A' OR attn_type IS NULL OR attn_type = '' THEN 1 ELSE 0 END) attendance_days,
+             COUNT(DISTINCT CASE WHEN attn_type = 'A' OR attn_type IS NULL OR attn_type = '' THEN attn_date END) attendance_days,
              SUM(CASE WHEN attn_type = 'V' THEN 1 ELSE 0 END) visit_count
            FROM dcr_center_attendance
            WHERE emp_code = ? AND attn_date BETWEEN ? AND ?${ucWhereCa}`,

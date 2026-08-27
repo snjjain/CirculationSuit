@@ -231,7 +231,16 @@ async function syncAttendance(conn, from, to, onLog) {
   if (fs.existsSync(spoolFile)) fs.unlinkSync(spoolFile);
 
   onLog(`  [attendance] Oracle ${from}→${to}…`);
-  await runSqlplus(sqlFile);
+  const rc = await runSqlplus(sqlFile);
+
+  // A timeout SIGKILLs sqlplus and resolves -1, leaving a PARTIALLY written spool that
+  // passes the existsSync guard below. Falling through would then DELETE the whole period
+  // and re-insert only the first few days — silent data loss. Abort instead and keep
+  // whatever is already in MySQL.
+  if (rc === -1 || (typeof rc === 'number' && rc !== 0)) {
+    onLog(`  [attendance] Oracle exit ${rc} (timeout/error) — ABORTING period, existing rows kept`);
+    return 0;
+  }
 
   if (!fs.existsSync(spoolFile)) {
     onLog(`  [attendance] WARNING: no spool file, skipping`);
@@ -350,7 +359,14 @@ async function syncVisit(conn, from, to, onLog) {
   if (fs.existsSync(spoolFile)) fs.unlinkSync(spoolFile);
 
   onLog(`  [agency-visit] Oracle ${from}→${to}…`);
-  await runSqlplus(sqlFile);
+  const rc = await runSqlplus(sqlFile);
+
+  // Same guard as syncAttendance: a killed sqlplus leaves a partial spool, and falling
+  // through would DELETE the period and re-insert only the earliest rows.
+  if (rc === -1 || (typeof rc === 'number' && rc !== 0)) {
+    onLog(`  [agency-visit] Oracle exit ${rc} (timeout/error) — ABORTING period, existing rows kept`);
+    return 0;
+  }
 
   if (!fs.existsSync(spoolFile)) {
     onLog(`  [agency-visit] WARNING: no spool file, skipping`);
