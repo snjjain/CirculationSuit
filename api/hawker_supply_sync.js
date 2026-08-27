@@ -6,6 +6,8 @@
  * Modes:
  *   node hawker_supply_sync.js                          # daily: load yesterday
  *   node hawker_supply_sync.js --date 2026-08-05        # specific single date
+ *   node hawker_supply_sync.js --today                  # sync today (4 PM intraday run)
+ *   node hawker_supply_sync.js --recheck                # re-sync yesterday+day-before (morning catch-up)
  *   node hawker_supply_sync.js --from-last              # auto-detect last date, sync forward
  *   node hawker_supply_sync.js --historical             # 2020-03-18 → today (monthly chunks)
  *   node hawker_supply_sync.js --from 2020-03-18 [--to 2026-08-07]  # custom range
@@ -29,6 +31,8 @@ const args       = process.argv.slice(2);
 const HISTORICAL = args.includes('--historical');
 const REVERSE    = args.includes('--reverse');  // process monthly chunks newest → oldest
 const FROM_LAST  = args.includes('--from-last');
+const TODAY_MODE = args.includes('--today');     // sync today (4 PM intraday)
+const RECHECK    = args.includes('--recheck');   // re-sync yesterday+day-before (morning catch-up)
 const ARG_DATE   = args.find((_, i) => args[i - 1] === '--date');
 const ARG_FROM   = args.find((_, i) => args[i - 1] === '--from');
 const ARG_TO     = args.find((_, i) => args[i - 1] === '--to');
@@ -65,11 +69,9 @@ function log(msg) {
 // ── Date helpers ──────────────────────────────────────────────────────────────
 function fmtDate(d) { return d.toISOString().slice(0, 10); }
 
-function yesterday() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return fmtDate(d);
-}
+function today()     { return fmtDate(new Date()); }
+function yesterday() { const d = new Date(); d.setDate(d.getDate() - 1); return fmtDate(d); }
+function dayBefore() { const d = new Date(); d.setDate(d.getDate() - 2); return fmtDate(d); }
 
 function addDays(dateStr, n) {
   const d = new Date(dateStr + 'T00:00:00Z');
@@ -514,6 +516,19 @@ async function main() {
       log(`--- Recent period: ${recentFrom} → ${recentTo} ---`);
       const total = await rangeSync(conn, recentFrom, recentTo);
       log(`Historical load complete. Total rows this run: ${total}`);
+
+    } else if (TODAY_MODE) {
+      const todayStr = today();
+      log(`Intraday (4 PM) sync: ${todayStr}`);
+      await dailySync(conn, todayStr);
+
+    } else if (RECHECK) {
+      // Morning catch-up: re-sync yesterday + day-before-yesterday to pick up
+      // any Oracle entries added after the previous day's 4 PM / next-morning runs.
+      const d1 = yesterday(), d2 = dayBefore();
+      log(`Recheck sync: ${d2} and ${d1}`);
+      await dailySync(conn, d2);
+      await dailySync(conn, d1);
 
     } else if (FROM_LAST) {
       await fromLastSync(conn);
