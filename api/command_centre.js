@@ -891,6 +891,50 @@ module.exports = function installCommandCentre({ app, q }) {
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
+  /* ── CI hawker-detail popup ─────────────────────────────────────────────────
+     Returns hawker-wise MTD supply for one Centre Incharge, used by the
+     clickable "N hwk" link in the Centre Wise performance table. */
+  app.get('/api/command/ci-hawker-detail', async (req, res) => {
+    try {
+      const execCode = String(req.query.exec_code || '').trim();
+      const unit     = String(req.query.unit     || '').trim();
+      if (!execCode || !unit) return res.status(400).json({ detail: 'exec_code and unit required' });
+
+      const { asOn } = await resolveDates(req.query.as_on);
+      const mtdFrom  = asOn.slice(0, 7) + '-01';
+      const [y, m, d] = asOn.split('-').map(Number);
+      const pm = m === 1 ? 12 : m - 1;
+      const py = m === 1 ? y - 1 : y;
+      const prevFrom = `${py}-${String(pm).padStart(2, '0')}-01`;
+      const prevTo   = `${py}-${String(pm).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+      const { rows } = await q(
+        `SELECT hawker_id,
+                MAX(hawker_name) hawker_name,
+                SUM(CASE WHEN supply_date BETWEEN ? AND ? THEN sup_copies ELSE 0 END) mtd,
+                SUM(CASE WHEN supply_date BETWEEN ? AND ? THEN sup_copies ELSE 0 END) prev_mtd
+         FROM hawker_supply
+         WHERE center_incharge = ? AND loc_id = ?
+           AND supply_date BETWEEN ? AND ?
+         GROUP BY hawker_id
+         ORDER BY mtd DESC`,
+        [mtdFrom, asOn, prevFrom, prevTo, execCode, unit, prevFrom, asOn]);
+
+      return res.json({
+        exec_code: execCode, unit, as_on: asOn,
+        rows: rows.map(r => ({
+          hawker_id:   r.hawker_id,
+          hawker_name: String(r.hawker_name || r.hawker_id || ''),
+          mtd:      Number(r.mtd)      || 0,
+          prev_mtd: Number(r.prev_mtd) || 0,
+        })),
+      });
+    } catch (e) {
+      console.error('ci-hawker-detail error:', e);
+      return res.status(500).json({ detail: e.message });
+    }
+  });
+
   /* ── Centre Incharge (CI) hawker panel ──────────────────────────────────────
      CIs don't appear in agency_master so the exec-perf endpoint returns zeros.
      This endpoint reads hawker_supply directly for the correct figures. */

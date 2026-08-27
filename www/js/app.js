@@ -5111,6 +5111,61 @@ window.csSearch       = v => { _csState().search = v; render(); };
 window.csInsightTab   = t => { _csState().insightTab = t; render(); };
 window.csPerfType     = t => { _csState().perfType = t; render(); };
 
+/* Hawker-detail popup: opens from the "N hwk" link in the CI table row */
+window.csHwkPopup = async (execCode, ciName, unit) => {
+  document.getElementById('cs-hwk-modal')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'cs-hwk-modal';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9000;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.onclick = e => { if (e.target === ov) ov.remove(); };
+  ov.innerHTML = `<div style="background:#fff;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.3);width:100%;max-width:640px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+      <div><div style="font-weight:800;font-size:14px;color:#1e293b">${esc(ciName)}</div>
+      <div style="font-size:11px;color:#64748b;margin-top:1px">Hawker-wise Supply · This Month · ${esc(unit)}</div></div>
+      <button onclick="document.getElementById('cs-hwk-modal').remove()" style="border:none;background:none;font-size:22px;color:#94a3b8;cursor:pointer;line-height:1">×</button>
+    </div>
+    <div id="cs-hwk-body" style="overflow-y:auto;flex:1"><div style="padding:32px;text-align:center;color:#94a3b8;font-size:13px">Loading…</div></div>
+  </div>`;
+  document.body.appendChild(ov);
+  try {
+    const resp = await fetch(`/api/command/ci-hawker-detail?exec_code=${encodeURIComponent(execCode)}&unit=${encodeURIComponent(unit)}`, { headers: api.h() });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Request failed');
+    const rows = data.rows || [];
+    const body = document.getElementById('cs-hwk-body');
+    if (!body) return;
+    if (!rows.length) { body.innerHTML = '<div style="padding:32px;text-align:center;color:#94a3b8;font-size:13px">No hawker data found.</div>'; return; }
+    const totalMtd = rows.reduce((s, h) => s + h.mtd, 0);
+    const th = (label, right) => `<th style="padding:8px ${right?'8px':'14px'};text-align:${right?'right':'left'};font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">${label}</th>`;
+    body.innerHTML = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:520px">
+      <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">${th('Hawker')}${th('MTD',1)}${th('Prev',1)}${th('Diff',1)}${th('Growth',1)}<th style="padding:8px 14px;text-align:right;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Share</th></tr></thead>
+      <tbody>${rows.map(h => {
+        const diff = h.mtd - h.prev_mtd;
+        const gpct = h.prev_mtd ? diff / h.prev_mtd * 100 : null;
+        const share = totalMtd ? (h.mtd / totalMtd * 100).toFixed(1) : '0.0';
+        const gc = diff > 0 ? '#15803d' : diff < 0 ? '#dc2626' : '#64748b';
+        const gs = gpct != null ? `${diff >= 0 ? '+' : ''}${gpct.toFixed(1)}%` : diff > 0 ? '+∞' : '0%';
+        return `<tr style="border-top:1px solid #eef2f7" onmouseenter="this.style.background='#f0f9ff'" onmouseleave="this.style.background=''">
+          <td style="padding:7px 14px;font-size:12px;color:#1e293b">${esc(h.hawker_name)}</td>
+          <td style="padding:7px 8px;text-align:right;font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums">${_ccN(h.mtd)}</td>
+          <td style="padding:7px 8px;text-align:right;font-size:12px;color:#94a3b8;font-variant-numeric:tabular-nums">${_ccN(h.prev_mtd)}</td>
+          <td style="padding:7px 8px;text-align:right;font-size:12px;color:${gc};font-variant-numeric:tabular-nums">${diff >= 0 ? '+' : ''}${_ccN(diff)}</td>
+          <td style="padding:7px 8px;text-align:right;font-size:12px;color:${gc}">${gs}</td>
+          <td style="padding:7px 14px;text-align:right;font-size:12px;color:#64748b">${share}%</td>
+        </tr>`;
+      }).join('')}</tbody>
+      <tfoot><tr style="background:#f8fafc;border-top:2px solid #e2e8f0">
+        <td style="padding:8px 14px;font-size:11.5px;font-weight:800;color:#1e293b">${rows.length} hawkers total</td>
+        <td style="padding:8px 8px;text-align:right;font-size:13px;font-weight:800;font-variant-numeric:tabular-nums;color:#0f172a">${_ccN(totalMtd)}</td>
+        <td colspan="4"></td>
+      </tr></tfoot>
+    </table></div>`;
+  } catch (err) {
+    const body = document.getElementById('cs-hwk-body');
+    if (body) body.innerHTML = `<div style="padding:32px;text-align:center;color:#ef4444;font-size:13px">Error: ${esc(String(err.message))}</div>`;
+  }
+};
+
 /* The agency and executive panels belong to the Command Centre flyout. Opened from
    here there is no alert behind them, so the flyout starts with an empty stack and
    closes when the last panel is popped. */
@@ -5455,7 +5510,7 @@ function _csCITable(st, d, rows) {
     return `<tr onclick="${onClick}" style="cursor:pointer;border-top:1px solid #eef2f7;${isInactive?'opacity:.65':''}" onmouseenter="this.style.background='#f0f9ff'" onmouseleave="this.style.background=''">
       <td style="padding:8px 8px;text-align:left">
         <div><b style="color:#0ea5e9;font-size:12.5px">${esc(r.name)}</b></div>
-        ${centres || hawkers ? `<div style="font-size:10px;color:#0ea5e9">${centres} ctr · ${hawkers} hwk</div>` : ''}
+        ${centres || hawkers ? `<div style="font-size:10px;color:#0ea5e9">${centres} ctr · <span onclick="event.stopPropagation();csHwkPopup('${_csQ(r.exec_code||'')}','${_csQ(r.name||'')}','${_csQ(ciUnit)}')" style="text-decoration:underline;cursor:pointer;color:#0284c7">${hawkers} hwk</span></div>` : ''}
       </td>
       <td style="padding:8px 8px;text-align:right;font-size:13px;font-weight:700">${centres || '—'}</td>
       <td style="padding:8px 8px;text-align:right;font-size:12.5px">${hawkers || '—'}</td>
