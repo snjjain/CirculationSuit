@@ -359,6 +359,7 @@ module.exports = function installCommandCentre({ app, q }) {
       q(`SELECT unit_state_nm st, COUNT(DISTINCT CONCAT(unit,'|',agcd)) agencies
          FROM agency_master
          WHERE CAST(dpcd AS UNSIGNED)=1 AND COALESCE(supply_stop_flag,'N')='N'
+           AND ag_class = 'CREDIT SALE'
            AND (suspend_date IS NULL OR suspend_date > CURDATE())${unitScope ? ' AND unit = ?' : ''}
          GROUP BY unit_state_nm`, uP),
       q(`SELECT unit, MAX(unit_state_nm) st FROM agency_master GROUP BY unit`),
@@ -839,7 +840,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const cashCur = bsum(b => b.cash_cur), cashPrev = bsum(b => b.cash_prev);
       const collected = bsum(b => b.collection), billed = bsum(b => b.billed);
       const osTot = bsum(b => b.os);
-      const bookTot = bsum(b => b.book), seenTot = bsum(b => b.agencies_visited);
+      const bookTot = bsum(b => b.dcrBook || b.book), seenTot = bsum(b => b.agencies_visited);
 
       res.json({
         state: stateKey, state_name: meta.name,

@@ -4924,7 +4924,7 @@ function _cmdViewNew() {
       onClick: `ccDrill('collections','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Collection vs Billing', color: '#10b981',
       value: (t.collection_pct.value == null ? '—' : t.collection_pct.value + '%'),
-      sub: `${_ccINR(t.collection_pct.collected)} of ${_ccINR(t.collection_pct.billed)} · ${esc(t.collection_pct.window)}`,
+      sub: `${esc(d.prev_month_label)} billing ${_ccINR(t.collection_pct.billed)} · collected ${_ccINR(t.collection_pct.collected)}`,
       barPct: t.collection_pct.value, onClick: `ccDrill('collections','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Outstanding', color: '#ef4444',
       value: _ccINR(t.outstanding.value), trend: _ccTrend(t.outstanding.growth_pct, true),
