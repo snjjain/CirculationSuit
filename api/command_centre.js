@@ -1484,7 +1484,7 @@ module.exports = function installCommandCentre({ app, q }) {
       }
       if (s.dcr.coverage_pct != null && s.dcr.coverage_pct >= 2 && s.dcr.agencies_total - s.dcr.agencies_visited > 0) {
         out.push({
-          priority: 'medium', state: s.key, state_name: s.name, type: 'Coverage gap',
+          priority: 'medium', state: s.key, state_name: s.name, type: 'Coverage gap', kpi: 'DCR',
           title: `${s.name}: ${cp(s.dcr.agencies_total - s.dcr.agencies_visited)} agencies not visited`,
           impact: 'Unvisited agencies drift on supply and dues; each visit is a recovery and growth chance.',
           action: 'Route the next tour plans through the uncovered belt.',
