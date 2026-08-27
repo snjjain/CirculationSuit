@@ -363,6 +363,7 @@ module.exports = function installCommandCentre({ app, q }) {
          FROM supply_data s
          JOIN (SELECT DISTINCT unit, agcd, unit_state_nm FROM agency_master
                WHERE CAST(dpcd AS UNSIGNED)=1
+                 AND ag_class_name = 'CREDIT SALE'
                  AND COALESCE(supply_stop_flag,'N')='N'
                  AND (suspend_date IS NULL OR suspend_date > CURDATE())${unitScope ? ' AND unit = ?' : ''}) am
            ON am.unit = s.unit_code AND am.agcd = s.agcd
@@ -682,8 +683,8 @@ module.exports = function installCommandCentre({ app, q }) {
         execOf[k] = { code: r.exec_code, name: r.exec_name };
         if (B[r.unit]) {
           B[r.unit].book += 1;
-          // DCR coverage denominator = agencies that received agent supply this month
-          if (supplySet.has(k)) B[r.unit].dcrBook += 1;
+          // DCR coverage denominator = CREDIT SALE DPCD=1 agencies with supply this month
+          if (supplySet.has(k) && r.ag_class === 'CREDIT SALE') B[r.unit].dcrBook += 1;
         }
       });
       const exec = (code, name, unit) => {
