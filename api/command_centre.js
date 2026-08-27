@@ -1510,7 +1510,7 @@ module.exports = function installCommandCentre({ app, q }) {
       // Dues rising faster than volume — the doc's worked example.
       if (s.os.growth_pct != null && s.supply.growth_pct != null && s.os.growth_pct > s.supply.growth_pct + 5) {
         out.push({
-          priority: 'high', state: s.key, state_name: s.name, type: 'Supply vs credit imbalance',
+          priority: 'high', state: s.key, state_name: s.name, type: 'Supply vs credit imbalance', kpi: 'Outstanding',
           title: `${s.name}: outstanding growing ${s.os.growth_pct}% against supply ${s.supply.growth_pct}%`,
           impact: `Credit is expanding faster than volume — ${inr(s.os.current)} tied up. Converting even 10% releases ${inr(s.os.current * 0.1)}.`,
           action: 'Recover from high-dues agencies, then push supply where credit is clean.',
@@ -1519,7 +1519,7 @@ module.exports = function installCommandCentre({ app, q }) {
       }
       if (s.collection.collection_pct != null && s.collection.collection_pct >= 60 && s.collection.collection_pct < 90 && s.collection.gap > 0) {
         out.push({
-          priority: 'medium', state: s.key, state_name: s.name, type: 'Collection recovery',
+          priority: 'medium', state: s.key, state_name: s.name, type: 'Collection recovery', kpi: 'Collection',
           title: `${s.name}: ${inr(s.collection.gap)} recoverable this month`,
           impact: `At ${s.collection.collection_pct}% collected, closing the gap lifts the state to full realisation of ${s.collection.prev_month_label} billing.`,
           action: 'Target the largest short-paid agencies — see Short Payment.',
@@ -1541,7 +1541,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const growers = withSupply.filter(s => (s.supply.growth_pct ?? 0) > 0).length;
       const sole = growers === 1;
       out.push({
-        priority: 'low', state: best.key, state_name: best.name, type: 'Replicate what works',
+        priority: 'low', state: best.key, state_name: best.name, type: 'Replicate what works', kpi: 'Supply',
         title: sole
           ? `${best.name} is the only region growing (+${best.supply.growth_pct}%)`
           : `${best.name} is the fastest growing region (+${best.supply.growth_pct}%)`,
@@ -1560,7 +1560,7 @@ module.exports = function installCommandCentre({ app, q }) {
     states.forEach(s => {
       if (s.os.growth_pct != null && s.os.growth_pct < 0 && s.os.diff < 0) {
         out.push({
-          priority: 'medium', state: s.key, state_name: s.name, type: 'Working capital released',
+          priority: 'medium', state: s.key, state_name: s.name, type: 'Working capital released', kpi: 'Outstanding',
           title: `${s.name}: outstanding down ${Math.abs(s.os.growth_pct)}%`,
           impact: `${inr(Math.abs(s.os.diff))} recovered since ${s.os.prev_label}, bringing dues to ${inr(s.os.current)}.`,
           action: 'Hold the recovery discipline that produced this and extend it to the remaining critical agencies.',
@@ -1569,7 +1569,7 @@ module.exports = function installCommandCentre({ app, q }) {
       }
       if (s.supply.growth_pct != null && s.supply.growth_pct > 0 && s.supply.diff > 0) {
         out.push({
-          priority: 'medium', state: s.key, state_name: s.name, type: 'Volume momentum',
+          priority: 'medium', state: s.key, state_name: s.name, type: 'Volume momentum', kpi: 'Supply',
           title: `${s.name}: supply up ${s.supply.growth_pct}%`,
           impact: `${cp(s.supply.diff)} copies added per day — ${cp(s.supply.diff * 30)} a month if it holds.`,
           action: 'Find the branches driving it and set the same push as the target elsewhere.',
@@ -1579,7 +1579,7 @@ module.exports = function installCommandCentre({ app, q }) {
       if (s.os.critical_agencies > 0 && s.os.agencies > 0 && s.os.current > 0) {
         const share = r1((s.os.critical_agencies / s.os.agencies) * 100);
         out.push({
-          priority: 'low', state: s.key, state_name: s.name, type: 'Concentrated recovery',
+          priority: 'low', state: s.key, state_name: s.name, type: 'Concentrated recovery', kpi: 'Outstanding',
           title: `${s.name}: ${cp(s.os.critical_agencies)} agencies carry most of ${inr(s.os.current)}`,
           impact: `Just ${share}% of the state's ${cp(s.os.agencies)} billed agencies are above ₹1 L — a short, targeted drive reaches the bulk of the dues.`,
           action: 'Work the ₹1 L+ list branch by branch instead of a broad reminder run.',
