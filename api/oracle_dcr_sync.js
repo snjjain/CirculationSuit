@@ -41,7 +41,10 @@ const MYSQL_CFG = {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-const SQLPLUS_TIMEOUT_MS = 25 * 60 * 1000; // 25 min per query — kills hung Oracle calls
+// Per-query ceiling for a hung Oracle call. Recent days (esp. yesterday) can block on
+// live ERP writes to cir_tour_callplan, so a bulk backfill wants a much shorter fuse than
+// the default — set DCR_SQL_TIMEOUT_MS to override.
+const SQLPLUS_TIMEOUT_MS = Number(process.env.DCR_SQL_TIMEOUT_MS) || 25 * 60 * 1000;
 
 const _ora = require('./ora_client');
 function runSqlplus(sqlFile) {
@@ -360,7 +363,11 @@ function buildVisitSql(from, to, spoolFile) {
     // trailing sentinel
     `  CHR(28)`,
     `FROM cir_tour_callplan d`,
-    `WHERE TRUNC(d.mark_attn_date) BETWEEN TO_DATE('${from}','YYYY-MM-DD') AND TO_DATE('${to}','YYYY-MM-DD')`,
+    // TRUNC() on the column blocks the mark_attn_date index and forces a full scan of
+    // cir_tour_callplan on every period. The half-open range is equivalent — it still
+    // covers the whole `to` day including rows with a time component — but stays sargable.
+    `WHERE d.mark_attn_date >= TO_DATE('${from}','YYYY-MM-DD')`,
+    `  AND d.mark_attn_date <  TO_DATE('${to}','YYYY-MM-DD') + 1`,
     `AND NVL(d.call_status,'0') IN ('A','C')`,
     `ORDER BY d.mark_attn_date, d.unit_code;`,
     'SPOOL OFF', 'EXIT',
