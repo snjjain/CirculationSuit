@@ -36,6 +36,16 @@ module.exports = function installCommandCentre({ app, q }) {
     { key: 'NATIONAL',       name: 'National',       os: 'NATIONAL', abbr: null },
   ];
   const CORE = new Set(['RAJASTHAN', 'MADHYA PRADESH', 'CHHATTISGARH']);
+
+  /* Branches that no longer operate. They still carry agencies and historical dues in
+     agency_master, so they keep turning up as rows with stale or zero figures. Listed
+     out of the branch list and blocked from drill-down; their numbers still roll into
+     state totals, because the outstanding they left behind is real money owed. */
+  const CLOSED_UNITS = new Set([
+    'DA0', // JAIPUR DN
+    'GA0', // GANGAPUR CITY
+    'RA2', // RAJGARH RP
+  ]);
   const bucketOf = s => { const u = String(s || '').trim().toUpperCase(); return CORE.has(u) ? u : 'NATIONAL'; };
   const bucketOfOs = s => {
     const u = String(s || '').trim().toUpperCase();
@@ -551,7 +561,7 @@ module.exports = function installCommandCentre({ app, q }) {
       }),
     ]);
     return Object.entries(home)
-      .filter(([, v]) => bucketOf(v.st) === stateKey)
+      .filter(([unit, v]) => bucketOf(v.st) === stateKey && !CLOSED_UNITS.has(unit))
       .map(([unit]) => ({ unit_code: unit, unit_name: nm[unit] || unit }))
       .sort((a, b) => String(a.unit_name).localeCompare(String(b.unit_name)));
   }
@@ -1388,8 +1398,9 @@ module.exports = function installCommandCentre({ app, q }) {
           [asOn, prev, asOn, prev, ...stP, asOn, prev]);
         return res.json({ kpi, state: stateKey, as_on: asOn, previous: prev,
           columns: ['Branch', 'Now', 'Previous', 'Change'],
-          rows: rows.map(r => ({ label: r.unit_name || r.unit_code, unit_code: r.unit_code,
-            a: N(r.cur), b: N(r.prv), delta: N(r.cur) - N(r.prv) })) });
+          rows: rows.filter(r => !CLOSED_UNITS.has(r.unit_code))
+            .map(r => ({ label: r.unit_name || r.unit_code, unit_code: r.unit_code,
+              a: N(r.cur), b: N(r.prv), delta: N(r.cur) - N(r.prv) })) });
       }
 
       if (kpi === 'outstanding' || kpi === 'collection') {
@@ -1423,7 +1434,9 @@ module.exports = function installCommandCentre({ app, q }) {
              GROUP BY unit_code`, [asOn, asOn]),
         ]);
         const seenMap = {}; seen.rows.forEach(r => { seenMap[r.unit_code] = N(r.visited); });
-        const rows = book.rows.map(r => ({
+        // Closed branches would otherwise top this list — nobody visits them, so they
+        // read as the worst coverage gaps when there is nothing left to cover.
+        const rows = book.rows.filter(r => !CLOSED_UNITS.has(r.unit)).map(r => ({
           label: r.unit_name || r.unit, unit_code: r.unit,
           a: seenMap[r.unit] || 0, b: N(r.agencies), delta: (seenMap[r.unit] || 0) - N(r.agencies),
         })).sort((x, y) => (x.a / (x.b || 1)) - (y.a / (y.b || 1))).slice(0, 12);
