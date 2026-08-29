@@ -1874,12 +1874,13 @@ ${visitList}` }]
     try {
       if (!req.auth) return res.status(401).json({ detail: 'Authentication required' });
       const { rows } = await q(
-        `SELECT circ_incharge code, MAX(circ_incharge_name) name,
-                COUNT(DISTINCT exec_code) exec_count,
-                GROUP_CONCAT(DISTINCT unit_code ORDER BY unit_code) units
-         FROM exec_hierarchy_mapping
-         WHERE circ_incharge IS NOT NULL AND circ_incharge != '' AND circ_incharge_name IS NOT NULL
-         GROUP BY circ_incharge ORDER BY MAX(circ_incharge_name)`
+        `SELECT m.circ_incharge code, MAX(m.circ_incharge_name) name,
+                COUNT(DISTINCT m.exec_code) exec_count,
+                GROUP_CONCAT(DISTINCT m.unit_code ORDER BY m.unit_code) units
+         FROM exec_hierarchy_mapping m
+         INNER JOIN exec_master em ON em.unit_code = m.unit_code AND em.executive_code = m.exec_code AND em.is_active_pli = 'Y'
+         WHERE m.circ_incharge IS NOT NULL AND m.circ_incharge != '' AND m.circ_incharge_name IS NOT NULL
+         GROUP BY m.circ_incharge ORDER BY MAX(m.circ_incharge_name)`
       );
       res.json({ incharges: rows });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
@@ -1899,24 +1900,17 @@ ${visitList}` }]
 
       let execRows, unitName, incharge = null;
       if (circ_incharge) {
-        // Team = executives mapped to this incharge in the PLI hierarchy
+        // Team = active executives mapped to this incharge in the PLI hierarchy
         const { rows: mapRows } = await q(
-          `SELECT exec_code, MAX(exec_desc) exec_name, GROUP_CONCAT(DISTINCT unit_code) units,
-                  MAX(circ_incharge_name) ci_name
-           FROM exec_hierarchy_mapping
-           WHERE circ_incharge = ? AND exec_desc IS NOT NULL AND exec_desc != 'N/A'
-           GROUP BY exec_code ORDER BY MAX(exec_desc) LIMIT 20`,
+          `SELECT m.exec_code, MAX(m.exec_desc) exec_name, GROUP_CONCAT(DISTINCT m.unit_code) units,
+                  MAX(m.circ_incharge_name) ci_name
+           FROM exec_hierarchy_mapping m
+           INNER JOIN exec_master em ON em.unit_code = m.unit_code AND em.executive_code = m.exec_code AND em.is_active_pli = 'Y'
+           WHERE m.circ_incharge = ? AND m.exec_desc IS NOT NULL AND m.exec_desc != 'N/A'
+           GROUP BY m.exec_code ORDER BY MAX(m.exec_desc) LIMIT 20`,
           [String(circ_incharge)]
         );
-        // Keep only PLI-active executives when the flag knows them (separate
-        // query — no cross-collation JOIN); fall back to all if that empties it
-        const { rows: actRows } = await q(
-          `SELECT executive_code FROM exec_master WHERE is_active_pli = 'Y'`
-        );
-        const activeSet = new Set(actRows.map(r => r.executive_code));
-        let team = mapRows.filter(r => activeSet.has(r.exec_code));
-        if (!team.length) team = mapRows;
-        execRows = team.map(r => ({ emp_code: null, exec_name: r.exec_name, unit_name: r.units }));
+        execRows = mapRows.map(r => ({ emp_code: null, exec_name: r.exec_name, unit_name: r.units }));
         incharge = { code: String(circ_incharge), name: mapRows[0]?.ci_name || '' };
         unitName = incharge.name ? `Team of ${incharge.name}` : String(circ_incharge);
       } else {
@@ -2017,18 +2011,15 @@ ${visitList}` }]
       let execRows, unitName, incharge = null;
       if (circ_incharge) {
         const { rows: mapRows } = await q(
-          `SELECT exec_code, MAX(exec_desc) exec_name, GROUP_CONCAT(DISTINCT unit_code) units,
-                  MAX(circ_incharge_name) ci_name
-           FROM exec_hierarchy_mapping
-           WHERE circ_incharge = ? AND exec_desc IS NOT NULL AND exec_desc != 'N/A'
-           GROUP BY exec_code ORDER BY MAX(exec_desc) LIMIT 20`,
+          `SELECT m.exec_code, MAX(m.exec_desc) exec_name, GROUP_CONCAT(DISTINCT m.unit_code) units,
+                  MAX(m.circ_incharge_name) ci_name
+           FROM exec_hierarchy_mapping m
+           INNER JOIN exec_master em ON em.unit_code = m.unit_code AND em.executive_code = m.exec_code AND em.is_active_pli = 'Y'
+           WHERE m.circ_incharge = ? AND m.exec_desc IS NOT NULL AND m.exec_desc != 'N/A'
+           GROUP BY m.exec_code ORDER BY MAX(m.exec_desc) LIMIT 20`,
           [String(circ_incharge)]
         );
-        const { rows: actRows } = await q(`SELECT executive_code FROM exec_master WHERE is_active_pli = 'Y'`);
-        const activeSet = new Set(actRows.map(r => r.executive_code));
-        let team = mapRows.filter(r => activeSet.has(r.exec_code));
-        if (!team.length) team = mapRows;
-        execRows = team.map(r => ({ emp_code: null, exec_name: r.exec_name, unit_name: r.units }));
+        execRows = mapRows.map(r => ({ emp_code: null, exec_name: r.exec_name, unit_name: r.units }));
         incharge = { code: String(circ_incharge), name: mapRows[0]?.ci_name || '' };
         unitName = incharge.name ? `Team of ${incharge.name}` : String(circ_incharge);
       } else {

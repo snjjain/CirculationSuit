@@ -84,11 +84,12 @@ module.exports = function installCommandCentre({ app, q }) {
   function unitCircIncharge() {
     return memo('unitCirc', async () => {
       const { rows } = await q(
-        `SELECT unit_code, exec_desig, circ_incharge_name nm, COUNT(*) c
-         FROM exec_hierarchy_mapping
-         WHERE circ_incharge_name IS NOT NULL AND circ_incharge_name <> ''
-           AND exec_desig IN ('EXEC','CI')
-         GROUP BY unit_code, exec_desig, circ_incharge_name`);
+        `SELECT m.unit_code, m.exec_desig, m.circ_incharge_name nm, COUNT(*) c
+         FROM exec_hierarchy_mapping m
+         INNER JOIN exec_master em ON em.unit_code = m.unit_code AND em.executive_code = m.exec_code AND em.is_active_pli = 'Y'
+         WHERE m.circ_incharge_name IS NOT NULL AND m.circ_incharge_name <> ''
+           AND m.exec_desig IN ('EXEC','CI')
+         GROUP BY m.unit_code, m.exec_desig, m.circ_incharge_name`);
       const tally = {}; // unit -> role -> name -> count
       rows.forEach(r => {
         const nm = cleanName(r.nm); if (!nm) return;
@@ -446,7 +447,9 @@ module.exports = function installCommandCentre({ app, q }) {
   async function _stateHeads() {
     const { rows } = await q(
       `SELECT m.unit_code, MAX(m.vp_circulation_name) vp, MAX(m.zonal_head_name) zh
-       FROM exec_hierarchy_mapping m GROUP BY m.unit_code`);
+       FROM exec_hierarchy_mapping m
+       INNER JOIN exec_master em ON em.unit_code = m.unit_code AND em.executive_code = m.exec_code AND em.is_active_pli = 'Y'
+       GROUP BY m.unit_code`);
     const hs = await unitHomeState();
     const home = {};
     Object.keys(hs).forEach(u => { home[u] = hs[u].st; });
@@ -683,9 +686,11 @@ module.exports = function installCommandCentre({ app, q }) {
              AND COALESCE(supply_stop_flag,'N')='N'
              AND (suspend_date IS NULL OR suspend_date > CURDATE())
            GROUP BY unit, agcd`, codes),
-        q(`SELECT exec_code, MAX(exec_desig) desig, MAX(edtn_incharge_name) edtn,
-                  MAX(circ_incharge_name) circ, MAX(zonal_head_name) zonal
-           FROM exec_hierarchy_mapping GROUP BY exec_code`),
+        q(`SELECT m.exec_code, MAX(m.exec_desig) desig, MAX(m.edtn_incharge_name) edtn,
+                  MAX(m.circ_incharge_name) circ, MAX(m.zonal_head_name) zonal
+           FROM exec_hierarchy_mapping m
+           INNER JOIN exec_master em ON em.unit_code = m.unit_code AND em.executive_code = m.exec_code AND em.is_active_pli = 'Y'
+           GROUP BY m.exec_code`),
         // Field visits over the selected window, by unit and by executive.
         // executive_name is carried so visits can be bridged onto the circulation
         // exec_code — DCR stores HR employee codes, which never equal exec_code.
