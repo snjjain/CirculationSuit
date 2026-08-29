@@ -5652,6 +5652,96 @@ function _csAIInsights(rows, seg) {
   </div>`;
 }
 
+/* ── Zonal Head Performance expand-collapse table ── */
+window.csZhToggle = key => {
+  const st = _csState();
+  if (!st.zhExp) st.zhExp = new Set();
+  if (st.zhExp.has(key)) st.zhExp.delete(key); else st.zhExp.add(key);
+  render();
+};
+
+function _csZHPerformance(st, d) {
+  const zh_perf = (d && d.zh_perf) || [];
+  if (!zh_perf.length) return '';
+  const exp = st.zhExp || (st.zhExp = new Set());
+
+  const NF = v => { const n = Number(v)||0; if (!n) return '<span style="color:#cbd5e1">—</span>'; return n >= 100000 ? (n/100000).toFixed(1)+'L' : n >= 1000 ? (n/1000).toFixed(0)+'k' : String(n); };
+  const GP = v => { if (v == null) return '<span style="color:#94a3b8">—</span>'; const c = v >= 5 ? '#16a34a' : v >= 0 ? '#64748b' : '#dc2626'; return `<span style="color:${c}">${v > 0 ? '+' : ''}${v}%</span>`; };
+  const CP = v => { if (v == null) return '<span style="color:#94a3b8">—</span>'; const c = v >= 90 ? '#16a34a' : v >= 70 ? '#d97706' : '#dc2626'; return `<b style="color:${c}">${v}%</b>`; };
+  const CR = v => v > 0 ? `<b style="color:#dc2626">${v}</b>` : '<span style="color:#cbd5e1">—</span>';
+  const VS = v => v > 0 ? `<span style="color:#0369a1">${v}</span>` : '<span style="color:#cbd5e1">0</span>';
+  const ST = r => { const sc = r.growth_pct, cp = r.coll_pct, cr = r.critical, vs = r.visits;
+    if (cr > 0 || (cp != null && cp < 50) || (sc != null && sc < -10)) return '<span style="background:#fee2e2;color:#dc2626;font-size:10px;padding:1px 5px;border-radius:3px">Critical</span>';
+    if ((sc != null && sc < 0) || (cp != null && cp < 75) || vs === 0) return '<span style="background:#fef3c7;color:#d97706;font-size:10px;padding:1px 5px;border-radius:3px">Watch</span>';
+    return '<span style="background:#dcfce7;color:#16a34a;font-size:10px;padding:1px 5px;border-radius:3px">Good</span>';
+  };
+
+  const thS = 'text-align:right;padding:5px 7px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap';
+  const thead = `<thead><tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">
+    <th style="text-align:left;padding:5px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Name</th>
+    <th style="${thS}">Agent Sale</th><th style="${thS}">Cash Sale</th><th style="${thS}">Growth</th>
+    <th style="${thS}">Prev Bill</th><th style="${thS}">Collection</th><th style="${thS}">Coll%</th>
+    <th style="${thS}">OS</th><th style="${thS}">Critical</th><th style="${thS}">Visits</th>
+    <th style="text-align:center;padding:5px 7px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th>
+  </tr></thead>`;
+
+  const tdR = v => `<td style="text-align:right;padding:5px 7px;font-variant-numeric:tabular-nums">${v}</td>`;
+  const tdC = v => `<td style="text-align:center;padding:5px 7px">${v}</td>`;
+  const metricsRow = r => tdR(NF(r.agent_cur)) + tdR(NF(r.cash_cur)) + tdR(GP(r.growth_pct))
+    + tdR(NF(r.billed)) + tdR(NF(r.collection)) + tdR(CP(r.coll_pct))
+    + tdR(NF(r.os)) + tdR(CR(r.critical)) + tdR(VS(r.visits)) + tdC(ST(r));
+
+  const rows = [];
+  zh_perf.forEach(zh => {
+    const zhKey = zh.zh_code || zh.zh_name;
+    const zhE = exp.has(zhKey);
+    rows.push(`<tr onclick="csZhToggle('${_csQ(zhKey)}')" style="cursor:pointer;background:#eef2ff;border-top:2px solid #c7d2fe" onmouseenter="this.style.background='#e0e7ff'" onmouseleave="this.style.background='#eef2ff'">
+      <td style="padding:7px 8px">
+        <span style="font-size:11px;color:#6366f1;margin-right:6px">${zhE ? '▾' : '▶'}</span>
+        <b style="font-size:12.5px;color:#1e3a8a">${esc(zh.zh_name)}</b>
+        <span style="font-size:10px;color:#6366f1;margin-left:5px">${zh.n_execs} exec</span>
+      </td>${metricsRow(zh)}</tr>`);
+    if (!zhE) return;
+    zh.cis.forEach(ci => {
+      const ciKey = zhKey + '|' + (ci.ci_code || ci.ci_name);
+      const ciE = exp.has(ciKey);
+      rows.push(`<tr onclick="event.stopPropagation();csZhToggle('${_csQ(ciKey)}')" style="cursor:pointer;background:#f0f9ff;border-top:1px solid #bae6fd" onmouseenter="this.style.background='#e0f2fe'" onmouseleave="this.style.background='#f0f9ff'">
+        <td style="padding:6px 8px;padding-left:22px">
+          <span style="font-size:10px;color:#0284c7;margin-right:5px">${ciE ? '▾' : '▶'}</span>
+          <span style="font-size:12px;color:#0369a1;font-weight:700">${esc(ci.ci_name)}</span>
+          <span style="font-size:10px;color:#94a3b8;margin-left:4px">${ci.n_execs} exec</span>
+        </td>${metricsRow(ci)}</tr>`);
+      if (!ciE) return;
+      ci.daks.forEach(dak => {
+        const dakKey = ciKey + '|' + (dak.dak_code || dak.dak_name);
+        const dakE = exp.has(dakKey);
+        rows.push(`<tr onclick="event.stopPropagation();csZhToggle('${_csQ(dakKey)}')" style="cursor:pointer;background:#fafafa;border-top:1px solid #e2e8f0" onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background='#fafafa'">
+          <td style="padding:5px 8px;padding-left:38px">
+            <span style="font-size:10px;color:#94a3b8;margin-right:4px">${dakE ? '▾' : '▶'}</span>
+            <span style="font-size:11.5px;color:#374151;font-weight:600">${esc(dak.dak_name)}</span>
+            <span style="font-size:10px;color:#94a3b8;margin-left:4px">${dak.n_execs} exec</span>
+          </td>${metricsRow(dak)}</tr>`);
+        if (!dakE) return;
+        dak.execs.forEach(ex => {
+          rows.push(`<tr onclick="event.stopPropagation();${ex.exec_code ? `ccOpenExecPanel('${_csQ(ex.exec_code)}','${_csQ(ex.exec_name)}','')` : ''}" style="cursor:pointer;background:#fff;border-top:1px solid #f8fafc" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='#fff'">
+            <td style="padding:4px 8px;padding-left:54px">
+              <span style="font-size:11.5px;color:${ex.desig === 'CI' ? '#0ea5e9' : '#374151'}">${esc(ex.exec_name)}</span>
+              ${ex.desig ? `<span style="font-size:9px;color:#94a3b8;margin-left:3px">${esc(ex.desig)}</span>` : ''}
+            </td>${metricsRow(ex)}</tr>`);
+        });
+      });
+    });
+  });
+
+  return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:16px">
+    <div style="font-size:14px;font-weight:800;color:#1e3a8a;margin-bottom:2px">Zonal Head Performance</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:10px">Click to expand · ZH → Circulation Incharge → Dak Incharge → Executive · ${esc(d.range_label||'')}</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      ${thead}<tbody>${rows.join('')}</tbody>
+    </table></div>
+  </div>`;
+}
+
 /* Circulation-incharge caption for a branch. Executives sell through agencies (agent
    sale) and centre incharges run the city centres (cash sale); those can report to two
    different people, so name both unless one person holds both roles. */
@@ -5965,6 +6055,7 @@ VIEWS.cc_state = () => {
 
   return bar + cards + segBar
     + _csInsights(st, d)
+    + _csZHPerformance(st, d)
     + _csConsolidated(st, d)
     + _csShortPay(st, d)
     + _csMovers(st, d)

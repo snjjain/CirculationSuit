@@ -686,8 +686,10 @@ module.exports = function installCommandCentre({ app, q }) {
              AND COALESCE(supply_stop_flag,'N')='N'
              AND (suspend_date IS NULL OR suspend_date > CURDATE())
            GROUP BY unit, agcd`, codes),
-        q(`SELECT m.exec_code, MAX(m.exec_desig) desig, MAX(m.edtn_incharge_name) edtn,
-                  MAX(m.circ_incharge_name) circ, MAX(m.zonal_head_name) zonal
+        q(`SELECT m.exec_code, MAX(m.exec_desig) desig,
+                  MAX(m.edtn_incharge) edtn_code, MAX(m.edtn_incharge_name) edtn,
+                  MAX(m.circ_incharge) circ_code, MAX(m.circ_incharge_name) circ,
+                  MAX(m.zonal_head) zonal_code, MAX(m.zonal_head_name) zonal
            FROM exec_hierarchy_mapping m
            INNER JOIN exec_master em ON em.unit_code = m.unit_code AND em.executive_code = m.exec_code AND em.is_active_pli = 'Y'
            GROUP BY m.exec_code`),
@@ -944,6 +946,67 @@ module.exports = function installCommandCentre({ app, q }) {
       const osTot = bsum(b => b.os);
       const bookTot = bsum(b => b.dcrBook || b.book), seenTot = bsum(b => b.agencies_visited);
 
+      // ── Zonal Head performance hierarchy ──
+      const hierIdx = {};
+      (hier.rows || []).forEach(h => { hierIdx[h.exec_code] = h; });
+      const addAgg = (a, e) => {
+        a.agent_cur  += e.supply_cur - e.cash_cur;
+        a.agent_prev += e.supply_prev - e.cash_prev;
+        a.cash_cur   += e.cash_cur;
+        a.cash_prev  += e.cash_prev;
+        a.collection += e.collection;
+        a.billed     += e.billed;
+        a.os         += e.os;
+        a.critical   += e.critical;
+        a.visits     += e.visits;
+        a.agencies   += e.agencies;
+        a.n_execs    += 1;
+      };
+      const aggMk = () => ({ agent_cur:0, agent_prev:0, cash_cur:0, cash_prev:0, collection:0, billed:0, os:0, critical:0, visits:0, agencies:0, n_execs:0 });
+      const aggFin = a => {
+        const sc = a.agent_cur + a.cash_cur, sp = a.agent_prev + a.cash_prev;
+        return { ...a, supply_cur: sc, supply_prev: sp,
+          growth_pct: sp ? r1((sc / sp - 1) * 100) : null,
+          coll_pct: a.billed ? r1((a.collection / a.billed) * 100) : null };
+      };
+      const zhMap = {};
+      Object.values(E).forEach(e => {
+        const h = hierIdx[e.exec_code]; if (!h) return;
+        const zhName = cleanName(h.zonal); if (!zhName) return;
+        const zhKey = h.zonal_code || zhName;
+        if (!zhMap[zhKey]) zhMap[zhKey] = { zh_code: h.zonal_code, zh_name: zhName, ...aggMk(), cis: {} };
+        addAgg(zhMap[zhKey], e);
+        const ciName = cleanName(h.circ) || '—';
+        const ciKey = h.circ_code || ciName;
+        if (!zhMap[zhKey].cis[ciKey]) zhMap[zhKey].cis[ciKey] = { ci_code: h.circ_code, ci_name: ciName, ...aggMk(), daks: {} };
+        addAgg(zhMap[zhKey].cis[ciKey], e);
+        const dakName = cleanName(h.edtn) || '—';
+        const dakKey = h.edtn_code || dakName;
+        if (!zhMap[zhKey].cis[ciKey].daks[dakKey]) zhMap[zhKey].cis[ciKey].daks[dakKey] = { dak_code: h.edtn_code, dak_name: dakName, ...aggMk(), exec_list: [] };
+        addAgg(zhMap[zhKey].cis[ciKey].daks[dakKey], e);
+        zhMap[zhKey].cis[ciKey].daks[dakKey].exec_list.push({
+          exec_code: e.exec_code, exec_name: e.exec_name, desig: h.desig,
+          agent_cur: e.supply_cur - e.cash_cur, agent_prev: e.supply_prev - e.cash_prev,
+          cash_cur: e.cash_cur, cash_prev: e.cash_prev,
+          collection: e.collection, billed: e.billed, os: e.os, critical: e.critical, visits: e.visits, agencies: e.agencies,
+        });
+      });
+      const bySupply = arr => arr.sort((a, b) => (b.agent_cur + b.cash_cur) - (a.agent_cur + a.cash_cur));
+      const zh_perf = bySupply(Object.values(zhMap).map(zh => ({
+        ...aggFin(zh),
+        cis: bySupply(Object.values(zh.cis).map(ci => ({
+          ...aggFin(ci),
+          daks: bySupply(Object.values(ci.daks).map(dak => ({
+            ...aggFin(dak),
+            execs: bySupply(dak.exec_list.map(ex => ({
+              ...ex, supply_cur: ex.agent_cur + ex.cash_cur, supply_prev: ex.agent_prev + ex.cash_prev,
+              growth_pct: (ex.agent_prev + ex.cash_prev) ? r1(((ex.agent_cur + ex.cash_cur) / (ex.agent_prev + ex.cash_prev) - 1) * 100) : null,
+              coll_pct: ex.billed ? r1((ex.collection / ex.billed) * 100) : null,
+            }))),
+          }))),
+        }))),
+      })));
+
       res.json({
         state: stateKey, state_name: meta.name,
         level: isBranch ? 'branch' : 'state',
@@ -977,7 +1040,7 @@ module.exports = function installCommandCentre({ app, q }) {
           dcr: { visits: bsum(b => b.visits), agencies_visited: seenTot, book: bookTot,
                  execs: bsum(b => b.execs.size), coverage_pct: bookTot ? r1((seenTot / bookTot) * 100) : null },
         },
-        branches, executives,
+        branches, executives, zh_perf,
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
