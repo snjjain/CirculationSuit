@@ -117,7 +117,8 @@ function _runSqlplusSpawn(sqlFile) {
     proc.on('error', reject);
     proc.on('close', code => {
       const combined = (out + err).slice(0, 1000);
-      const m = combined.match(/ORA-\d{5}[^\r\n]*|SP2-\d{4}[^\r\n]*|TNS-\d{5}[^\r\n]*/);
+      // ORA-28002 = password expiry warning — non-fatal
+      const m = combined.match(/ORA-(?!28002)\d{5}[^\r\n]*|SP2-\d{4}[^\r\n]*|TNS-\d{5}[^\r\n]*/);
       if (code !== 0 || m) reject(new Error(`sqlplus exit ${code}${m ? ': ' + m[0] : ''}\n${combined}`));
       else resolve();
     });

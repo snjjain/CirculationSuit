@@ -257,7 +257,9 @@ function runSqlplus(sqlFile) {
     proc.stderr.on('data', d => { stderr += d; });
     proc.on('error', reject);
     proc.on('close', code => {
-      const errMatch = (stdout + stderr).match(/ORA-\d{5}[^\r\n]*|SP2-\d{4}[^\r\n]*|TNS-\d{5}[^\r\n]*/);
+      const allOut = stdout + stderr;
+      // ORA-28002 = password expiry warning — non-fatal, query still succeeds
+      const errMatch = allOut.match(/ORA-(?!28002)\d{5}[^\r\n]*|SP2-\d{4}[^\r\n]*|TNS-\d{5}[^\r\n]*/);
       if (code === 0 && !errMatch) resolve({ stdout, stderr });
       else reject(new Error(`sqlplus failed (exit ${code})${errMatch ? ': ' + errMatch[0] : ''}\n${stdout.slice(0, 500)}\n${stderr.slice(0, 500)}`));
     });
@@ -455,7 +457,8 @@ async function syncChunk(conn, chunk, tmpDir, chunkNo, totalChunks) {
 
   const raw = fs.readFileSync(spoolFile, 'utf8');
 
-  const spoolErr = raw.match(/ORA-\d{5}[^\r\n]*|SP2-\d{4}[^\r\n]*/);
+  // ORA-28002 = password expiry warning — non-fatal
+  const spoolErr = raw.match(/ORA-(?!28002)\d{5}[^\r\n]*|SP2-\d{4}[^\r\n]*/);
   if (spoolErr) throw new Error(`Oracle error in output: ${spoolErr[0]}`);
 
   const lines = raw.split(/\r?\n/).filter(l => l.includes(SEP));
