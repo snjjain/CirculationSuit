@@ -1846,6 +1846,14 @@ VIEWS.agency_profile = () => {
     ${vzKpi({ icon: '💰', label: 'Outstanding', value: _apFmtC(m.outstanding), status: m.outstanding > 100000 ? 'bad' : m.outstanding > 0 ? 'warn' : 'good' })}
     ${vzKpi({ icon: '🎯', label: 'Growth Potential', value: '+' + _apFmtN(m.growth_potential_copies) + ' cp', status: m.growth_potential_copies > 0 ? 'info' : 'mute' })}
     ${vzKpi({ icon: '🗓', label: 'Last Visit', value: _apDaysAgo(m.last_visit_days_ago), sub: m.last_visit_date || '', status: visitStatus })}
+    ${(() => {
+      const mm = _msMap();
+      const e = mm && mm.available && mm.agency && mm.agency[`${id.unit_code}|${id.agcd}`];
+      if (!e) return '';
+      return vzKpi({ icon: '📊', label: 'Market Share', value: e.share_pct == null ? '—' : e.share_pct + '%',
+          sub: `of ${_apFmtN(e.total_mkt)} mkt copies · ${mm.period}`, status: e.share_pct == null ? 'mute' : e.share_pct >= 50 ? 'good' : 'bad' })
+        + (e.top_comp ? vzKpi({ icon: '⚔️', label: 'Top Competitor', value: esc(e.top_comp), sub: _apFmtN(e.top_comp_copies) + ' cp', status: 'warn' }) : '');
+    })()}
   </div>`;
 
   const brief = `<div class="card" style="padding:16px;margin-bottom:14px;border-left:4px solid ${ss.color}">
@@ -4117,6 +4125,45 @@ function _cmdViewLegacy() {
    endpoint (/api/command/state-performance) so the cards, the alerts and the market
    share can never disagree with each other. */
 
+/* ── Competitor market-share map — shared across all dashboards ──
+   One fetch per session; keyed 'UNIT|CODE' (agency/hawker), exec_code (by_exec),
+   center_incharge code (by_ci), hwk_cent_code (by_center). */
+function _msMap() {
+  const c = S.live.msMap || (S.live.msMap = { data: null, _loading: false });
+  if (!c.data && !c._loading) {
+    c._loading = true;
+    fetch(`${api.base}/api/competitor/market-share-map`, { headers: api.h() })
+      .then(r => r.json())
+      .then(d => { c.data = (d && d.available) ? d : { available: false }; c._loading = false; render(); })
+      .catch(() => { c.data = { available: false }; c._loading = false; });
+  }
+  return c.data;
+}
+const _msPct = v => v == null ? '<span style="color:#cbd5e1">—</span>'
+  : `<b style="color:${v >= 60 ? '#16a34a' : v >= 40 ? '#d97706' : '#dc2626'}">${v}%</b>`;
+// Roll up {our_copies, total_mkt} entries → share % (null when no data)
+function _msRoll(entries) {
+  let our = 0, tot = 0;
+  entries.forEach(e => { if (e) { our += e.our_copies || 0; tot += e.total_mkt || 0; } });
+  return tot > 0 ? Math.round(our / tot * 100) : null;
+}
+// Unit-level rollup (agency + hawker maps combined), cached per unit
+function _msUnit(unitCode) {
+  const mm = _msMap();
+  if (!mm || !mm.available || !unitCode) return null;
+  const cache = mm._unitCache || (mm._unitCache = {});
+  if (unitCode in cache) return cache[unitCode];
+  let our = 0, tot = 0;
+  const pre = unitCode + '|';
+  [mm.agency, mm.hawker].forEach(src => {
+    if (!src) return;
+    for (const [k, e] of Object.entries(src)) {
+      if (k.startsWith(pre)) { our += e.our_copies || 0; tot += e.total_mkt || 0; }
+    }
+  });
+  return (cache[unitCode] = tot > 0 ? Math.round(our / tot * 100) : null);
+}
+
 function _ccState() {
   return S.live.cc || (S.live.cc = { asOn: '', compare: 'prev_year', range: 'mtd', rangeFrom: '', rangeTo: '', state: '', unit: '', district: '', data: null, _loading: false, drill: null });
 }
@@ -4651,6 +4698,14 @@ function _ccFlyAgencyPanel(a) {
       ${kpi('Outstanding', _apFmtC(m.outstanding), (m.outstanding || 0) > 0 ? '#b91c1c' : '#0f172a')}
       ${kpi('Growth headroom', _apFmtN(m.growth_potential_copies) + ' cp')}
       ${kpi('Last visit', _apDaysAgo(m.last_visit_days_ago))}
+      ${(() => {
+        const mm = _msMap();
+        const e = mm && mm.available && mm.agency && mm.agency[`${id.unit_code}|${id.agcd}`];
+        if (!e) return '';
+        return kpi('Market share', (e.share_pct == null ? '—' : e.share_pct + '%'),
+            e.share_pct != null && e.share_pct < 50 ? '#b91c1c' : '#15803d')
+          + (e.top_comp ? kpi('Top competitor', `${esc(e.top_comp)} · ${_apFmtN(e.top_comp_copies)} cp`, '#b45309') : '');
+      })()}
     </div>
     ${tags ? `<div style="margin-top:10px">${tags}</div>` : ''}
     ${sec('Agency', `<div>
@@ -5159,8 +5214,89 @@ function _cmdViewNew() {
     </table></div>
   </div>`;
 
+  // ── True market share vs competitors (from uploaded competitor data) ──
+  const cmpMarket = _ccCompetitorMarket(st);
+
   // No pagehead — the sidebar already names the screen, and the snapshot bar dates it.
-  return _cmdDesignSwitch('new') + bar + topStrip + cards + charts + twoCol + market + _ccFlyout();
+  return _cmdDesignSwitch('new') + bar + topStrip + cards + charts + twoCol + cmpMarket + market + _ccFlyout();
+}
+
+/* Competitor-based market share card for the Command Centre. Aggregates the
+   /api/competitor/summary units[] by state; internal share table stays below it. */
+function _ccCompetitorMarket(st) {
+  const c = S.live.cmpSummary || (S.live.cmpSummary = { data: null, _loading: false });
+  if (!c.data && !c._loading) {
+    c._loading = true;
+    fetch(`${api.base}/api/competitor/summary?type=agency`, { headers: api.h() })
+      .then(r => r.json())
+      .then(d => { c.data = d || { available: false }; c._loading = false; if (S.screen === 'command') render(); })
+      .catch(() => { c.data = { available: false }; c._loading = false; });
+  }
+  const d = c.data;
+  if (!d || !d.available) return '';
+
+  const N = v => (Number(v) || 0).toLocaleString('en-IN');
+  // State-level rollup
+  const byState = {};
+  (d.units || []).forEach(u => {
+    const s = u.state_name || '—';
+    if (!byState[s]) byState[s] = { our: 0, comp: 0, units: 0 };
+    byState[s].our += Number(u.our_supply) || 0;
+    byState[s].comp += [1,2,3,4,5].reduce((a, i) => a + (Number(u[`comp${i}_supply`]) || 0), 0);
+    byState[s].units++;
+  });
+  const stateRows = Object.entries(byState)
+    .map(([name, v]) => ({ name, our: v.our, total: v.our + v.comp, units: v.units,
+      share: (v.our + v.comp) > 0 ? Math.round(v.our / (v.our + v.comp) * 100) : null }))
+    .sort((a, b) => (b.total || 0) - (a.total || 0));
+
+  const compChips = (d.competitors || []).slice(0, 5).map(cp =>
+    `<span style="background:#fef3c7;color:#92400e;border-radius:14px;padding:3px 10px;font-size:11px;font-weight:600">${esc(cp.name)} · ${N(cp.total)}</span>`).join(' ');
+
+  const shareColor = v => v == null ? '#94a3b8' : v >= 60 ? '#15803d' : v >= 40 ? '#d97706' : '#b91c1c';
+  const barCell = v => v == null ? '<span style="color:#cbd5e1">—</span>' : `
+    <div style="display:flex;align-items:center;gap:7px;justify-content:flex-end">
+      <div style="width:70px;height:7px;background:#f1f5f9;border-radius:4px;overflow:hidden"><div style="width:${Math.min(100, v)}%;height:100%;background:${shareColor(v)}"></div></div>
+      <b style="color:${shareColor(v)};min-width:36px;text-align:right">${v}%</b>
+    </div>`;
+
+  return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:14px">
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:2px">
+      <div style="font-size:15px;font-weight:800;color:#1e3a8a">Market Share vs Competitors</div>
+      <span style="font-size:11px;color:#64748b">Agency competitor data · ${esc(d.period)} · ${d.unit_count} units reporting</span>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin:10px 0 12px">
+      <div style="flex:1;min-width:170px;background:#eef2ff;border-radius:8px;padding:10px 13px">
+        <div style="font-size:10px;font-weight:700;color:#4338ca;text-transform:uppercase;letter-spacing:.04em">Patrika share</div>
+        <div style="font-size:22px;font-weight:800;color:${shareColor(d.our_share_pct)}">${d.our_share_pct}%</div>
+        <div style="font-size:10.5px;color:#64748b">${N(d.total_ours)} of ${N(d.total_market)} market copies/day</div>
+      </div>
+      <div style="flex:2;min-width:230px;background:#fffbeb;border-radius:8px;padding:10px 13px">
+        <div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Top competitors (copies/day)</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${compChips || '<span style="font-size:11px;color:#94a3b8">—</span>'}</div>
+      </div>
+      ${(d.losing_units || []).length ? `<div style="flex:1;min-width:170px;background:#fef2f2;border-radius:8px;padding:10px 13px">
+        <div style="font-size:10px;font-weight:700;color:#b91c1c;text-transform:uppercase;letter-spacing:.04em">Units below 50%</div>
+        <div style="font-size:22px;font-weight:800;color:#b91c1c">${d.losing_units.length}</div>
+        <div style="font-size:10.5px;color:#64748b">worst: ${esc(d.losing_units[0].unit_name || d.losing_units[0].unit_code)} · ${d.losing_units[0].share_pct}%</div>
+      </div>` : ''}
+    </div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:420px">
+      <thead><tr style="color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em">
+        <th style="text-align:left;padding:6px 8px">State</th>
+        <th style="text-align:right;padding:6px 8px">Patrika (cp/day)</th>
+        <th style="text-align:right;padding:6px 8px">Total Market</th>
+        <th style="text-align:right;padding:6px 8px">Units</th>
+        <th style="text-align:right;padding:6px 8px">Share</th></tr></thead>
+      <tbody>${stateRows.map(r => `<tr style="border-top:1px solid #eef2f7">
+        <td style="padding:7px 8px;font-weight:700;color:#1e3a8a">${esc(r.name)}</td>
+        <td style="padding:7px 8px;text-align:right;font-variant-numeric:tabular-nums">${N(r.our)}</td>
+        <td style="padding:7px 8px;text-align:right;font-variant-numeric:tabular-nums">${N(r.total)}</td>
+        <td style="padding:7px 8px;text-align:right;color:#64748b">${r.units}</td>
+        <td style="padding:7px 8px;text-align:right">${barCell(r.share)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+  </div>`;
 }
 
 
@@ -5278,28 +5414,33 @@ window.csHwkPopup = async (execCode, ciName, unit) => {
     if (!body) return;
     if (!rows.length) { body.innerHTML = '<div style="padding:32px;text-align:center;color:#94a3b8;font-size:13px">No hawker data found.</div>'; return; }
     const totalMtd = rows.reduce((s, h) => s + h.mtd, 0);
+    const hmm = _msMap();
+    const hwkMsAvail = hmm && hmm.available && hmm.hawker && Object.keys(hmm.hawker).length;
     const th = (label, right) => `<th style="padding:8px ${right?'8px':'14px'};text-align:${right?'right':'left'};font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">${label}</th>`;
     body.innerHTML = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:520px">
-      <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">${th('Hawker')}${th('MTD',1)}${th('Prev',1)}${th('Diff',1)}${th('Growth',1)}<th style="padding:8px 14px;text-align:right;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Share</th></tr></thead>
+      <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">${th('Hawker')}${th('MTD',1)}${th('Prev',1)}${th('Diff',1)}${th('Growth',1)}${hwkMsAvail ? th('Mkt Share',1) : ''}<th style="padding:8px 14px;text-align:right;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Share</th></tr></thead>
       <tbody>${rows.map(h => {
         const diff = h.mtd - h.prev_mtd;
         const gpct = h.prev_mtd ? diff / h.prev_mtd * 100 : null;
         const share = totalMtd ? (h.mtd / totalMtd * 100).toFixed(1) : '0.0';
         const gc = diff > 0 ? '#15803d' : diff < 0 ? '#dc2626' : '#64748b';
         const gs = gpct != null ? `${diff >= 0 ? '+' : ''}${gpct.toFixed(1)}%` : diff > 0 ? '+∞' : '0%';
+        const hms = hwkMsAvail ? hmm.hawker[`${unit}|${h.hawker_id}`] : null;
+        const msTd = hwkMsAvail ? `<td style="padding:7px 8px;text-align:right;font-size:12px" title="${hms && hms.top_comp ? `Top competitor: ${esc(hms.top_comp)} · ${_ccN(hms.top_comp_copies)} cp` : ''}">${_msPct(hms ? hms.share_pct : null)}</td>` : '';
         return `<tr style="border-top:1px solid #eef2f7" onmouseenter="this.style.background='#f0f9ff'" onmouseleave="this.style.background=''">
           <td style="padding:7px 14px;font-size:12px;color:#1e293b">${esc(h.hawker_name)}</td>
           <td style="padding:7px 8px;text-align:right;font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums">${_ccN(h.mtd)}</td>
           <td style="padding:7px 8px;text-align:right;font-size:12px;color:#94a3b8;font-variant-numeric:tabular-nums">${_ccN(h.prev_mtd)}</td>
           <td style="padding:7px 8px;text-align:right;font-size:12px;color:${gc};font-variant-numeric:tabular-nums">${diff >= 0 ? '+' : ''}${_ccN(diff)}</td>
           <td style="padding:7px 8px;text-align:right;font-size:12px;color:${gc}">${gs}</td>
+          ${msTd}
           <td style="padding:7px 14px;text-align:right;font-size:12px;color:#64748b">${share}%</td>
         </tr>`;
       }).join('')}</tbody>
       <tfoot><tr style="background:#f8fafc;border-top:2px solid #e2e8f0">
         <td style="padding:8px 14px;font-size:11.5px;font-weight:800;color:#1e293b">${rows.length} hawkers total</td>
         <td style="padding:8px 8px;text-align:right;font-size:13px;font-weight:800;font-variant-numeric:tabular-nums;color:#0f172a">${_ccN(totalMtd)}</td>
-        <td colspan="4"></td>
+        <td colspan="${hwkMsAvail ? 5 : 4}"></td>
       </tr></tfoot>
     </table></div>`;
   } catch (err) {
@@ -5710,9 +5851,22 @@ function _csZHRows(st, d) {
 
   const tdR = v => `<td style="text-align:right;padding:5px 7px;font-variant-numeric:tabular-nums">${v}</td>`;
   const tdC = v => `<td style="text-align:center;padding:5px 7px">${v}</td>`;
-  const metricsRow = r => tdR(NF(r.agent_cur)) + tdR(NF(r.cash_cur)) + tdR(GP(r.growth_pct))
+
+  // Market share per node — exec rows read by_exec/by_ci directly; group rows roll up members
+  const ms = _msMap();
+  const msAvail = ms && ms.available;
+  const execMs = ex => {
+    if (!msAvail || !ex.exec_code) return null;
+    return (ms.by_exec && ms.by_exec[ex.exec_code]) || (ms.by_ci && ms.by_ci[ex.exec_code]) || null;
+  };
+  const dakMs = dak => msAvail ? _msRoll((dak.execs || []).map(execMs)) : null;
+  const ciMs  = ci  => msAvail ? _msRoll((ci.daks || []).flatMap(d => (d.execs || []).map(execMs))) : null;
+  const zhMs  = zh  => msAvail ? _msRoll((zh.cis || []).flatMap(c => (c.daks || []).flatMap(d => (d.execs || []).map(execMs)))) : null;
+  const msCell = v => msAvail ? tdR(_msPct(v)) : '';
+
+  const metricsRow = (r, msVal) => tdR(NF(r.agent_cur)) + tdR(NF(r.cash_cur)) + tdR(GP(r.growth_pct))
     + tdR(NF(r.billed)) + tdR(NF(r.collection)) + tdR(CP(r.coll_pct))
-    + tdR(NF(r.os)) + tdR(CR(r.critical)) + tdR(VS(r.visits)) + tdC(ST(r));
+    + tdR(NF(r.os)) + tdR(CR(r.critical)) + tdR(VS(r.visits)) + msCell(msVal) + tdC(ST(r));
 
   const rows = [];
   zh_perf.forEach(zh => {
@@ -5723,7 +5877,7 @@ function _csZHRows(st, d) {
         <span style="font-size:11px;color:#6366f1;margin-right:6px">${zhE ? '▾' : '▶'}</span>
         <b style="font-size:12.5px;color:#1e3a8a">${esc(zh.zh_name)}</b>
         <span style="font-size:10px;color:#6366f1;margin-left:5px">${zh.n_execs} exec</span>
-      </td>${metricsRow(zh)}</tr>`);
+      </td>${metricsRow(zh, zhMs(zh))}</tr>`);
     if (!zhE) return;
     zh.cis.forEach(ci => {
       const ciKey = zhKey + '|' + (ci.ci_code || ci.ci_name);
@@ -5733,7 +5887,7 @@ function _csZHRows(st, d) {
           <span style="font-size:10px;color:#0284c7;margin-right:5px">${ciE ? '▾' : '▶'}</span>
           <span style="font-size:12px;color:#0369a1;font-weight:700">${esc(ci.ci_name)}</span>
           <span style="font-size:10px;color:#94a3b8;margin-left:4px">${ci.n_execs} exec</span>
-        </td>${metricsRow(ci)}</tr>`);
+        </td>${metricsRow(ci, ciMs(ci))}</tr>`);
       if (!ciE) return;
       ci.daks.forEach(dak => {
         const dakKey = ciKey + '|' + (dak.dak_code || dak.dak_name);
@@ -5743,14 +5897,14 @@ function _csZHRows(st, d) {
             <span style="font-size:10px;color:#94a3b8;margin-right:4px">${dakE ? '▾' : '▶'}</span>
             <span style="font-size:11.5px;color:#374151;font-weight:600">${esc(dak.dak_name)}</span>
             <span style="font-size:10px;color:#94a3b8;margin-left:4px">${dak.n_execs} exec</span>
-          </td>${metricsRow(dak)}</tr>`);
+          </td>${metricsRow(dak, dakMs(dak))}</tr>`);
         if (!dakE) return;
         dak.execs.forEach(ex => {
           rows.push(`<tr onclick="event.stopPropagation();${ex.exec_code ? `ccOpenExecPanel('${_csQ(ex.exec_code)}','${_csQ(ex.exec_name)}','')` : ''}" style="cursor:pointer;background:#fff;border-top:1px solid #f8fafc" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='#fff'">
             <td style="padding:4px 8px;padding-left:54px">
               <span style="font-size:11.5px;color:${ex.desig === 'CI' ? '#0ea5e9' : '#374151'}">${esc(ex.exec_name)}</span>
               ${ex.desig ? `<span style="font-size:9px;color:#94a3b8;margin-left:3px">${esc(ex.desig)}</span>` : ''}
-            </td>${metricsRow(ex)}</tr>`);
+            </td>${metricsRow(ex, (execMs(ex) || {}).share_pct ?? null)}</tr>`);
         });
       });
     });
@@ -5764,11 +5918,13 @@ function _csZHPerformance(st, d) {
   if (!st.zhExp) st.zhExp = new Set();
 
   const thS = 'text-align:right;padding:5px 7px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap';
+  const _zms = _msMap();
+  const msTh = (_zms && _zms.available) ? `<th style="${thS}" title="Patrika share of total market (competitor data · ${esc(_zms.period || '')})">Mkt Share</th>` : '';
   const thead = `<thead><tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">
     <th style="text-align:left;padding:5px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Name</th>
     <th style="${thS}">Agent Sale</th><th style="${thS}">Cash Sale</th><th style="${thS}">Growth</th>
     <th style="${thS}">Prev Bill</th><th style="${thS}">Collection</th><th style="${thS}">Coll%</th>
-    <th style="${thS}">OS</th><th style="${thS}">Critical</th><th style="${thS}">Visits</th>
+    <th style="${thS}">OS</th><th style="${thS}">Critical</th><th style="${thS}">Visits</th>${msTh}
     <th style="text-align:center;padding:5px 7px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th>
   </tr></thead>`;
 
@@ -5800,7 +5956,10 @@ function _csCITable(st, d, rows) {
   const rowLink = r => r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}','${_csQ(ciUnit)}')` : '';
   const thL = label => `<th style="text-align:left;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">${label}</th>`;
   const thR = label => `<th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">${label}</th>`;
-  const thead = `<tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">${thL('Name')}${thR('Centres')}${thR('Hawkers')}${thR('Supply (cp)')}${thR('Growth')}${thR('Coll %')}<th style="text-align:center;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th></tr>`;
+  const _cms = _msMap();
+  const ciMsAvail = _cms && _cms.available && _cms.by_ci && Object.keys(_cms.by_ci).length;
+  const msThC = ciMsAvail ? thR('Mkt Share') : '';
+  const thead = `<tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">${thL('Name')}${thR('Centres')}${thR('Hawkers')}${thR('Supply (cp)')}${thR('Growth')}${thR('Coll %')}${msThC}<th style="text-align:center;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th></tr>`;
   const rowStatus = rows.map(r => _csStatusClass(r, 'cash'));
   const trows = rows.length ? rows.map((r, ri) => {
     const onClick = rowLink(r);
@@ -5808,6 +5967,8 @@ function _csCITable(st, d, rows) {
     const centres = r.hawker_centres || 0;
     const hawkers = r.hawker_count || 0;
     const growth = r.supply.cash_growth_pct != null ? r.supply.cash_growth_pct : r.supply.growth_pct;
+    const msEntry = ciMsAvail ? (_cms.by_ci[r.exec_code] || (_cms.by_exec || {})[r.exec_code]) : null;
+    const msCellC = ciMsAvail ? `<td style="padding:8px 8px;text-align:right" title="${msEntry ? `${_ccN(msEntry.our_copies)} of ${_ccN(msEntry.total_mkt)} market copies · ${msEntry.n || 0} hawkers with data` : 'No competitor data'}">${_msPct(msEntry ? msEntry.share_pct : null)}</td>` : '';
     return `<tr onclick="${onClick}" style="cursor:pointer;border-top:1px solid #eef2f7;${isInactive?'opacity:.65':''}" onmouseenter="this.style.background='#f0f9ff'" onmouseleave="this.style.background=''">
       <td style="padding:8px 8px;text-align:left">
         <div><b style="color:#0ea5e9;font-size:12.5px">${esc(r.name)}</b></div>
@@ -5818,9 +5979,10 @@ function _csCITable(st, d, rows) {
       <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums"><b style="font-size:13px">${_ccN(r.supply.cash || r.supply.current)}</b></td>
       <td style="padding:8px 8px;text-align:right">${_ccTrend(growth)}</td>
       <td style="padding:8px 8px;text-align:right"><b style="color:#15803d">100%</b></td>
+      ${msCellC}
       <td style="padding:8px 8px;text-align:center">${_csStatusBadge[rowStatus[ri] || 'good']}</td>
     </tr>`;
-  }).join('') : `<tr><td colspan="7" style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px">No Centre Incharges match the current filters.</td></tr>`;
+  }).join('') : `<tr><td colspan="8" style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px">No Centre Incharges match the current filters.</td></tr>`;
 
   const ptab = t => `<button onclick="csPerfType('${t}')" style="padding:5px 14px;border:1px solid ${st.perfType===t?'#1e3a8a':'#e2e8f0'};border-radius:20px;background:${st.perfType===t?'#1e3a8a':'#f8fafc'};color:${st.perfType===t?'#fff':'#475569'};font-size:11.5px;font-weight:${st.perfType===t?700:500};cursor:pointer">`;
   const controls = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -5909,6 +6071,19 @@ function _csConsolidated(st, d) {
   const showAgent = st.seg !== 'cash' && !isExecView;
   const showCash  = st.seg !== 'agent';
 
+  // Market share: exec rows → by_exec/by_ci; state-level branch rows → unit rollup
+  const _tms = _msMap();
+  const tblMsAvail = _tms && _tms.available;
+  const rowMs = r => {
+    if (!tblMsAvail) return null;
+    if (isBranch) {
+      const e = r.exec_code && ((_tms.by_exec || {})[r.exec_code] || (_tms.by_ci || {})[r.exec_code]);
+      return e ? e.share_pct : null;
+    }
+    return _msUnit(r.key);
+  };
+  const msThT = tblMsAvail ? `<th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap" title="Patrika share of total market · competitor data ${esc(_tms.period || '')}">Mkt Share</th>` : '';
+
   const thead = `<tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">
     ${thLeft('name', gLabel)}
     ${showAgent ? thBtn('agent', 'Agent Sale') : ''}
@@ -5920,7 +6095,7 @@ function _csConsolidated(st, d) {
     <th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">Coll %</th>
     ${thBtn('os', 'Outstanding')}
     <th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">Critical</th>
-    ${thBtn('dcr', 'DCR %')}
+    ${thBtn('dcr', 'DCR %')}${msThT}
     <th style="text-align:center;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th>
   </tr>`;
 
@@ -5965,9 +6140,10 @@ function _csConsolidated(st, d) {
       <td style="padding:8px 8px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px"><span style="color:${r.outstanding.amount>0?'#b91c1c':'#94a3b8'}">${_ccINR(r.outstanding.amount)}</span></td>
       <td style="padding:8px 8px;text-align:right;font-size:12px"><span style="color:${r.outstanding.critical>0?'#b91c1c':'#94a3b8'}">${_ccN(r.outstanding.critical)}</span></td>
       <td style="padding:8px 8px;text-align:right;font-size:12px">${r.dcr && r.dcr.coverage_pct != null ? `<span style="color:${r.dcr.coverage_pct<10?'#b91c1c':r.dcr.coverage_pct<30?'#b45309':'#15803d'}">${r.dcr.coverage_pct}%</span>` : '—'}</td>
+      ${tblMsAvail ? `<td style="padding:8px 8px;text-align:right;font-size:12px">${_msPct(rowMs(r))}</td>` : ''}
       <td style="padding:8px 8px;text-align:center" title="${esc(_csStatusReason(r, st.seg))}">${_csStatusBadge[rowStatus[ri] || 'good']}<div style="font-size:9px;color:#94a3b8;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px">${esc(_csStatusReason(r, st.seg))}</div></td>
     </tr>`;
-  }).join('') : `<tr><td colspan="13" style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px">No ${gLabel.toLowerCase()}s match the current filters.</td></tr>`;
+  }).join('') : `<tr><td colspan="14" style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px">No ${gLabel.toLowerCase()}s match the current filters.</td></tr>`;
 
   const showAllBtn = rows.length > 30 ? `<div style="margin-top:11px">${_csBtn(st.execAll ? 'Show top 30' : `Show all ${_ccN(rows.length)} →`, 'csExecAll()', false)}</div>` : '';
 
@@ -11882,6 +12058,10 @@ function epExecTable() {
   (st.dcr?.by_exec || []).forEach(r => { dcrByExec[r.emp_code] = r; });
   const hasDcr = !!st.dcr;
 
+  // Competitor market share per executive (rolled up from their agencies)
+  const _ems = _msMap();
+  const epMsAvail = _ems && _ems.available && _ems.by_exec && Object.keys(_ems.by_exec).length;
+
   return `<div class="card" style="overflow:hidden;margin-bottom:16px">
     <div style="padding:12px 16px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <div>
@@ -11907,6 +12087,7 @@ function epExecTable() {
             ${th('supply',         'Supply',      true)}
             ${th('collection_pct', 'Coll %',      true)}
             ${th('outstanding',    'Outstanding', true)}
+            ${epMsAvail ? `<th class="r" style="white-space:nowrap" title="Patrika share of total market · competitor data ${esc(_ems.period || '')}">Mkt Share</th>` : ''}
           </tr>
         </thead>
         <tbody>
@@ -11943,9 +12124,10 @@ function epExecTable() {
               <td class="r" style="font-weight:600">${epFmtN(r.total_supply)}</td>
               <td class="r" style="color:${epPctColor(r.collection_pct)};font-weight:700">${epPct(r.collection_pct)}</td>
               <td class="r" style="color:var(--red);font-weight:600">${epFmtC(r.total_outstanding)}</td>
+              ${epMsAvail ? (() => { const m = _ems.by_exec[r.executive_code]; return `<td class="r" title="${m ? `${epFmtN(m.our_copies)} of ${epFmtN(m.total_mkt)} mkt copies · ${m.n || 0} agencies with data` : 'No competitor data'}">${_msPct(m ? m.share_pct : null)}</td>`; })() : ''}
             </tr>`;
           }).join('')}
-          ${!rows.length ? `<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--muted)">No executives found for this period / filter</td></tr>` : ''}
+          ${!rows.length ? `<tr><td colspan="11" style="text-align:center;padding:24px;color:var(--muted)">No executives found for this period / filter</td></tr>` : ''}
         </tbody>
       </table>
     </div>

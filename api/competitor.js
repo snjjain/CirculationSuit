@@ -295,6 +295,9 @@ module.exports = function registerCompetitor({ app, q }) {
           const period   = Str(row['Period (YYYY-MM)']);
           const unitCode = Str(row['Unit Code']);
           if (!period.match(/^\d{4}-\d{2}$/) || !unitCode) { skipped++; continue; }
+          // Skip rows where no competitor data has been entered
+          const hasComp = [1,2,3,4,5].some(i => Str(row[`Competitor ${i} Name`]) || N(row[`Competitor ${i} Copies`]));
+          if (!hasComp) { skipped++; continue; }
           try {
             await upsertRecord(rowToRecord(row, compType, enteredBy));
             inserted++;
@@ -374,6 +377,45 @@ module.exports = function registerCompetitor({ app, q }) {
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
+  // Helper: YYYY-MM → { fromDate, toDate } inclusive of the whole month
+  function periodDateRange(period) {
+    const [y, m] = period.split('-').map(Number);
+    const fromDate = `${period}-01`;
+    const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
+    const toDate = `${ny}-${String(nm).padStart(2, '0')}-01`;
+    return { fromDate, toDate };
+  }
+
+  /* Per-agent daily-average supply for a period — direct scan + JS merge.
+     NEVER join competitor_data to supply_data/hawker_supply in SQL: the join
+     fans out (multiple supply rows per agency-date) and takes minutes; the
+     plain GROUP BY over one month runs in ~1s. Returns 'UNIT|CODE' → avg/day. */
+  async function agentSupplyMap(type, period) {
+    const { fromDate, toDate } = periodDateRange(period);
+    const map = {};
+    if (type === 'agency') {
+      const { rows } = await q(`
+        SELECT unit_code, agcd, ROUND(SUM(sup_copy) / COUNT(DISTINCT supply_date)) AS avg_cp
+        FROM supply_data
+        WHERE supply_date >= ? AND supply_date < ?
+          AND sup_type_code = 'S01' AND COALESCE(publ,'') NOT IN ('P14')
+        GROUP BY unit_code, agcd`, [fromDate, toDate]);
+      rows.forEach(r => { map[`${r.unit_code}|${r.agcd}`] = Number(r.avg_cp) || 0; });
+    } else {
+      const { rows } = await q(`
+        SELECT loc_id, hawker_id,
+          MAX(hwk_cent_code) AS cent, MAX(center_incharge) AS ci,
+          ROUND(SUM(sup_copies) / COUNT(DISTINCT supply_date)) AS avg_cp
+        FROM hawker_supply
+        WHERE supply_date >= ? AND supply_date < ?
+        GROUP BY loc_id, hawker_id`, [fromDate, toDate]);
+      rows.forEach(r => {
+        map[`${r.loc_id}|${r.hawker_id}`] = { avg_cp: Number(r.avg_cp) || 0, cent: r.cent, ci: r.ci };
+      });
+    }
+    return map;
+  }
+
   // ════ GET /api/competitor/summary ════
   // Aggregated market-share view for a given type + period
   // If period omitted, uses the latest available.
@@ -388,19 +430,30 @@ module.exports = function registerCompetitor({ app, q }) {
         period = lp[0].period;
       }
 
-      const { rows: units } = await q(`
-        SELECT unit_code, unit_name, state_name,
-          SUM(our_supply)   AS our_supply,
-          SUM(comp1_supply) AS comp1_supply, MAX(comp1_name) AS comp1_name,
-          SUM(comp2_supply) AS comp2_supply, MAX(comp2_name) AS comp2_name,
-          SUM(comp3_supply) AS comp3_supply, MAX(comp3_name) AS comp3_name,
-          SUM(comp4_supply) AS comp4_supply, MAX(comp4_name) AS comp4_name,
-          SUM(comp5_supply) AS comp5_supply, MAX(comp5_name) AS comp5_name,
-          COUNT(*)          AS agents
-        FROM competitor_data
-        WHERE comp_type = ? AND period = ?
-        GROUP BY unit_code, unit_name, state_name
-        ORDER BY our_supply DESC`, [type, period]);
+      const [{ rows: units }, { rows: cdAgents }, supMap] = await Promise.all([
+        q(`SELECT unit_code, MAX(unit_name) AS unit_name, MAX(state_name) AS state_name,
+            SUM(comp1_supply) AS comp1_supply, MAX(comp1_name) AS comp1_name,
+            SUM(comp2_supply) AS comp2_supply, MAX(comp2_name) AS comp2_name,
+            SUM(comp3_supply) AS comp3_supply, MAX(comp3_name) AS comp3_name,
+            SUM(comp4_supply) AS comp4_supply, MAX(comp4_name) AS comp4_name,
+            SUM(comp5_supply) AS comp5_supply, MAX(comp5_name) AS comp5_name,
+            COUNT(*) AS agents
+          FROM competitor_data
+          WHERE comp_type = ? AND period = ?
+          GROUP BY unit_code`, [type, period]),
+        q(`SELECT unit_code, agent_code FROM competitor_data WHERE comp_type = ? AND period = ?`, [type, period]),
+        agentSupplyMap(type, period),
+      ]);
+
+      // our_supply per unit = sum of supply daily-averages of ONLY the agents
+      // that have a competitor row — apples-to-apples with competitor copies.
+      const unitOurs = {};
+      cdAgents.forEach(r => {
+        const e = supMap[`${r.unit_code}|${r.agent_code}`];
+        const v = typeof e === 'object' ? (e ? e.avg_cp : 0) : (e || 0);
+        unitOurs[r.unit_code] = (unitOurs[r.unit_code] || 0) + v;
+      });
+      units.forEach(u => { u.our_supply = unitOurs[u.unit_code] || 0; });
 
       const compTotals = {};
       for (const r of units) {
@@ -434,8 +487,104 @@ module.exports = function registerCompetitor({ app, q }) {
         available: true, period, type,
         total_ours: totalOurs, total_market: totalMkt,
         our_share_pct: totalMkt > 0 ? Math.round(totalOurs / totalMkt * 100) : 0,
-        competitors, unit_count: units.length, losing_units: losing, units,
+        competitors, unit_count: units.length, losing_units: losing,
+        units: units.map(r => ({ ...r, share_pct: (() => { const c=[1,2,3,4,5].reduce((s,i)=>s+Number(r[`comp${i}_supply`]||0),0); const t=r.our_supply+c; return t>0?Math.round(r.our_supply/t*100):null; })() })),
       });
+    } catch (e) { res.status(500).json({ detail: String(e) }); }
+  });
+
+  // ════ GET /api/competitor/market-share-map ════
+  // Per-agency, per-hawker, per-exec, per-CI, per-center market share lookup.
+  // Key format: 'UNIT|CODE' for agency/hawker; exec/CI/center code otherwise.
+  // Direct scans + JS merge (no supply-table joins); cached 10 min per period.
+  const _msMapCache = new Map();
+  const MSMAP_TTL = 10 * 60 * 1000;
+  app.get('/api/competitor/market-share-map', async (req, res) => {
+    try {
+      let period = Str(req.query.period);
+      if (!period.match(/^\d{4}-\d{2}$/)) {
+        const { rows: lp } = await q(
+          `SELECT MAX(period) AS period FROM competitor_data WHERE comp_type = 'agency'`);
+        if (!lp[0]?.period) return res.json({ available: false });
+        period = lp[0].period;
+      }
+
+      const hit = _msMapCache.get(period);
+      if (hit && Date.now() - hit.ts < MSMAP_TTL) return res.json(hit.data);
+
+      const [{ rows: agCd }, { rows: hwCd }, agSup, hwSup, { rows: amRows }] = await Promise.all([
+        q(`SELECT unit_code, agent_code,
+             comp1_name, comp1_supply, comp2_name, comp2_supply,
+             comp3_name, comp3_supply, comp4_name, comp4_supply,
+             comp5_name, comp5_supply
+           FROM competitor_data WHERE comp_type='agency' AND period=?`, [period]),
+        q(`SELECT unit_code, agent_code,
+             comp1_name, comp1_supply, comp2_name, comp2_supply,
+             comp3_name, comp3_supply, comp4_name, comp4_supply,
+             comp5_name, comp5_supply
+           FROM competitor_data WHERE comp_type='hawker' AND period=?`, [period]),
+        agentSupplyMap('agency', period),
+        agentSupplyMap('hawker', period),
+        q(`SELECT unit, agcd, executive_code AS exec_code FROM agency_master`),
+      ]);
+
+      const execLookup = {};
+      amRows.forEach(r => { execLookup[`${r.unit}|${r.agcd}`] = r.exec_code; });
+
+      const topOf = r => {
+        let name = null, copies = 0, comp = 0;
+        for (let i = 1; i <= 5; i++) {
+          const c = Number(r[`comp${i}_supply`]) || 0;
+          comp += c;
+          if (c > copies && r[`comp${i}_name`]) { copies = c; name = r[`comp${i}_name`]; }
+        }
+        return { name, copies, comp };
+      };
+      const entry = (our, comp, top) => ({
+        our_copies: our, total_mkt: our + comp,
+        share_pct: (our + comp) > 0 ? Math.round(our / (our + comp) * 100) : null,
+        top_comp: top.name, top_comp_copies: top.copies,
+      });
+      const bump = (dst, key, our, comp) => {
+        if (!key) return;
+        if (!dst[key]) dst[key] = { our: 0, comp: 0, cnt: 0 };
+        dst[key].our += our; dst[key].comp += comp; dst[key].cnt++;
+      };
+      const shrink = src => {
+        const out = {};
+        for (const [k, e] of Object.entries(src)) {
+          const t = e.our + e.comp;
+          out[k] = { our_copies: e.our, total_mkt: t,
+            share_pct: t > 0 ? Math.round(e.our / t * 100) : null, n: e.cnt };
+        }
+        return out;
+      };
+
+      // ── Agencies → agency map + by_exec rollup ──
+      const agency = {}, byExec = {};
+      for (const r of agCd) {
+        const key = `${r.unit_code}|${r.agent_code}`;
+        const our = Number(agSup[key]) || 0;
+        const top = topOf(r);
+        agency[key] = entry(our, top.comp, top);
+        bump(byExec, execLookup[key], our, top.comp);
+      }
+
+      // ── Hawkers → hawker map + by_ci / by_center rollups ──
+      const hawker = {}, byCI = {}, byCenter = {};
+      for (const r of hwCd) {
+        const key = `${r.unit_code}|${r.agent_code}`;
+        const sup = hwSup[key];
+        const our = sup ? sup.avg_cp : 0;
+        const top = topOf(r);
+        hawker[key] = entry(our, top.comp, top);
+        if (sup) { bump(byCI, sup.ci, our, top.comp); bump(byCenter, sup.cent, our, top.comp); }
+      }
+
+      const data = { available: true, period, agency, hawker,
+        by_exec: shrink(byExec), by_ci: shrink(byCI), by_center: shrink(byCenter) };
+      _msMapCache.set(period, { ts: Date.now(), data });
+      res.json(data);
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 };
