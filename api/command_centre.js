@@ -127,12 +127,27 @@ module.exports = function installCommandCentre({ app, q }) {
     const { rows: mx } = await q(`SELECT MAX(supply_date) d FROM supply_data`);
     const latest = mx[0]?.d ? String(mx[0].d).slice(0, 10) : new Date().toISOString().slice(0, 10);
     const asOn = /^\d{4}-\d{2}-\d{2}$/.test(asOnParam || '') && asOnParam <= latest ? asOnParam : latest;
-    const back = mode === 'prev_week' ? 7 : mode === 'prev_month' ? 30 : 1;
-    const { rows: pv } = await q(
-      `SELECT MAX(supply_date) d FROM supply_data WHERE supply_date <= DATE_SUB(?, INTERVAL ? DAY)`, [asOn, back]);
-    const prev = pv[0]?.d ? String(pv[0].d).slice(0, 10) : asOn;
-    const label = mode === 'prev_week' ? 'Previous Week' : mode === 'prev_month' ? 'Previous Month' : 'Previous Day';
-    return { asOn, prev, label, mode: mode || 'prev_day' };
+    let prev, label;
+    if (mode === 'prev_day') {
+      const { rows: pv } = await q(`SELECT MAX(supply_date) d FROM supply_data WHERE supply_date < ?`, [asOn]);
+      prev = pv[0]?.d ? String(pv[0].d).slice(0, 10) : asOn;
+      label = 'Previous Day';
+    } else if (mode === 'prev_week') {
+      const { rows: pv } = await q(`SELECT MAX(supply_date) d FROM supply_data WHERE supply_date <= DATE_SUB(?, INTERVAL 7 DAY)`, [asOn]);
+      prev = pv[0]?.d ? String(pv[0].d).slice(0, 10) : asOn;
+      label = 'Previous Week';
+    } else if (mode === 'prev_month') {
+      const { rows: pv } = await q(`SELECT MAX(supply_date) d FROM supply_data WHERE supply_date <= DATE_SUB(?, INTERVAL 30 DAY)`, [asOn]);
+      prev = pv[0]?.d ? String(pv[0].d).slice(0, 10) : asOn;
+      label = 'Previous Month';
+    } else {
+      // prev_year (default) — same date last year, nearest date with supply data
+      const lyDate = `${Number(asOn.slice(0, 4)) - 1}${asOn.slice(4)}`;
+      const { rows: pv } = await q(`SELECT MAX(supply_date) d FROM supply_data WHERE supply_date <= ?`, [lyDate]);
+      prev = pv[0]?.d ? String(pv[0].d).slice(0, 10) : lyDate;
+      label = 'Previous Year';
+    }
+    return { asOn, prev, label, mode: mode || 'prev_year' };
   }
 
   /* Date range for the headline strip. Indian financial year runs Apr–Mar, so
@@ -157,6 +172,16 @@ module.exports = function installCommandCentre({ app, q }) {
       }
       case 'fytd':
         return { from: `${fyStartYear}-04-01`, to: asOn, label: `FY ${fyStartYear}-${String(fyStartYear + 1).slice(2)} (YTD)`, key: 'fytd' };
+      case 'last_3m': {
+        const s = new Date(d.getTime() - 89 * 86400000);
+        return { from: s.toISOString().slice(0, 10), to: asOn, label: 'Last 3 Months', key: 'last_3m' };
+      }
+      case 'last_6m': {
+        const s = new Date(d.getTime() - 179 * 86400000);
+        return { from: s.toISOString().slice(0, 10), to: asOn, label: 'Last 6 Months', key: 'last_6m' };
+      }
+      case 'covid':
+        return { from: '2020-03-18', to: '2020-03-18', label: 'COVID Period (18 Mar 2020)', key: 'covid' };
       case 'last_90':
         return { from: new Date(d.getTime() - 89 * 86400000).toISOString().slice(0, 10), to: asOn, label: 'Last 90 Days', key: 'last_90' };
       case 'mtd':
@@ -614,8 +639,10 @@ module.exports = function installCommandCentre({ app, q }) {
       const meta = STATES.find(s => s.key === stateKey);
       if (!meta) return res.status(400).json({ detail: 'Unknown state' });
 
-      const { asOn, prev, label, mode } = await resolveDates(req.query.as_on, req.query.compare);
+      const { asOn, prev, label, mode } = await resolveDates(req.query.as_on, req.query.compare || 'prev_year');
       const win = resolveRangeWindow(asOn, req.query.range);
+      // Same window shifted one year back — used for YoY collection comparison
+      const prevWin = { from: `${Number(win.from.slice(0, 4)) - 1}${win.from.slice(4)}`, to: `${Number(win.to.slice(0, 4)) - 1}${win.to.slice(4)}` };
       const allUnits = await unitsOfState(stateKey);
       const unitName = {}; allUnits.forEach(u => { unitName[u.unit_code] = u.unit_name; });
 
@@ -640,7 +667,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const lbl = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`;
       const prevMonthLabel = lbl(pm), prevPrevLabel = lbl(pm2);
 
-      const [agentSup, cashSup, coll, os, billing, master, hier, visits, execActive, execBilling, monthSup] = await Promise.all([
+      const [agentSup, cashSup, coll, os, billing, master, hier, visits, execActive, execBilling, monthSup, collPrevYr] = await Promise.all([
         // Agent (credit) supply, agency level, on both dates.
         q(`SELECT s.unit_code, s.agcd,
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
@@ -717,6 +744,11 @@ module.exports = function installCommandCentre({ app, q }) {
            WHERE s.supply_date BETWEEN ? AND ? AND s.unit_code IN (${IN})
              AND s.sup_type_code = 'S01' AND COALESCE(s.publ,'') NOT IN ('P14')
            GROUP BY s.unit_code, s.agcd`, [win.from, win.to, ...codes]),
+        // Previous-year collection for the same window (YoY comparison)
+        q(`SELECT -COALESCE(SUM(amount),0) amt
+           FROM agency_collection
+           WHERE is_valid=1 AND coll_date BETWEEN ? AND ? AND unit_code IN (${IN})`,
+          [prevWin.from, prevWin.to, ...codes]),
       ]);
 
       // ── Active executive map from exec_master ──
@@ -943,6 +975,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const agentCur = bsum(b => b.agent_cur), agentPrev = bsum(b => b.agent_prev);
       const cashCur = bsum(b => b.cash_cur), cashPrev = bsum(b => b.cash_prev);
       const collected = bsum(b => b.collection), billed = bsum(b => b.billed);
+      const collected_prev_yr = Number((collPrevYr.rows || [])[0]?.amt || 0);
       const osTot = bsum(b => b.os);
       const bookTot = bsum(b => b.dcrBook || b.book), seenTot = bsum(b => b.agencies_visited);
 
@@ -1034,7 +1067,9 @@ module.exports = function installCommandCentre({ app, q }) {
                    centres: codes.filter(c => B[c].cash_cur > 0).length },
           collection: { collected, billed, pct: billed ? r1((collected / billed) * 100) : null,
                         gap: Math.max(0, billed - collected), txn: bsum(b => b.txn),
-                        agencies_paid: bsum(b => b.agencies_paid) },
+                        agencies_paid: bsum(b => b.agencies_paid),
+                        prev_yr: collected_prev_yr,
+                        growth_pct: collected_prev_yr ? r1((collected / collected_prev_yr - 1) * 100) : null },
           outstanding: { amount: osTot, agencies: bsum(b => b.os_agencies),
                          critical: bsum(b => b.critical) },
           dcr: { visits: bsum(b => b.visits), agencies_visited: seenTot, book: bookTot,

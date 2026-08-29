@@ -5297,7 +5297,7 @@ window.ccOpenExecPanel = (execCode, name, unitCode) => {
 };
 
 function _csParams(st) {
-  const p = new URLSearchParams({ state: st.state, range: st.range });
+  const p = new URLSearchParams({ state: st.state, range: st.range, compare: 'prev_year' });
   if (st.unit) p.set('unit_code', st.unit);
   return p;
 }
@@ -5981,8 +5981,8 @@ VIEWS.cc_state = () => {
   const d = st.data;
 
   const sel = `<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">Date range</div>
-    <select onchange="csSetRange(this.value)" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#0f172a;font-size:12.5px;min-width:150px">
-      ${[['today', 'Today'], ['mtd', 'This Month'], ['last_month', 'Last Month'], ['fytd', 'Current FY (YTD)'], ['last_90', 'Last 90 Days']]
+    <select onchange="csSetRange(this.value)" style="padding:7px 32px 7px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2364748b' d='M6 8L0 0h12z'/%3E%3C/svg%3E\") no-repeat right 10px center;color:#0f172a;font-size:12.5px;min-width:180px;appearance:none;-webkit-appearance:none;font-weight:500;cursor:pointer">
+      ${[['mtd', 'This Month'], ['last_month', 'Last Month'], ['last_3m', 'Last 3 Months'], ['last_6m', 'Last 6 Months'], ['fytd', 'Current FY (YTD)'], ['covid', 'COVID Period (Mar 2020)'], ['today', 'Today']]
         .map(([v, l]) => `<option value="${v}" ${st.range === v ? 'selected' : ''}>${l}</option>`).join('')}
     </select></div>`;
 
@@ -6012,7 +6012,7 @@ VIEWS.cc_state = () => {
       ${_owner ? `<div style="font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:2px">${_owner}</div>` : ''}
       <div style="font-size:20px;font-weight:800;color:#0f172a;margin-bottom:3px">${d && !d._err && !d.detail ? esc(d.unit_name || d.state_name) : 'Loading…'}</div>
       ${crumb}
-      ${d && !d._err && !d.detail ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px">Snapshot ${esc(d.as_on)} vs ${esc(d.previous)} · ${esc(d.range_label)} ${esc(d.range_from)} → ${esc(d.range_to)}</div>` : ''}
+      ${d && !d._err && !d.detail ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px">Supply: ${esc(d.as_on)} vs ${esc(d.previous)} (${esc(d.compare_label)}) · ${esc(d.range_label)}: ${esc(d.range_from)} → ${esc(d.range_to)}</div>` : ''}
     </div>
     ${sel}
   </div>`;
@@ -6032,10 +6032,10 @@ VIEWS.cc_state = () => {
   const cards = `<div class="cs-strip" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px;margin-bottom:18px">
     ${_ccTopCard({ label: 'Total supply', color: '#1e3a8a',
       value: _ccN(t.supply.current) + ' cp', trend: _ccTrend(t.supply.growth_pct),
-      sub: `Agent + Cash · on ${esc(d.as_on)}` })}
+      sub: `Agent + Cash · on ${esc(d.as_on)} vs ${esc(d.previous)} (${esc(d.compare_label)})` })}
     ${_ccTopCard({ label: 'Agent sale (credit)', color: '#3b82f6',
       value: _ccN(t.agent.current) + ' cp', trend: _ccTrend(t.agent.growth_pct),
-      sub: `${t.agent.share_pct == null ? '—' : t.agent.share_pct + '%'} of supply · was ${_ccN(t.agent.previous)}` })}
+      sub: `${t.agent.share_pct == null ? '—' : t.agent.share_pct + '%'} of supply · was ${_ccN(t.agent.previous)} (${esc(d.compare_label)})` })}
     ${_ccTopCard({ label: 'Cash sale (city)', color: '#0ea5e9',
       value: _ccN(t.cash.current) + ' cp', trend: _ccTrend(t.cash.growth_pct),
       sub: t.cash.current || t.cash.previous
@@ -6043,7 +6043,8 @@ VIEWS.cc_state = () => {
         : 'No city sale here — agent (credit) sale only' })}
     ${_ccTopCard({ label: 'Collection vs billing', color: '#22c55e',
       value: t.collection.pct == null ? '—' : t.collection.pct + '%',
-      sub: `${_ccINR(t.collection.collected)} of ${_ccINR(t.collection.billed)} billed ${esc(d.prev_month_label)}`,
+      trend: t.collection.growth_pct != null ? _ccTrend(t.collection.growth_pct) : '',
+      sub: `${_ccINR(t.collection.collected)} of ${_ccINR(t.collection.billed)} billed ${esc(d.prev_month_label)}${t.collection.prev_yr ? ' · ' + (t.collection.growth_pct != null ? (t.collection.growth_pct > 0 ? '+' : '') + t.collection.growth_pct + '% vs last year' : '') : ''}`,
       barPct: t.collection.pct })}
     ${_ccTopCard({ label: 'Outstanding', color: '#f59e0b',
       value: _ccINR(t.outstanding.amount),
