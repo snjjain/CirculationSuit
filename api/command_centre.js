@@ -687,7 +687,9 @@ module.exports = function installCommandCentre({ app, q }) {
                   MAX(circ_incharge_name) circ, MAX(zonal_head_name) zonal
            FROM exec_hierarchy_mapping GROUP BY exec_code`),
         // Field visits over the selected window, by unit and by executive.
-        q(`SELECT unit_code, emp_code, COUNT(*) visits,
+        // executive_name is carried so visits can be bridged onto the circulation
+        // exec_code — DCR stores HR employee codes, which never equal exec_code.
+        q(`SELECT unit_code, emp_code, MAX(executive_name) executive_name, COUNT(*) visits,
                   COUNT(DISTINCT visit_to_main_code) agencies
            FROM dcr_agency_visit
            WHERE mark_attn_date BETWEEN ? AND ? AND unit_code IN (${IN})
@@ -803,10 +805,29 @@ module.exports = function installCommandCentre({ app, q }) {
           ? Math.max(0, (exBillThis[code] || 0) - (exBillPrev[code] || 0))
           : (exBillThis[code] || 0);
       });
+      /* DCR and circulation identify the same person differently: dcr_agency_visit stores
+         the Oracle HR employee code (R09838, FF06002, VN02303…) while E is keyed by the
+         circulation exec_code (E01773…). Not one of them matches, so attributing visits by
+         emp_code alone silently gave every executive zero while the branch totals — keyed
+         on unit_code — looked right. Bridge on name instead, scoped to the unit: there is a
+         NEERAJ JAIN in both JA0 and BH3, and an unscoped match would move Bharatpur's
+         visits to Jaipur. */
+      const execByName = {};
+      Object.values(E).forEach(e => {
+        const nm = String(e.exec_name || '').trim().toUpperCase();
+        if (!nm) return;
+        [...e.units].forEach(u => { execByName[`${u}|${nm}`] = e.exec_code; });
+      });
+
       visits.rows.forEach(r => {
         const b = B[r.unit_code];
         if (b) { b.visits += N(r.visits); b.agencies_visited += N(r.agencies); b.execs.add(r.emp_code); }
-        const e = E[r.emp_code];
+        let e = E[r.emp_code];
+        if (!e) {
+          const nm = String(r.executive_name || '').trim().toUpperCase();
+          const code = nm ? execByName[`${r.unit_code}|${nm}`] : null;
+          if (code) e = E[code];
+        }
         if (e) { e.visits += N(r.visits); e.agencies_visited += N(r.agencies); }
       });
 
