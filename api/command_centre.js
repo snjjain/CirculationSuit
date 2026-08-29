@@ -66,6 +66,45 @@ module.exports = function installCommandCentre({ app, q }) {
     MEMO.set(key, { at: Date.now(), p });
     return p;
   }
+  /* exec_hierarchy_mapping carries a few names in the raw ERP export form
+     ("RAKESH Garhwal~~106~~106"), and a few placeholder values. One cleaner so every
+     hierarchy name on the dashboard is filtered the same way. */
+  const cleanName = s => {
+    const t = String(s || '').split('~')[0].trim();
+    return t && !/^(n\/a|not applicable|none|null)$/i.test(t) ? t : null;
+  };
+
+  /* unit -> its circulation incharges, one per line of business. A branch can carry two
+     different people and they are not interchangeable: executives (exec_desig 'EXEC') sell
+     through agencies, so their incharge owns agent/credit sale; centre incharges
+     (exec_desig 'CI') run the city centres, so theirs owns cash sale. JA0 is the clear
+     case — Neeraj Jain over 22 executives, Narendra Sharma over 101 centre incharges.
+     Most branches have the same person in both roles; branches with no city sale have no
+     'CI' rows at all. Within a role, the name most of that role reports to wins. */
+  function unitCircIncharge() {
+    return memo('unitCirc', async () => {
+      const { rows } = await q(
+        `SELECT unit_code, exec_desig, circ_incharge_name nm, COUNT(*) c
+         FROM exec_hierarchy_mapping
+         WHERE circ_incharge_name IS NOT NULL AND circ_incharge_name <> ''
+           AND exec_desig IN ('EXEC','CI')
+         GROUP BY unit_code, exec_desig, circ_incharge_name`);
+      const tally = {}; // unit -> role -> name -> count
+      rows.forEach(r => {
+        const nm = cleanName(r.nm); if (!nm) return;
+        const role = r.exec_desig === 'CI' ? 'cash' : 'agent';
+        const u = tally[r.unit_code] = (tally[r.unit_code] || { agent: {}, cash: {} });
+        u[role][nm] = (u[role][nm] || 0) + N(r.c);
+      });
+      const top = m => { const e = Object.entries(m).sort((a, b) => b[1] - a[1])[0]; return e ? e[0] : null; };
+      const out = {};
+      Object.keys(tally).forEach(u => {
+        out[u] = { agent: top(tally[u].agent), cash: top(tally[u].cash) };
+      });
+      return out;
+    });
+  }
+
   // unit -> the state most of its agencies sit in. Used by supply bucketing, the state
   // head rollup and the state dashboard's branch list, so they cannot disagree.
   function unitHomeState() {
@@ -790,6 +829,8 @@ module.exports = function installCommandCentre({ app, q }) {
                  execs: a.execs, coverage_pct: (a.dcrBook || a.book) ? r1((a.agencies_visited / (a.dcrBook || a.book)) * 100) : null },
         };
       };
+      const [circMap, heads] = await Promise.all([unitCircIncharge(), stateHeads()]);
+
       const branches = groupBy === 'unit'
         ? units.map(u => {
             const b = B[u.unit_code];
@@ -805,6 +846,9 @@ module.exports = function installCommandCentre({ app, q }) {
             br.supply.cash_prev = b.cash_prev;
             br.supply.agent_growth_pct = r1(pct(b.agent_cur, b.agent_prev));
             br.supply.cash_growth_pct = r1(pct(b.cash_cur, b.cash_prev));
+            const ci = circMap[u.unit_code] || {};
+            br.circ_agent = ci.agent || null;   // owns agent (credit) sale via executives
+            br.circ_cash  = ci.cash  || null;   // owns cash (city) sale via centre incharges
             return br;
           }).sort((a, x) => x.supply.current - a.supply.current)
         : Object.values(E).map(e => {
@@ -875,6 +919,11 @@ module.exports = function installCommandCentre({ app, q }) {
         unit_name: isBranch ? (unitName[unitScope] || unitScope) : null,
         group_by: groupBy, group_label: groupBy === 'unit' ? 'Branch' : 'Executive',
         os_code: meta.os,
+        // Who owns this view: the state's VP, and — when drilled into one branch —
+        // that branch's circulation incharge.
+        vp: heads[stateKey] || null,
+        circ_agent: isBranch ? ((circMap[unitScope] || {}).agent || null) : null,
+        circ_cash:  isBranch ? ((circMap[unitScope] || {}).cash  || null) : null,
         as_on: asOn, previous: prev, compare: mode, compare_label: label,
         range: win.key, range_label: win.label, range_from: win.from, range_to: win.to,
         prev_month_label: prevMonthLabel,

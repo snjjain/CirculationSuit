@@ -5492,6 +5492,18 @@ function _csAIInsights(rows, seg) {
   </div>`;
 }
 
+/* Circulation-incharge caption for a branch. Executives sell through agencies (agent
+   sale) and centre incharges run the city centres (cash sale); those can report to two
+   different people, so name both unless one person holds both roles. */
+function _csCircLine(agent, cash) {
+  const a = agent || null, c = cash || null;
+  if (!a && !c) return '';
+  const S_ = 'font-size:10px;color:#94a3b8';
+  if (a && c && a === c) return `<div style="${S_}">CI · ${esc(a)}</div>`;
+  if (a && c) return `<div style="${S_}">Agent CI · ${esc(a)} &nbsp;·&nbsp; Cash CI · ${esc(c)}</div>`;
+  return `<div style="${S_}">${a ? 'Agent' : 'Cash'} CI · ${esc(a || c)}</div>`;
+}
+
 /* ── Center Wise (CI) table — dedicated layout for Centre Incharges ── */
 function _csCITable(st, d, rows) {
   const gLabel = 'Centre Incharge';
@@ -5637,7 +5649,11 @@ function _csConsolidated(st, d) {
       ? (r.hawker_centres || r.hawker_count
           ? `<span style="font-size:10px;color:#0ea5e9">${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hawkers</span>`
           : `<span style="font-size:10px;color:#0ea5e9">Centre Incharge</span>`)
-      : (isBranch && r.unit_name ? `<div style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</div>` : '');
+      : (isBranch && r.unit_name ? `<div style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</div>`
+        // At state level the rows are branches — name the circulation incharge behind each.
+        // Agent and cash sale can sit under different people, so they are labelled apart
+        // and only merged into one line when the same person holds both.
+        : _csCircLine(r.circ_agent, r.circ_cash));
     const nameCl = `<div><b style="color:#1e3a8a;font-size:12.5px">${esc(r.name)}</b>${r.sub ? ` <span style="font-size:10px;font-weight:600;color:${r.is_ci?'#0ea5e9':'#94a3b8'};background:#f1f5f9;padding:1px 5px;border-radius:4px">${esc(r.sub)}</span>` : ''}</div>
       ${ciSub}`;
     const agentVal = r.supply.agent;
@@ -5714,8 +5730,23 @@ VIEWS.cc_state = () => {
       : `<b style="color:#0f172a">${esc(d.state_name)}</b>`}` : ''}
   </div>`;
 
+  /* Who owns what is on screen — the state's VP, and the branch's circulation incharge
+     once drilled in. Sits above the title so the name reads as ownership of the view. */
+  const _owner = (d && !d._err && !d.detail) ? (() => {
+    const parts = [];
+    if (d.vp) parts.push(`VP · ${esc(d.vp)}`);
+    const a = d.circ_agent, c = d.circ_cash;
+    if (a && c && a === c) parts.push(`CI · ${esc(a)}`);
+    else {
+      if (a) parts.push(`Agent CI · ${esc(a)}`);
+      if (c) parts.push(`Cash CI · ${esc(c)}`);
+    }
+    return parts.join('&nbsp;&nbsp;·&nbsp;&nbsp;');
+  })() : '';
+
   const bar = `<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:14px;flex-wrap:wrap">
     <div>
+      ${_owner ? `<div style="font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:2px">${_owner}</div>` : ''}
       <div style="font-size:20px;font-weight:800;color:#0f172a;margin-bottom:3px">${d && !d._err && !d.detail ? esc(d.unit_name || d.state_name) : 'Loading…'}</div>
       ${crumb}
       ${d && !d._err && !d.detail ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px">Snapshot ${esc(d.as_on)} vs ${esc(d.previous)} · ${esc(d.range_label)} ${esc(d.range_from)} → ${esc(d.range_to)}</div>` : ''}
