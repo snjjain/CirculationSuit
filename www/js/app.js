@@ -5691,10 +5691,12 @@ function _csConsolidated(st, d) {
       ? (r.hawker_centres || r.hawker_count
           ? `<span style="font-size:10px;color:#0ea5e9">${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hawkers</span>`
           : `<span style="font-size:10px;color:#0ea5e9">Centre Incharge</span>`)
-      : (isBranch && r.unit_name ? `<div style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</div>`
-        // At state level the rows are branches — name the circulation incharge behind each.
-        // Agent and cash sale can sit under different people, so they are labelled apart
-        // and only merged into one line when the same person holds both.
+      /* At branch level the rows are executives: their direct manager is the dak incharge
+         (ERP field edtn_incharge — named "edition" but it carries the dak incharge), not
+         the circulation incharge two levels above. At state level the rows are branches,
+         where agent and cash sale can sit under different circulation incharges. */
+      : (isBranch && (r.unit_name || r.edtn_incharge)
+        ? `<div style="font-size:10px;color:#94a3b8">${esc(r.unit_name || '')}${r.edtn_incharge ? `${r.unit_name ? ' · ' : ''}Dak · ${esc(r.edtn_incharge)}` : ''}</div>`
         : _csCircLine(r.circ_agent, r.circ_cash));
     const nameCl = `<div><b style="color:#1e3a8a;font-size:12.5px">${esc(r.name)}</b>${r.sub ? ` <span style="font-size:10px;font-weight:600;color:${r.is_ci?'#0ea5e9':'#94a3b8'};background:#f1f5f9;padding:1px 5px;border-radius:4px">${esc(r.sub)}</span>` : ''}</div>
       ${ciSub}`;

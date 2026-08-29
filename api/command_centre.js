@@ -873,6 +873,12 @@ module.exports = function installCommandCentre({ app, q }) {
             execRow.hawker_centres = e.hawker_centres;
             execRow.hawker_count = e.hawker_count;
             execRow.hawker_cent_name = e.hawker_cent_name || null;
+            /* The executive's direct manager. exec_hierarchy_mapping calls the column
+               edtn_incharge ("edition"), but it carries the DAK incharge — every JA0
+               executive routes through Ankit Bihari Sharma (69) to Neeraj Jain, so the
+               circulation incharge is two levels up, not the reporting manager. */
+            execRow.edtn_incharge = cleanName(h.edtn) || null;
+            execRow.circ_incharge = cleanName(h.circ) || null;
             return execRow;
           }).filter(r => r.supply.current || r.outstanding.amount || r.dcr.book)
             .sort((a, x) => x.supply.current - a.supply.current);
