@@ -4118,7 +4118,7 @@ function _cmdViewLegacy() {
    share can never disagree with each other. */
 
 function _ccState() {
-  return S.live.cc || (S.live.cc = { asOn: '', compare: 'prev_day', range: 'mtd', state: '', unit: '', district: '', data: null, _loading: false, drill: null });
+  return S.live.cc || (S.live.cc = { asOn: '', compare: 'prev_year', range: 'mtd', state: '', unit: '', district: '', data: null, _loading: false, drill: null });
 }
 window.ccSet = (k, v) => {
   const st = _ccState();
@@ -5004,11 +5004,15 @@ function _cmdViewNew() {
      figures are always dated without a separate crumb line. */
   const bar = `<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:14px;flex-wrap:wrap">
     <div style="font-size:12px;color:#64748b">
-      ${d && !d._err ? `Snapshot: <b style="color:#0f172a">${esc(d.as_on)}</b> · compared with <b style="color:#0f172a">${esc(d.previous)}</b>` : ''}
+      ${d && !d._err ? `Supply: <b style="color:#0f172a">${esc(d.as_on)}</b> vs <b style="color:#0f172a">${esc(d.previous)}</b> <span style="color:#94a3b8">(${esc(d.compare_label || 'Previous Year')})</span>` : ''}
       ${st.state ? ` · <b style="color:#1e3a8a">${esc(st.state)}</b> <a onclick="ccSet('state','')" style="cursor:pointer;color:#64748b;text-decoration:underline">clear</a>` : ''}
     </div>
     <div style="display:flex;align-items:flex-end;gap:9px">
-      ${sel('Date range', 'range', st.range, [['today','Today'],['mtd','This Month'],['last_month','Last Month'],['fytd','Current FY (YTD)'],['last_90','Last 90 Days']])}
+      <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">Date range</div>
+      <select onchange="ccSet('range',this.value)" style="padding:7px 32px 7px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%278%27 viewBox=%270 0 12 8%27%3E%3Cpath fill=%27%2364748b%27 d=%27M6 8L0 0h12z%27/%3E%3C/svg%3E') no-repeat right 10px center;color:#0f172a;font-size:12.5px;min-width:180px;appearance:none;-webkit-appearance:none;font-weight:500;cursor:pointer">
+        ${[['mtd','This Month'],['last_month','Last Month'],['last_3m','Last 3 Months'],['last_6m','Last 6 Months'],['fytd','Current FY (YTD)'],['covid','COVID Period (Mar 2020)'],['today','Today']]
+          .map(([v,l]) => `<option value="${esc(v)}" ${st.range === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+      </select></div>
     </div>
   </div>`;
 
