@@ -326,11 +326,55 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
+  /* ── exec_code → DCR employee code(s) ────────────────────────────────────────
+     The DCR tables store the Oracle HR employee code (R09838, FF06002, VN02303…);
+     circulation identifies the same person by exec_code (E01773…). Not one of them
+     coincides, so any DCR lookup keyed on exec_code returns nothing at all — which read
+     as "0 visits" rather than as an error. Bridge on name, scoped to the executive's own
+     units: there is a NEERAJ JAIN in both JA0 and BH3, and an unscoped match would hand
+     one branch's visits to the other. execCode is kept in the list in case some unit does
+     use the same code in both systems. */
+  const _dcrEmpCache = new Map();
+  async function dcrEmpCodes(execCode) {
+    if (_dcrEmpCache.has(execCode)) return _dcrEmpCache.get(execCode);
+    const p = (async () => {
+      let nm = '', units = [];
+      const { rows: am } = await q(
+        `SELECT MAX(executive_name) nm, GROUP_CONCAT(DISTINCT unit) units
+         FROM agency_master WHERE executive_code = ?`, [execCode]);
+      nm = String(am[0]?.nm || '').trim();
+      units = String(am[0]?.units || '').split(',').map(s => s.trim()).filter(Boolean);
+      if (!nm || !units.length) {
+        // Centre incharges carry no agencies, so agency_master cannot name them.
+        const { rows: hm } = await q(
+          `SELECT MAX(exec_desc) nm, GROUP_CONCAT(DISTINCT unit_code) units
+           FROM exec_hierarchy_mapping WHERE exec_code = ?`, [execCode]);
+        nm = String(hm[0]?.nm || '').trim();
+        units = String(hm[0]?.units || '').split(',').map(s => s.trim()).filter(Boolean);
+      }
+      const out = new Set([execCode]);
+      if (nm && units.length) {
+        const { rows } = await q(
+          `SELECT DISTINCT emp_code FROM dcr_agency_visit
+           WHERE UPPER(TRIM(executive_name)) = UPPER(?)
+             AND unit_code IN (${units.map(() => '?').join(',')})
+             AND emp_code IS NOT NULL AND emp_code <> ''`, [nm, ...units]);
+        rows.forEach(r => out.add(r.emp_code));
+      }
+      return [...out];
+    })();
+    _dcrEmpCache.set(execCode, p);
+    return p;
+  }
+
   // ══ EXECUTIVE DETAIL ══
   app.get('/api/exec-perf/executive/:exec_code', async (req, res) => {
     try {
       const execCode     = String(req.params.exec_code);
       const { from, to } = parseDates(req.query);
+      // Resolve first: the DCR queries below key on HR employee codes, not exec_code.
+      const empCodes = await dcrEmpCodes(execCode);
+      const empIn    = empCodes.map(() => '?').join(',');
 
       const [execInfo, supR, colR, ouR, agencies, hierR, dcrVisitsR, dcrSummR] = await Promise.all([
         q(`SELECT executive_code, MAX(executive_name) exec_name, MAX(unit_state_nm) state_name,
@@ -403,14 +447,14 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
         q(`SELECT unit_code, visit_to_main_code agcd,
                   COUNT(*) visit_count, MAX(mark_attn_date) last_visit
            FROM dcr_agency_visit
-           WHERE emp_code = ? AND mark_attn_date BETWEEN ? AND ?
+           WHERE emp_code IN (${empIn}) AND mark_attn_date BETWEEN ? AND ?
              AND visit_to_main_code IS NOT NULL AND visit_to_main_code != ''
-           GROUP BY unit_code, visit_to_main_code`, [execCode, from, to]),
+           GROUP BY unit_code, visit_to_main_code`, [...empCodes, from, to]),
 
         // Active days + total visits summary for the period
         q(`SELECT COUNT(DISTINCT mark_attn_date) active_days, COUNT(*) total_visits
            FROM dcr_agency_visit
-           WHERE emp_code = ? AND mark_attn_date BETWEEN ? AND ?`, [execCode, from, to]),
+           WHERE emp_code IN (${empIn}) AND mark_attn_date BETWEEN ? AND ?`, [...empCodes, from, to]),
       ]);
 
       const ei         = execInfo.rows[0] || {};
