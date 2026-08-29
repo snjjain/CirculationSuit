@@ -4301,15 +4301,132 @@ function _ccCIFetch(x, execCode, unitCode) {
 
 /* The executive panel: their whole book in one column — coverage, money, hierarchy and
    the agencies they carry, each of which drills back down into the agency panel. */
+/* Toggle the drill-down behind a KPI card in the executive flyout. */
+window.ccFlyExecDrill = key => {
+  const x = _ccFlyTop(); if (!x || x.kind !== 'exec') return;
+  x.drill = x.drill === key ? null : key;
+  render();
+};
+
+/* The rows behind one KPI card. Supply/collection/outstanding read the agency book;
+   visits/active-days/coverage read the DCR visit log. Coverage is the one that earns its
+   keep — it lists the agencies NOT visited, which is the actual work item. */
+function _ccFlyExecDrillBody(x, e, ags) {
+  const key = x.drill; if (!key) return '';
+  const visits = x.data.visits || [];
+  const esc_ = s => esc(String(s == null ? '' : s));
+  const wrap = (title, inner) => `<div style="margin-top:10px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
+    <div style="background:#f8fafc;padding:7px 10px;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#475569;border-bottom:1px solid #e2e8f0">${title}</div>
+    <div style="max-height:280px;overflow-y:auto">${inner}</div></div>`;
+  const empty = m => `<div style="padding:16px;text-align:center;color:#94a3b8;font-size:12px">${m}</div>`;
+  const th = (t, r) => `<th style="text-align:${r ? 'right' : 'left'};padding:5px 8px;font-size:9.5px;font-weight:800;color:#94a3b8;text-transform:uppercase;white-space:nowrap">${t}</th>`;
+  const tbl = (head, body) => `<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  const agRow = a => `<tr onclick="ccFlyAgency('${_csQ(a.unit_code)}','${_csQ(a.ag_code)}','${_csQ(a.ag_name || '')}')"
+      style="cursor:pointer;border-top:1px solid #f1f5f9" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">`;
+
+  if (key === 'visits' || key === 'active_days') {
+    if (!visits.length) return wrap('Visit log', empty('No visits recorded in this window.'));
+    if (key === 'active_days') {
+      const byDay = {};
+      visits.forEach(v => { (byDay[v.visit_date] = byDay[v.visit_date] || []).push(v); });
+      const days = Object.keys(byDay).sort().reverse();
+      return wrap(`${days.length} active days`, tbl(th('Date') + th('Visits', 1) + th('Agencies', 1),
+        days.map(dt => {
+          const list = byDay[dt];
+          const names = [...new Set(list.map(v => v.ag_name || v.ag_code))].join(', ');
+          return `<tr style="border-top:1px solid #f1f5f9">
+            <td style="padding:5px 8px;white-space:nowrap"><b>${esc_(dt)}</b></td>
+            <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">${list.length}</td>
+            <td style="padding:5px 8px;text-align:right;color:#64748b;font-size:10.5px;max-width:230px;overflow:hidden;text-overflow:ellipsis">${esc_(names)}</td>
+          </tr>`;
+        }).join('')));
+    }
+    return wrap(`${visits.length} visits`, tbl(th('Date') + th('Agency') + th('Station') + th('Remarks'),
+      visits.map(v => {
+        const p = typeof fmtPurpose === 'function' ? fmtPurpose(v.purpose) : null;
+        const rem = v.remarks ? remHtml(String(v.remarks).slice(0, 70)) : '';
+        return `<tr style="border-top:1px solid #f1f5f9">
+          <td style="padding:5px 8px;white-space:nowrap;color:#64748b">${esc_(v.visit_date)}</td>
+          <td style="padding:5px 8px"><b style="color:#1e3a8a">${esc_(v.ag_name || v.ag_code)}</b>${p ? `<div style="font-size:10px;color:#7c3aed">${p}</div>` : ''}</td>
+          <td style="padding:5px 8px;color:#64748b;font-size:10.5px;white-space:nowrap">${esc_(v.station || '—')}</td>
+          <td style="padding:5px 8px;color:#475569;font-size:10.5px">${rem || '<span style="color:#cbd5e1">—</span>'}</td>
+        </tr>`;
+      }).join('')));
+  }
+
+  if (key === 'agencies_visited' || key === 'coverage') {
+    if (key === 'agencies_visited') {
+      /* Count from the visit log, not the agency book: an executive can visit an agency
+         that is not on their own book (cover duty, a recent reassignment), and deriving
+         this from `ags` would drop it — leaving the list one short of the card. */
+      const byAg = {};
+      visits.forEach(v => {
+        const k = `${v.unit_code}|${v.ag_code}`;
+        if (!byAg[k]) byAg[k] = { unit_code: v.unit_code, ag_code: v.ag_code, ag_name: v.ag_name,
+                                  station: v.station, n: 0, last: '' };
+        byAg[k].n++;
+        if (String(v.visit_date) > byAg[k].last) byAg[k].last = String(v.visit_date);
+      });
+      const seen = Object.values(byAg).sort((a, b) => b.n - a.n);
+      if (!seen.length) return wrap('Agencies visited', empty('No agency visits in this window.'));
+      const own = new Set(ags.map(a => `${a.unit_code}|${a.ag_code}`));
+      return wrap(`${seen.length} agencies visited`, tbl(th('Agency') + th('Visits', 1) + th('Last visit', 1),
+        seen.map(a => `${agRow(a)}
+          <td style="padding:5px 8px"><b style="color:#1e3a8a">${esc_(a.ag_name || a.ag_code)}</b>
+            ${own.has(`${a.unit_code}|${a.ag_code}`) ? '' : '<span style="font-size:9px;font-weight:700;color:#b45309;background:#fef3c7;border-radius:4px;padding:1px 5px;margin-left:4px">not in book</span>'}
+            <div style="color:#94a3b8;font-size:10px">${esc_(a.station || '')}</div></td>
+          <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">${a.n}</td>
+          <td style="padding:5px 8px;text-align:right;color:#64748b;white-space:nowrap">${esc_(a.last || '—')}</td></tr>`).join('')));
+    }
+    // Coverage: the gap is the point — who has NOT been seen.
+    const unseen = ags.filter(a => !(a.visit_count || 0) && a.status === 'Active')
+      .sort((a, b) => (b.total_outstanding || 0) - (a.total_outstanding || 0));
+    if (!unseen.length) return wrap('Not visited', empty('Every active agency was visited in this window.'));
+    return wrap(`${unseen.length} active agencies NOT visited`, tbl(th('Agency') + th('Supply', 1) + th('Outstanding', 1),
+      unseen.slice(0, 60).map(a => `${agRow(a)}
+        <td style="padding:5px 8px"><b style="color:#1e3a8a">${esc_(a.ag_name || a.ag_code)}</b>
+          <div style="color:#94a3b8;font-size:10px">${esc_(a.city_name || a.unit_name || '')}</div></td>
+        <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">${_apFmtN(a.total_supply)}</td>
+        <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums;color:${(a.total_outstanding||0)>0?'#b91c1c':'#0f172a'}">${_apFmtC(a.total_outstanding)}</td></tr>`).join('')));
+  }
+
+  // Money and book cards all list agencies, ranked by whichever number was clicked.
+  const spec = {
+    agencies:    ['All agencies',        a => a.total_supply,      _apFmtN, 'Supply'],
+    supply:      ['Agencies by supply',  a => a.total_supply,      _apFmtN, 'Supply'],
+    collection:  ['Agencies by collection', a => a.total_collection, _apFmtC, 'Collected'],
+    coll_pct:    ['Weakest collection %', a => -(a.collection_pct == null ? 999 : a.collection_pct), null, 'Coll %'],
+    outstanding: ['Agencies by dues',    a => a.total_outstanding, _apFmtC, 'Outstanding'],
+  }[key];
+  if (!spec) return '';
+  const [title, sortBy, fmt, colLabel] = spec;
+  const list = ags.slice().sort((a, b) => sortBy(b) - sortBy(a));
+  if (!list.length) return wrap(title, empty('No agencies in this book.'));
+  return wrap(`${title} · ${list.length}`, tbl(th('Agency') + th(colLabel, 1) + th('Coll %', 1) + th('Outstanding', 1),
+    list.slice(0, 60).map(a => `${agRow(a)}
+      <td style="padding:5px 8px"><b style="color:#1e3a8a">${esc_(a.ag_name || a.ag_code)}</b>
+        <div style="color:#94a3b8;font-size:10px">${esc_(a.city_name || a.unit_name || '')}${a.status && a.status !== 'Active' ? ' · ' + esc_(a.status) : ''}</div></td>
+      <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">${fmt ? fmt(sortBy(a)) : (a.collection_pct == null ? '—' : a.collection_pct + '%')}</td>
+      <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">${a.collection_pct == null ? '—' : a.collection_pct + '%'}</td>
+      <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums;color:${(a.total_outstanding||0)>0?'#b91c1c':'#0f172a'}">${_apFmtC(a.total_outstanding)}</td></tr>`).join('')));
+}
+
 function _ccFlyExecPanel(x) {
   if (x.loading) return `<div style="padding:26px;text-align:center;color:#64748b;font-size:13px">Loading ${esc(x.name)}…</div>`;
   if (x.err || !x.data) return `<div style="padding:20px;color:#b91c1c;font-size:13px">Could not load this executive.<div style="color:#64748b;font-size:11.5px;margin-top:5px">${esc(x.err || 'No data returned.')}</div></div>`;
   const d = x.data, e = d.exec || {}, ags = d.agencies || [];
   const q = v => String(v == null ? '' : v).replace(/'/g, "\\'");
-  const kpi = (label, val, tone) => `<div style="background:#f8fafc;border:1px solid #eef2f7;border-radius:9px;padding:8px 10px">
-    <div style="font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8">${label}</div>
-    <div style="font-size:15px;font-weight:800;color:${tone || '#0f172a'};margin-top:2px;font-variant-numeric:tabular-nums">${val}</div>
-  </div>`;
+  /* Every card is a question ("40 agencies visited — which ones?"), so each one opens the
+     rows behind its own number. `drill` names the open card; clicking it again closes. */
+  const kpi = (label, val, tone, key) => {
+    const on = key && x.drill === key;
+    const click = key ? ` onclick="ccFlyExecDrill('${key}')" title="Show the ${label.toLowerCase()} behind this number"` : '';
+    return `<div${click} style="background:${on ? '#eef4ff' : '#f8fafc'};border:1px solid ${on ? '#c7d7fe' : '#eef2f7'};border-radius:9px;padding:8px 10px;${key ? 'cursor:pointer' : ''}"
+      ${key ? `onmouseenter="if(!${on})this.style.background='#f1f5f9'" onmouseleave="if(!${on})this.style.background='#f8fafc'"` : ''}>
+      <div style="font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:${on ? '#1e3a8a' : '#94a3b8'}">${label}${key ? `<span style="float:right;font-weight:700">${on ? '▾' : '›'}</span>` : ''}</div>
+      <div style="font-size:15px;font-weight:800;color:${tone || '#0f172a'};margin-top:2px;font-variant-numeric:tabular-nums">${val}</div>
+    </div>`;
+  };
   const fact = (k, v) => v ? `<div style="display:flex;gap:8px;font-size:11.5px;line-height:1.8">
     <span style="flex:none;width:96px;color:#94a3b8">${k}</span><span style="color:#0f172a">${esc(String(v))}</span></div>` : '';
   const sec = (title, inner) => inner ? `<div style="margin-top:14px">
@@ -4419,17 +4536,18 @@ function _ccFlyExecPanel(x) {
     </div>
     <div style="font-size:11px;color:#64748b;margin-bottom:9px">Window: ${esc(d.from || '')} → ${esc(d.to || '')}</div>
     <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
-      ${kpi('Agencies', _apFmtN(e.agency_count))}
+      ${kpi('Agencies', _apFmtN(e.agency_count), null, 'agencies')}
       ${/* window TOTAL, unlike the Command Centre cards which are copies per day */ ''}
-      ${kpi('Daily Supply', _apFmtN(e.daily_supply != null ? e.daily_supply : e.total_supply))}
-      ${kpi('Collection', _apFmtC(e.total_collection))}
-      ${kpi('Collection %', e.collection_pct == null ? '—' : e.collection_pct + '%')}
-      ${kpi('Outstanding', _apFmtC(e.total_outstanding), (e.total_outstanding || 0) > 0 ? '#b91c1c' : '#0f172a')}
-      ${kpi('Visits', _apFmtN(e.total_visits))}
-      ${kpi('Active days', _apFmtN(e.active_days))}
-      ${kpi('Agencies visited', _apFmtN(e.agencies_visited))}
-      ${kpi('Coverage', cov == null ? '—' : cov + '%', cov != null && cov < 20 ? '#b91c1c' : '#15803d')}
+      ${kpi('Daily Supply', _apFmtN(e.daily_supply != null ? e.daily_supply : e.total_supply), null, 'supply')}
+      ${kpi('Collection', _apFmtC(e.total_collection), null, 'collection')}
+      ${kpi('Collection %', e.collection_pct == null ? '—' : e.collection_pct + '%', null, 'coll_pct')}
+      ${kpi('Outstanding', _apFmtC(e.total_outstanding), (e.total_outstanding || 0) > 0 ? '#b91c1c' : '#0f172a', 'outstanding')}
+      ${kpi('Visits', _apFmtN(e.total_visits), null, 'visits')}
+      ${kpi('Active days', _apFmtN(e.active_days), null, 'active_days')}
+      ${kpi('Agencies visited', _apFmtN(e.agencies_visited), null, 'agencies_visited')}
+      ${kpi('Coverage', cov == null ? '—' : cov + '%', cov != null && cov < 20 ? '#b91c1c' : '#15803d', 'coverage')}
     </div>
+    ${_ccFlyExecDrillBody(x, e, ags)}
     ${sec('Posting', `<div>${fact('Branch', e.units)}${fact('State', e.state_name)}</div>`)}
     ${sec('Reports to', chain)}
     ${sec('Agencies by dues', agTable)}

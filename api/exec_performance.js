@@ -376,7 +376,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const empCodes = await dcrEmpCodes(execCode);
       const empIn    = empCodes.map(() => '?').join(',');
 
-      const [execInfo, supR, colR, ouR, agencies, hierR, dcrVisitsR, dcrSummR] = await Promise.all([
+      const [execInfo, supR, colR, ouR, agencies, hierR, dcrVisitsR, dcrSummR, dcrLogR] = await Promise.all([
         q(`SELECT executive_code, MAX(executive_name) exec_name, MAX(unit_state_nm) state_name,
                   GROUP_CONCAT(DISTINCT unit_name ORDER BY unit_name SEPARATOR ' / ') units,
                   COUNT(DISTINCT agcd) agency_count
@@ -455,6 +455,15 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
         q(`SELECT COUNT(DISTINCT mark_attn_date) active_days, COUNT(*) total_visits
            FROM dcr_agency_visit
            WHERE emp_code IN (${empIn}) AND mark_attn_date BETWEEN ? AND ?`, [...empCodes, from, to]),
+
+        // Individual visits for the window — powers the drill-downs behind the KPI cards.
+        // Capped: an executive doing 100+ visits a month is normal, 500 is not.
+        q(`SELECT mark_attn_date visit_date, unit_code, visit_to_main_code agcd,
+                  station, visit_purpose, visit_remarks, from_time, till_time
+           FROM dcr_agency_visit
+           WHERE emp_code IN (${empIn}) AND mark_attn_date BETWEEN ? AND ?
+           ORDER BY mark_attn_date DESC, from_time DESC
+           LIMIT 500`, [...empCodes, from, to]),
       ]);
 
       const ei         = execInfo.rows[0] || {};
@@ -469,6 +478,24 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
         visitMap.set(`${r.unit_code}|${r.agcd}`, { visit_count: N(r.visit_count), last_visit: r.last_visit });
       }
       const dcrSumm = dcrSummR.rows[0] || {};
+
+      /* Names for the visit log. dcr_agency_visit stores only codes — the agency code, and
+         a station CODE in the column called `station` (D00025675, not KISHANGARH) — so both
+         are resolved from agency_master here. This is the same code-first resolution that
+         lets the dashboard show agency names the ERP's own report leaves blank. */
+      const agNameOf = new Map();
+      const visitKeys = [...new Set(dcrLogR.rows.filter(r => r.agcd)
+        .map(r => `${r.unit_code}|${r.agcd}`))];
+      if (visitKeys.length) {
+        const { rows: nm } = await q(
+          `SELECT unit, agcd, MAX(ag_name) ag_name, MAX(station_name) station_name
+           FROM agency_master
+           WHERE (unit, agcd) IN (${visitKeys.map(() => '(?,?)').join(',')})
+           GROUP BY unit, agcd`,
+          visitKeys.flatMap(k => k.split('|')));
+        nm.forEach(r => agNameOf.set(`${r.unit}|${r.agcd}`,
+          { name: r.ag_name, station: r.station_name }));
+      }
 
       res.json({
         from, to,
@@ -517,6 +544,21 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
           last_visit:       (visitMap.get(`${r.unit_code}|${r.ag_code}`) || {}).last_visit  || null,
           status: r.suspend_date ? 'Suspended' : (r.supply_stop_flag === 'Y' ? 'Stopped' : 'Active'),
         })),
+        /* The visit log. dcr_agency_visit stores only the agency CODE, so the name is
+           resolved here from the executive's own book — which is also why the dashboard
+           shows names the ERP's own report leaves blank. A visit to an agency outside
+           their book keeps the bare code rather than guessing. */
+        visits: dcrLogR.rows.map(r => {
+          const m = agNameOf.get(`${r.unit_code}|${r.agcd}`) || {};
+          return {
+            visit_date: r.visit_date, unit_code: r.unit_code,
+            ag_code: r.agcd, ag_name: m.name || null,
+            station: m.station || null,
+            purpose: r.visit_purpose || null,
+            remarks: r.visit_remarks || null,
+            from_time: r.from_time || null, till_time: r.till_time || null,
+          };
+        }),
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
