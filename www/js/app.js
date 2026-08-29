@@ -5657,12 +5657,16 @@ window.csZhToggle = key => {
   const st = _csState();
   if (!st.zhExp) st.zhExp = new Set();
   if (st.zhExp.has(key)) st.zhExp.delete(key); else st.zhExp.add(key);
-  render();
+  const tbody = document.getElementById('zh-perf-tbody');
+  if (tbody) {
+    tbody.innerHTML = _csZHRows(st, st.data);
+  } else {
+    render();
+  }
 };
 
-function _csZHPerformance(st, d) {
+function _csZHRows(st, d) {
   const zh_perf = (d && d.zh_perf) || [];
-  if (!zh_perf.length) return '';
   const exp = st.zhExp || (st.zhExp = new Set());
 
   const NF = v => { const n = Number(v)||0; if (!n) return '<span style="color:#cbd5e1">—</span>'; return n >= 100000 ? (n/100000).toFixed(1)+'L' : n >= 1000 ? (n/1000).toFixed(0)+'k' : String(n); };
@@ -5675,15 +5679,6 @@ function _csZHPerformance(st, d) {
     if ((sc != null && sc < 0) || (cp != null && cp < 75) || vs === 0) return '<span style="background:#fef3c7;color:#d97706;font-size:10px;padding:1px 5px;border-radius:3px">Watch</span>';
     return '<span style="background:#dcfce7;color:#16a34a;font-size:10px;padding:1px 5px;border-radius:3px">Good</span>';
   };
-
-  const thS = 'text-align:right;padding:5px 7px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap';
-  const thead = `<thead><tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">
-    <th style="text-align:left;padding:5px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Name</th>
-    <th style="${thS}">Agent Sale</th><th style="${thS}">Cash Sale</th><th style="${thS}">Growth</th>
-    <th style="${thS}">Prev Bill</th><th style="${thS}">Collection</th><th style="${thS}">Coll%</th>
-    <th style="${thS}">OS</th><th style="${thS}">Critical</th><th style="${thS}">Visits</th>
-    <th style="text-align:center;padding:5px 7px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th>
-  </tr></thead>`;
 
   const tdR = v => `<td style="text-align:right;padding:5px 7px;font-variant-numeric:tabular-nums">${v}</td>`;
   const tdC = v => `<td style="text-align:center;padding:5px 7px">${v}</td>`;
@@ -5732,12 +5727,28 @@ function _csZHPerformance(st, d) {
       });
     });
   });
+  return rows.join('');
+}
+
+function _csZHPerformance(st, d) {
+  const zh_perf = (d && d.zh_perf) || [];
+  if (!zh_perf.length) return '';
+  if (!st.zhExp) st.zhExp = new Set();
+
+  const thS = 'text-align:right;padding:5px 7px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap';
+  const thead = `<thead><tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">
+    <th style="text-align:left;padding:5px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Name</th>
+    <th style="${thS}">Agent Sale</th><th style="${thS}">Cash Sale</th><th style="${thS}">Growth</th>
+    <th style="${thS}">Prev Bill</th><th style="${thS}">Collection</th><th style="${thS}">Coll%</th>
+    <th style="${thS}">OS</th><th style="${thS}">Critical</th><th style="${thS}">Visits</th>
+    <th style="text-align:center;padding:5px 7px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th>
+  </tr></thead>`;
 
   return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:16px">
     <div style="font-size:14px;font-weight:800;color:#1e3a8a;margin-bottom:2px">Zonal Head Performance</div>
     <div style="font-size:11px;color:#64748b;margin-bottom:10px">Click to expand · ZH → Circulation Incharge → Dak Incharge → Executive · ${esc(d.range_label||'')}</div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
-      ${thead}<tbody>${rows.join('')}</tbody>
+      ${thead}<tbody id="zh-perf-tbody">${_csZHRows(st, d)}</tbody>
     </table></div>
   </div>`;
 }
@@ -16669,7 +16680,7 @@ function render() {
   </div>`;
   paintSide();
   const newMain = $(".main");
-  if (newMain && prevScroll) newMain.scrollTop = prevScroll;
+  if (newMain && prevScroll) newMain.scrollTo({ top: prevScroll, behavior: 'instant' });
   // Re-attach the live Leaflet map synchronously — timers are throttled in background
   // tabs, so a setTimeout-based re-attach can leave the map detached for seconds
   if (S.screen === 'readers_connect' && (S.live.rcTab || 'map') === 'map') rcInitMap();
