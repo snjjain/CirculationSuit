@@ -510,7 +510,10 @@ module.exports = function installCommandCentre({ app, q }) {
     try {
       const unitScope = (req.query.unit_code || '').trim() || null;
       const { asOn, prev, label, mode } = await resolveDates(req.query.as_on, req.query.compare);
-      const win = resolveRangeWindow(asOn, req.query.range);
+      const _spRqRange = req.query.range, _spFrom = req.query.range_from, _spTo = req.query.range_to;
+      const win = (_spRqRange === 'custom' && /^\d{4}-\d{2}-\d{2}$/.test(_spFrom || '') && /^\d{4}-\d{2}-\d{2}$/.test(_spTo || ''))
+        ? { from: _spFrom, to: _spTo, label: `${_spFrom} → ${_spTo}`, key: 'custom' }
+        : resolveRangeWindow(asOn, _spRqRange);
       const [sup, col, os, dcr, heads, rng] = await Promise.all([
         supplyByState(asOn, prev, unitScope),
         collectionByState(asOn, prev, unitScope),
@@ -640,8 +643,11 @@ module.exports = function installCommandCentre({ app, q }) {
       if (!meta) return res.status(400).json({ detail: 'Unknown state' });
 
       const { asOn, prev, label, mode } = await resolveDates(req.query.as_on, req.query.compare || 'prev_year');
-      const win = resolveRangeWindow(asOn, req.query.range);
-      // Same window shifted one year back — used for YoY collection comparison
+      const rqRange = req.query.range, rqFrom = req.query.range_from, rqTo = req.query.range_to;
+      const win = (rqRange === 'custom' && /^\d{4}-\d{2}-\d{2}$/.test(rqFrom || '') && /^\d{4}-\d{2}-\d{2}$/.test(rqTo || ''))
+        ? { from: rqFrom, to: rqTo, label: `${rqFrom} → ${rqTo}`, key: 'custom' }
+        : resolveRangeWindow(asOn, rqRange);
+      // Same window shifted one year back — used for YoY supply avg and collection comparison
       const prevWin = { from: `${Number(win.from.slice(0, 4)) - 1}${win.from.slice(4)}`, to: `${Number(win.to.slice(0, 4)) - 1}${win.to.slice(4)}` };
       const allUnits = await unitsOfState(stateKey);
       const unitName = {}; allUnits.forEach(u => { unitName[u.unit_code] = u.unit_name; });
@@ -667,29 +673,58 @@ module.exports = function installCommandCentre({ app, q }) {
       const lbl = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`;
       const prevMonthLabel = lbl(pm), prevPrevLabel = lbl(pm2);
 
+      // Billing snapshot labels for range-appropriate collection efficiency.
+      // Complete billing months within [win.from, win.to]:
+      //   billEnd = latest snapshot label to use; billBefore = snapshot to subtract.
+      const _rangeBillLabels = (() => {
+        const pad = n => String(n).padStart(2, '0');
+        const lbl = x => `${x.getFullYear()}-${pad(x.getMonth() + 1)}`;
+        const f = new Date(win.from + 'T00:00:00'), t = new Date(win.to + 'T00:00:00');
+        const firstBillMon = f.getDate() === 1 ? f : new Date(f.getFullYear(), f.getMonth() + 1, 1);
+        const lastDayOfT = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
+        const lastBillMon = t.getDate() === lastDayOfT ? t : new Date(t.getFullYear(), t.getMonth() - 1, 1);
+        if (firstBillMon > lastBillMon) {
+          // No complete month in range — use lastBillMon's own monthly billing
+          const billEnd = lbl(lastBillMon);
+          return { billEnd, billBefore: lbl(new Date(lastBillMon.getFullYear(), lastBillMon.getMonth() - 1, 1)) };
+        }
+        return { billEnd: lbl(lastBillMon), billBefore: lbl(new Date(firstBillMon.getFullYear(), firstBillMon.getMonth() - 1, 1)) };
+      })();
+      const { billEnd: rblEnd, billBefore: rblBefore } = _rangeBillLabels;
+
       const [agentSup, cashSup, coll, os, billing, master, hier, visits, execActive, execBilling, monthSup, collPrevYr] = await Promise.all([
-        // Agent (credit) supply, agency level, on both dates.
+        // Agent (credit) supply — daily average over selected range vs previous-year range.
         q(`SELECT s.unit_code, s.agcd,
-                  SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
-                  SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
+                  SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) cur_total,
+                  COUNT(DISTINCT CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.supply_date END) cur_days,
+                  SUM(CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.sup_copy ELSE 0 END) prv_total,
+                  COUNT(DISTINCT CASE WHEN s.supply_date BETWEEN ? AND ? THEN s.supply_date END) prv_days
            FROM supply_data s FORCE INDEX (idx_sd_dateunit)
            JOIN (SELECT DISTINCT unit, agcd FROM agency_master
                  WHERE ag_class_name='CREDIT SALE' AND COALESCE(supply_stop_flag,'N')='N'
                    AND (suspend_date IS NULL OR suspend_date > CURDATE())) cm
              ON cm.unit = s.unit_code AND cm.agcd = s.agcd
-           WHERE s.supply_date IN (?, ?) AND s.unit_code IN (${IN})
+           WHERE (s.supply_date BETWEEN ? AND ? OR s.supply_date BETWEEN ? AND ?)
+             AND s.unit_code IN (${IN})
              AND s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')
-           GROUP BY s.unit_code, s.agcd`, [asOn, prev, asOn, prev, ...codes]),
-        // Cash (city) supply exists only in the 9 hawker branches. There is no agency
-        // dimension, but there is a centre incharge — which is who carries it.
+           GROUP BY s.unit_code, s.agcd`,
+          [win.from, win.to, win.from, win.to, prevWin.from, prevWin.to, prevWin.from, prevWin.to,
+           win.from, win.to, prevWin.from, prevWin.to, ...codes]),
+        // Cash (city) supply — daily average over range; centres/hawkers counts stay on asOn.
         q(`SELECT loc_id unit_code, center_incharge, MAX(center_incharge_name) center_incharge_name,
-                  SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) cur,
-                  SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prv,
+                  SUM(CASE WHEN supply_date BETWEEN ? AND ? THEN sup_copies ELSE 0 END) cur_total,
+                  COUNT(DISTINCT CASE WHEN supply_date BETWEEN ? AND ? THEN supply_date END) cur_days,
+                  SUM(CASE WHEN supply_date BETWEEN ? AND ? THEN sup_copies ELSE 0 END) prv_total,
+                  COUNT(DISTINCT CASE WHEN supply_date BETWEEN ? AND ? THEN supply_date END) prv_days,
                   COUNT(DISTINCT CASE WHEN supply_date = ? THEN hwk_cent_code END) centres,
                   COUNT(DISTINCT CASE WHEN supply_date = ? THEN hawker_id END) hawkers,
                   MAX(CASE WHEN supply_date = ? THEN COALESCE(hawker_center, hwk_cent_code) END) cent_name
-           FROM hawker_supply WHERE supply_date IN (?, ?) AND loc_id IN (${IN})
-           GROUP BY loc_id, center_incharge`, [asOn, prev, asOn, asOn, asOn, asOn, prev, ...codes]),
+           FROM hawker_supply
+           WHERE (supply_date BETWEEN ? AND ? OR supply_date BETWEEN ? AND ? OR supply_date = ?)
+             AND loc_id IN (${IN})
+           GROUP BY loc_id, center_incharge`,
+          [win.from, win.to, win.from, win.to, prevWin.from, prevWin.to, prevWin.from, prevWin.to,
+           asOn, asOn, asOn, win.from, win.to, prevWin.from, prevWin.to, asOn, ...codes]),
         q(`SELECT unit_code, ag_code, -COALESCE(SUM(amount),0) amt, COUNT(*) txn
            FROM agency_collection
            WHERE is_valid=1 AND coll_date BETWEEN ? AND ? AND unit_code IN (${IN})
@@ -703,8 +738,8 @@ module.exports = function installCommandCentre({ app, q }) {
            WHERE period_label='CURRENT' AND unit_code IN (${IN})
            GROUP BY unit_code, ag_code`, codes),
         q(`SELECT period_label, unit_code, SUM(bill_amt) amt FROM agency_outstanding
-           WHERE period_label IN (?, ?) AND unit_code IN (${IN})
-           GROUP BY period_label, unit_code`, [prevMonthLabel, prevPrevLabel, ...codes]),
+           WHERE period_label IN (?, ?, ?, ?) AND unit_code IN (${IN})
+           GROUP BY period_label, unit_code`, [prevMonthLabel, prevPrevLabel, rblEnd, rblBefore, ...codes]),
         q(`SELECT unit, agcd, MAX(ag_name) ag_name, MAX(executive_code) exec_code,
                   MAX(executive_name) exec_name, MAX(dist_name) dist_name,
                   MAX(ag_class_name) ag_class
@@ -794,16 +829,20 @@ module.exports = function installCommandCentre({ app, q }) {
       master.rows.forEach(r => { const e = exec(r.exec_code, r.exec_name, r.unit); if (e) e.agencies += 1; });
 
       agentSup.rows.forEach(r => {
-        const b = B[r.unit_code]; if (b) { b.agent_cur += N(r.cur); b.agent_prev += N(r.prv); }
+        const cur = N(r.cur_days) > 0 ? Math.round(N(r.cur_total) / N(r.cur_days)) : 0;
+        const prv = N(r.prv_days) > 0 ? Math.round(N(r.prv_total) / N(r.prv_days)) : 0;
+        const b = B[r.unit_code]; if (b) { b.agent_cur += cur; b.agent_prev += prv; }
         const k = `${r.unit_code}|${r.agcd}`;
         const e = execOf[k] && exec(execOf[k].code, execOf[k].name, r.unit_code);
-        if (e) { e.supply_cur += N(r.cur); e.supply_prev += N(r.prv); }
+        if (e) { e.supply_cur += cur; e.supply_prev += prv; }
       });
       cashSup.rows.forEach(r => {
-        const b = B[r.unit_code]; if (b) { b.cash_cur += N(r.cur); b.cash_prev += N(r.prv); }
+        const cur = N(r.cur_days) > 0 ? Math.round(N(r.cur_total) / N(r.cur_days)) : 0;
+        const prv = N(r.prv_days) > 0 ? Math.round(N(r.prv_total) / N(r.prv_days)) : 0;
+        const b = B[r.unit_code]; if (b) { b.cash_cur += cur; b.cash_prev += prv; }
         // City sale belongs to the centre incharge, who is an executive in their own right.
         const e = exec(r.center_incharge, r.center_incharge_name, r.unit_code);
-        if (e) { e.supply_cur += N(r.cur); e.supply_prev += N(r.prv); e.cash_cur += N(r.cur); e.cash_prev += N(r.prv); e.hawker_centres += N(r.centres); e.hawker_count += N(r.hawkers); if (r.cent_name && !e.hawker_cent_name) e.hawker_cent_name = r.cent_name; }
+        if (e) { e.supply_cur += cur; e.supply_prev += prv; e.cash_cur += cur; e.cash_prev += prv; e.hawker_centres += N(r.centres); e.hawker_count += N(r.hawkers); if (r.cent_name && !e.hawker_cent_name) e.hawker_cent_name = r.cent_name; }
       });
       coll.rows.forEach(r => {
         const b = B[r.unit_code];
@@ -829,6 +868,11 @@ module.exports = function installCommandCentre({ app, q }) {
       codes.forEach(c => {
         B[c].billed = havePrev ? Math.max(0, (cumThis[c] || 0) - (cumPrev[c] || 0)) : (cumThis[c] || 0);
       });
+      // Range-appropriate billing denominator for the collection KPI card.
+      // diff of two cumulative snapshots = billing for all complete months within the date range.
+      const rblEndTot   = billing.rows.filter(r => r.period_label === rblEnd)  .reduce((a, r) => a + N(r.amt), 0);
+      const rblBeforeTot = billing.rows.filter(r => r.period_label === rblBefore).reduce((a, r) => a + N(r.amt), 0);
+      const rangeBilledAmt = Math.max(0, rblEndTot - rblBeforeTot);
       // Exec-level billing: use exec_code from agency_outstanding (covers closed/suspended agencies).
       // Falls back to execOf for agencies where exec_code is missing in the snapshot.
       const exBillThis = {}, exBillPrev = {};
@@ -1054,6 +1098,7 @@ module.exports = function installCommandCentre({ app, q }) {
         circ_cash:  isBranch ? ((circMap[unitScope] || {}).cash  || null) : null,
         as_on: asOn, previous: prev, compare: mode, compare_label: label,
         range: win.key, range_label: win.label, range_from: win.from, range_to: win.to,
+        prev_range_from: prevWin.from, prev_range_to: prevWin.to,
         prev_month_label: prevMonthLabel,
         totals: {
           supply: { current: supCur, previous: supPrev, growth_pct: r1(pct(supCur, supPrev)),
@@ -1065,8 +1110,10 @@ module.exports = function installCommandCentre({ app, q }) {
           cash:  { current: cashCur, previous: cashPrev, growth_pct: r1(pct(cashCur, cashPrev)),
                    share_pct: supCur ? r1((cashCur / supCur) * 100) : null,
                    centres: codes.filter(c => B[c].cash_cur > 0).length },
-          collection: { collected, billed, pct: billed ? r1((collected / billed) * 100) : null,
-                        gap: Math.max(0, billed - collected), txn: bsum(b => b.txn),
+          collection: { collected, billed,
+                        range_billed: rangeBilledAmt || billed,
+                        pct: (rangeBilledAmt || billed) ? r1((collected / (rangeBilledAmt || billed)) * 100) : null,
+                        gap: Math.max(0, (rangeBilledAmt || billed) - collected), txn: bsum(b => b.txn),
                         agencies_paid: bsum(b => b.agencies_paid),
                         prev_yr: collected_prev_yr,
                         growth_pct: collected_prev_yr ? r1((collected / collected_prev_yr - 1) * 100) : null },

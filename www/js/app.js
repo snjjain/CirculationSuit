@@ -4118,17 +4118,26 @@ function _cmdViewLegacy() {
    share can never disagree with each other. */
 
 function _ccState() {
-  return S.live.cc || (S.live.cc = { asOn: '', compare: 'prev_year', range: 'mtd', state: '', unit: '', district: '', data: null, _loading: false, drill: null });
+  return S.live.cc || (S.live.cc = { asOn: '', compare: 'prev_year', range: 'mtd', rangeFrom: '', rangeTo: '', state: '', unit: '', district: '', data: null, _loading: false, drill: null });
 }
 window.ccSet = (k, v) => {
   const st = _ccState();
   st[k] = v;
   if (k === 'state') { st.unit = ''; st.district = ''; }
   if (k === 'unit') st.district = '';
+  // Don't reload immediately when switching to custom — wait until both dates are set.
+  if (k === 'range' && v === 'custom') { render(); return; }
   st.data = null; st._loading = false;
   // Quarterly only depends on as-on date and unit scope, so a range change keeps it.
   if (k === 'asOn' || k === 'unit') { st.qtr = null; st._qtrLoading = false; }
   render();
+};
+window.ccSetCustomRange = (field, val) => {
+  const st = _ccState();
+  if (field === 'from') st.rangeFrom = val;
+  else st.rangeTo = val;
+  if (st.rangeFrom && st.rangeTo && st.rangeFrom <= st.rangeTo) { st.data = null; st._loading = false; render(); }
+  else render();
 };
 window.ccReset = () => { S.live.cc = null; render(); };
 window.ccDrill = (screen, stateKey) => {
@@ -4169,6 +4178,7 @@ function _ccLoad() {
   if (st.compare) p.set('compare', st.compare);
   if (st.range) p.set('range', st.range);
   if (st.unit) p.set('unit_code', st.unit);
+  if (st.range === 'custom' && st.rangeFrom && st.rangeTo) { p.set('range_from', st.rangeFrom); p.set('range_to', st.rangeTo); }
   fetch(`${location.origin}/api/command/state-performance?${p}`, { headers: api.h() })
     .then(r => r.json())
     .then(d => { st.data = d; st._loading = false; if (S.screen === 'command') render(); })
@@ -5010,9 +5020,12 @@ function _cmdViewNew() {
     <div style="display:flex;align-items:flex-end;gap:9px">
       <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">Date range</div>
       <select onchange="ccSet('range',this.value)" style="padding:7px 32px 7px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%278%27 viewBox=%270 0 12 8%27%3E%3Cpath fill=%27%2364748b%27 d=%27M6 8L0 0h12z%27/%3E%3C/svg%3E') no-repeat right 10px center;color:#0f172a;font-size:12.5px;min-width:180px;appearance:none;-webkit-appearance:none;font-weight:500;cursor:pointer">
-        ${[['mtd','This Month'],['last_month','Last Month'],['last_3m','Last 3 Months'],['last_6m','Last 6 Months'],['fytd','Current FY (YTD)'],['covid','COVID Period (Mar 2020)'],['today','Today']]
+        ${[['mtd','This Month'],['last_month','Last Month'],['last_3m','Last 3 Months'],['last_6m','Last 6 Months'],['fytd','Current FY (YTD)'],['covid','COVID Period (Mar 2020)'],['today','Today'],['custom','Custom Range']]
           .map(([v,l]) => `<option value="${esc(v)}" ${st.range === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}
-      </select></div>
+      </select>
+      ${st.range === 'custom' ? `<input type="date" value="${esc(st.rangeFrom)}" onchange="ccSetCustomRange('from',this.value)" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px;color:#0f172a">
+      <input type="date" value="${esc(st.rangeTo)}" onchange="ccSetCustomRange('to',this.value)" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px;color:#0f172a">` : ''}
+      </div>
     </div>
   </div>`;
 
@@ -5185,7 +5198,7 @@ VIEWS.command = () => (cmdDesign() === 'new' ? _cmdViewNew() : _cmdViewLegacy())
    ══════════════════════════════════════════════════════════════════════════════ */
 function _csState() {
   S.ccStateDash = S.ccStateDash || {
-    state: 'RAJASTHAN', unit: '', range: 'mtd',
+    state: 'RAJASTHAN', unit: '', range: 'mtd', rangeFrom: '', rangeTo: '',
     data: null, _loading: false,
     movers: null, _movLoading: false, movTab: 'declining', movAll: false,
     sp: null, _spLoading: false, spPage: 1, spStatus: '',
@@ -5219,7 +5232,14 @@ window.ccOpenBranch = (stateKey, unitCode) => {
   st.state = stateKey; st.unit = unitCode;
   go('cc_state');
 };
-window.csSetRange     = v => { const st = _csState(); st.range = v; _csReset(st); render(); };
+window.csSetRange     = v => { const st = _csState(); st.range = v; if (v !== 'custom') _csReset(st); render(); };
+window.csSetCustomRange = (field, val) => {
+  const st = _csState();
+  if (field === 'from') st.rangeFrom = val;
+  else st.rangeTo = val;
+  if (st.rangeFrom && st.rangeTo && st.rangeFrom <= st.rangeTo) { _csReset(st); render(); }
+  else render();
+};
 window.csMovTab       = v => { const st = _csState(); st.movTab = v; st.movAll = false; render(); };
 window.csMovAll       = () => { const st = _csState(); st.movAll = !st.movAll; render(); };
 window.csExecAll      = () => { const st = _csState(); st.execAll = !st.execAll; render(); };
@@ -5303,6 +5323,10 @@ window.ccOpenExecPanel = (execCode, name, unitCode) => {
 function _csParams(st) {
   const p = new URLSearchParams({ state: st.state, range: st.range, compare: 'prev_year' });
   if (st.unit) p.set('unit_code', st.unit);
+  if (st.range === 'custom' && st.rangeFrom && st.rangeTo) {
+    p.set('range_from', st.rangeFrom);
+    p.set('range_to', st.rangeTo);
+  }
   return p;
 }
 function _csLoad() {
@@ -5984,11 +6008,20 @@ VIEWS.cc_state = () => {
   _csLoad();
   const d = st.data;
 
+  const _selStyle = 'padding:7px 32px 7px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff url(\'data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%278%27 viewBox=%270 0 12 8%27%3E%3Cpath fill=%27%2364748b%27 d=%27M6 8L0 0h12z%27/%3E%3C/svg%3E\') no-repeat right 10px center;color:#0f172a;font-size:12.5px;min-width:180px;appearance:none;-webkit-appearance:none;font-weight:500;cursor:pointer';
   const sel = `<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">Date range</div>
-    <select onchange="csSetRange(this.value)" style="padding:7px 32px 7px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2364748b' d='M6 8L0 0h12z'/%3E%3C/svg%3E\") no-repeat right 10px center;color:#0f172a;font-size:12.5px;min-width:180px;appearance:none;-webkit-appearance:none;font-weight:500;cursor:pointer">
-      ${[['mtd', 'This Month'], ['last_month', 'Last Month'], ['last_3m', 'Last 3 Months'], ['last_6m', 'Last 6 Months'], ['fytd', 'Current FY (YTD)'], ['covid', 'COVID Period (Mar 2020)'], ['today', 'Today']]
+    <select onchange="csSetRange(this.value)" style="${_selStyle}">
+      ${[['mtd', 'This Month'], ['last_month', 'Last Month'], ['last_3m', 'Last 3 Months'], ['last_6m', 'Last 6 Months'], ['fytd', 'Current FY (YTD)'], ['covid', 'COVID Period (Mar 2020)'], ['custom', 'Custom range'], ['today', 'Today']]
         .map(([v, l]) => `<option value="${v}" ${st.range === v ? 'selected' : ''}>${l}</option>`).join('')}
-    </select></div>`;
+    </select>
+    ${st.range === 'custom' ? `<div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+      <input type="date" value="${esc(st.rangeFrom)}" onchange="csSetCustomRange('from',this.value)"
+        style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;color:#0f172a;background:#fff">
+      <span style="color:#94a3b8;font-size:12px">→</span>
+      <input type="date" value="${esc(st.rangeTo)}" onchange="csSetCustomRange('to',this.value)"
+        style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;color:#0f172a;background:#fff">
+    </div>` : ''}
+  </div>`;
 
   const crumb = `<div style="font-size:12px;color:#64748b">
     <a onclick="go('command')" style="cursor:pointer;color:#1e3a8a;text-decoration:underline">Command Centre</a>
@@ -6016,7 +6049,7 @@ VIEWS.cc_state = () => {
       ${_owner ? `<div style="font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:2px">${_owner}</div>` : ''}
       <div style="font-size:20px;font-weight:800;color:#0f172a;margin-bottom:3px">${d && !d._err && !d.detail ? esc(d.unit_name || d.state_name) : 'Loading…'}</div>
       ${crumb}
-      ${d && !d._err && !d.detail ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px">Supply: ${esc(d.as_on)} vs ${esc(d.previous)} (${esc(d.compare_label)}) · ${esc(d.range_label)}: ${esc(d.range_from)} → ${esc(d.range_to)}</div>` : ''}
+      ${d && !d._err && !d.detail ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px">${esc(d.range_label)}: <b style="color:#475569">${esc(d.range_from)} → ${esc(d.range_to)}</b>${d.prev_range_from ? ` · same window last year: ${esc(d.prev_range_from)} → ${esc(d.prev_range_to)}` : ''}</div>` : ''}
     </div>
     ${sel}
   </div>`;
@@ -6034,22 +6067,23 @@ VIEWS.cc_state = () => {
 
   /* ── KPI cards ── */
   const cards = `<div class="cs-strip" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px;margin-bottom:18px">
-    ${_ccTopCard({ label: 'Total supply', color: '#1e3a8a',
+    ${(()=>{ const prevLbl = d.prev_range_from ? `Same window last year · ${esc(d.prev_range_from)} – ${esc(d.prev_range_to)}` : `${esc(d.compare_label)}`; return `
+    ${_ccTopCard({ label: 'Total supply (avg/day)', color: '#1e3a8a',
       value: _ccN(t.supply.current) + ' cp', trend: _ccTrend(t.supply.growth_pct),
-      sub: `Agent + Cash · on ${esc(d.as_on)} vs ${esc(d.previous)} (${esc(d.compare_label)})` })}
+      sub: prevLbl })}
     ${_ccTopCard({ label: 'Agent sale (credit)', color: '#3b82f6',
       value: _ccN(t.agent.current) + ' cp', trend: _ccTrend(t.agent.growth_pct),
-      sub: `${t.agent.share_pct == null ? '—' : t.agent.share_pct + '%'} of supply · was ${_ccN(t.agent.previous)} (${esc(d.compare_label)})` })}
+      sub: `${t.agent.share_pct == null ? '—' : t.agent.share_pct + '%'} of supply · was ${_ccN(t.agent.previous)} · ${prevLbl}` })}
     ${_ccTopCard({ label: 'Cash sale (city)', color: '#0ea5e9',
       value: _ccN(t.cash.current) + ' cp', trend: _ccTrend(t.cash.growth_pct),
       sub: t.cash.current || t.cash.previous
-        ? `${t.cash.share_pct == null ? '—' : t.cash.share_pct + '%'} of supply · ${_ccN(t.cash.centres)} branch${t.cash.centres === 1 ? '' : 'es'} with city sale`
+        ? `${t.cash.share_pct == null ? '—' : t.cash.share_pct + '%'} of supply · ${_ccN(t.cash.centres)} branch${t.cash.centres === 1 ? '' : 'es'} with city sale · ${prevLbl}`
         : 'No city sale here — agent (credit) sale only' })}
     ${_ccTopCard({ label: 'Collection vs billing', color: '#22c55e',
       value: t.collection.pct == null ? '—' : t.collection.pct + '%',
       trend: t.collection.growth_pct != null ? _ccTrend(t.collection.growth_pct) : '',
-      sub: `${_ccINR(t.collection.collected)} of ${_ccINR(t.collection.billed)} billed ${esc(d.prev_month_label)}${t.collection.prev_yr ? ' · ' + (t.collection.growth_pct != null ? (t.collection.growth_pct > 0 ? '+' : '') + t.collection.growth_pct + '% vs last year' : '') : ''}`,
-      barPct: t.collection.pct })}
+      sub: `${_ccINR(t.collection.collected)} of ${_ccINR(t.collection.range_billed || t.collection.billed)} billed · ${t.collection.growth_pct != null ? (t.collection.growth_pct > 0 ? '+' : '') + t.collection.growth_pct + '% vs last year' : prevLbl}`,
+      barPct: t.collection.pct })}`;})()}
     ${_ccTopCard({ label: 'Outstanding', color: '#f59e0b',
       value: _ccINR(t.outstanding.amount),
       sub: `${_ccN(t.outstanding.critical)} of ${_ccN(t.outstanding.agencies)} agencies above ₹1 L` })}
