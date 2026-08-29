@@ -5244,6 +5244,46 @@ const _csBtn = (label, onclick, active) => `<button onclick="${onclick}"
    Scoped to this state or branch instead of run all-India. Billing telescopes two
    cumulative snapshots, which is why the figures match the ERP rather than the raw
    bill_amt column. */
+/* Six months of payment behaviour as one glyph row, oldest → newest. The rupee shortfall
+   says how much; this says whether it is a habit. A chronic short-payer needs terms
+   changed, a one-off needs a phone call — the total alone cannot tell them apart.
+   Filled red = short that month, green = paid in full, hollow = nothing billed. */
+const _SP_TREND = {
+  always:    ['Always short',  '#b91c1c'],
+  often:     ['Often short',   '#b45309'],
+  sometimes: ['Occasional',    '#a16207'],
+  clean:     ['Pays in full',  '#15803d'],
+  no_bill:   ['No billing',    '#94a3b8'],
+  // Billed months all settled, but the window still shows a shortfall — reversed
+  // receipts or earlier arrears rather than short-paying against a bill.
+  arrears:   ['Bills paid · arrears', '#b45309'],
+  // Monthly snapshots do not add up to the six-month total — usually a missing month.
+  partial:   ['Partial data',  '#94a3b8'],
+};
+function _csSpPattern(a) {
+  const m = a.monthly || [];
+  if (!m.length) return '<span style="color:#cbd5e1">—</span>';
+  const dots = m.map(x => {
+    const noBill = !(x.bill > 100);
+    const short  = !noBill && x.diff > 100;
+    const bg     = noBill ? 'transparent' : short ? '#dc2626' : '#16a34a';
+    const bd     = noBill ? '#cbd5e1' : bg;
+    const mn     = String(x.label || '').slice(5);
+    const tip    = noBill ? `${x.label}: not billed`
+      : `${x.label}: billed ${_ccINR(x.bill)}, received ${_ccINR(x.rcpt)}${short ? `, short ${_ccINR(x.diff)}` : ' — paid in full'}`;
+    return `<span title="${esc(tip)}" style="display:inline-block;width:11px;height:11px;border-radius:3px;background:${bg};border:1px solid ${bd};margin-right:2px" aria-label="${esc(mn)}"></span>`;
+  }).join('');
+  const [lbl, col] = _SP_TREND[a.trend] || _SP_TREND.no_bill;
+  const partial = a.trend === 'partial';
+  const streak = (!partial && a.short_streak > 1) ? ` · ${a.short_streak} in a row` : '';
+  const count  = partial ? 'months incomplete'
+    : a.trend === 'arrears' ? 'shortfall outside billing'
+    : a.months_billed ? `${a.months_short}/${a.months_billed} short` : '';
+  return `<div style="white-space:nowrap;line-height:1">${dots}</div>
+    <div style="font-size:9.5px;color:${col};font-weight:700;margin-top:3px;white-space:nowrap">${lbl}</div>
+    <div style="font-size:9px;color:#94a3b8;white-space:nowrap">${count}${streak}</div>`;
+}
+
 function _csShortPay(st, d) {
   const sp = st.sp;
   const filters = `<div style="display:flex;gap:7px;flex-wrap:wrap">
@@ -5270,7 +5310,7 @@ function _csShortPay(st, d) {
           <div style="font-size:14px;font-weight:800;color:${c};font-variant-numeric:tabular-nums">${v}</div></div>`).join('')}
     </div>`;
     const per = 15, total = sp.total || 0, pages = Math.max(1, Math.ceil(total / per));
-    const table = _csTable(['Agency', 'Branch', 'Executive', 'Billed', 'Received', 'Short', 'Coll %', 'O/S', 'Status'],
+    const table = _csTable(['Agency', 'Branch', 'Executive', 'Billed', 'Received', 'Short', '6-Month Pattern', 'Coll %', 'O/S', 'Status'],
       (sp.agencies || []).map(a => ({
         onClick: a.unit_code && a.ag_code ? `ccOpenAgencyPanel('${_csQ(a.unit_code)}','${_csQ(a.ag_code)}','${_csQ(a.ag_name)}')` : '',
         title: 'Open agency profile',
@@ -5279,10 +5319,11 @@ function _csShortPay(st, d) {
           esc(a.unit_name || a.unit_code || ''), esc(a.exec_name || '—'),
           _ccINR(a.tot_bill), _ccINR(a.tot_rcpt),
           `<b style="color:#b91c1c">${_ccINR(a.tot_diff)}</b>`,
+          _csSpPattern(a),
           `${a.coll_pct}%`, _ccINR(a.cur_os),
           `<span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:9px;background:${a.pay_status === 'Unpaid' ? '#fee2e2' : a.pay_status === 'Short Paid' ? '#fef3c7' : '#dcfce7'};color:${a.pay_status === 'Unpaid' ? '#b91c1c' : a.pay_status === 'Short Paid' ? '#b45309' : '#15803d'}">${esc(a.pay_status)}</span>`,
         ],
-      })), { minWidth: 900, empty: 'No agencies match this payment status.' });
+      })), { minWidth: 1040, empty: 'No agencies match this payment status.' });
     const pager = total > per ? `<div style="display:flex;align-items:center;gap:9px;margin-top:10px;font-size:12px;color:#64748b">
       ${_csBtn('‹ Prev', `csSpPage(${st.spPage - 1})`, false)}
       <span>Page <b style="color:#0f172a">${st.spPage}</b> of ${pages} · ${_ccN(total)} agencies</span>
@@ -5292,6 +5333,7 @@ function _csShortPay(st, d) {
   }
   return _csCard('Short Payment Agencies',
     `Billed vs actually received over the last six months, ${st.unit ? 'in this branch' : 'across the state'} · biggest shortfall first.`
+    + ` The pattern column reads oldest to newest — red is a month short-paid, green paid in full, hollow not billed — so a chronic short-payer is separable from a one-off.`
     + ` Receipts in the window also clear earlier arrears, so a fully-paid agency can show over 100%.`,
     inner, filters);
 }

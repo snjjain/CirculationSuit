@@ -3312,6 +3312,45 @@ app.get('/api/shortpayment/report', async (req, res) => {
           ag.monthly.push({ label, bill, rcpt: cash + other_cr_diff, diff: bill - cash - other_cr_diff });
           prevSnap = snap;
         }
+
+        /* Payment behaviour across the window. "Short by ₹6 L" does not say whether this
+           is a chronic payer or one bad month, which is the difference between a terms
+           review and a phone call — so count the months, not just the rupees. Months with
+           no billing are skipped rather than counted as clean, otherwise a suspended
+           agency looks like a good payer. */
+        const MIN = 100;                                    // ignore rounding-level noise
+        const billedM = ag.monthly.filter(m => m.bill > MIN);
+        const shortM  = billedM.filter(m => m.diff > MIN);
+        ag.months_billed = billedM.length;
+        ag.months_short  = shortM.length;
+        // Consecutive short months counting back from the latest billed month — a rising
+        // streak is what separates "slipping now" from "was bad six months ago".
+        let streak = 0;
+        for (let i = ag.monthly.length - 1; i >= 0; i--) {
+          const m = ag.monthly[i];
+          if (m.bill <= MIN) continue;
+          if (m.diff > MIN) streak++; else break;
+        }
+        ag.short_streak = streak;
+
+        /* The per-month figures and the telescoped totals are two different derivations,
+           and a month with no snapshot silently drops out of the monthly one — so an
+           agency can read "pays in full" here while its six-month total says short. Say
+           so instead of asserting a pattern the months cannot support. */
+        const mSum = ag.monthly.reduce((s, m) => s + m.diff, 0);
+        ag.monthly_reconciled =
+          Math.abs(mSum - ag.tot_diff) <= Math.max(1000, Math.abs(ag.tot_diff) * 0.05);
+
+        ag.trend = !billedM.length            ? 'no_bill'
+                 : !ag.monthly_reconciled     ? 'partial'
+                 // Every billed month settled, yet the window still shows a shortfall —
+                 // it sits outside billing (reversed/dishonoured receipts, earlier
+                 // arrears). Calling that "pays in full" next to a ₹5 L short reads as a
+                 // contradiction, so it gets its own name.
+                 : shortM.length === 0        ? (ag.tot_diff > MIN ? 'arrears' : 'clean')
+                 : shortM.length === billedM.length ? 'always'
+                 : shortM.length / billedM.length >= 0.5 ? 'often'
+                 : 'sometimes';
       }
     }
 
