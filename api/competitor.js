@@ -4,7 +4,7 @@ const XLSX    = require('xlsx');
 
 const AGENCY_COLS = [
   'Period (YYYY-MM)', 'State', 'Unit Code', 'Unit Name', 'District',
-  'AGCD', 'DPCD', 'Drop Point Name',
+  'AGCD', 'DPCD', 'Drop Point Name', 'Agency Name',
   'Competitor 1 Name', 'Competitor 1 Copies',
   'Competitor 2 Name', 'Competitor 2 Copies',
   'Competitor 3 Name', 'Competitor 3 Copies',
@@ -25,8 +25,8 @@ const HAWKER_COLS = [
 ];
 
 const BLANK_COMP_CELLS = ['', 0, '', 0, '', 0, '', 0, '', 0, ''];
-// Agency: Period,State,UnitCode,UnitName,District,AGCD,DPCD,DPName,C1-C5,Remarks
-const AGENCY_COL_WIDTHS = [14, 14, 12, 22, 18, 14, 10, 28, 22, 10, 22, 10, 22, 10, 22, 10, 22, 10, 18];
+// Agency: Period,State,UnitCode,UnitName,District,AGCD,DPCD,DPName,AgName,C1-C5,Remarks
+const AGENCY_COL_WIDTHS = [14, 14, 12, 22, 18, 14, 10, 22, 28, 22, 10, 22, 10, 22, 10, 22, 10, 22, 10, 18];
 // Hawker: Period,State,UnitCode,UnitName,HawkerCode,HawkerName,C1-C5,Remarks
 const HAWKER_COL_WIDTHS = [14, 14, 12, 22, 14, 28, 22, 10, 22, 10, 22, 10, 22, 10, 22, 10, 18];
 
@@ -79,19 +79,20 @@ async function buildMasterTemplate(compType, period, unitFilter, q) {
       const where  = unitFilter ? `WHERE ${whereBase} AND unit = ?` : `WHERE ${whereBase}`;
       const params = unitFilter ? [unitFilter] : [];
       const { rows: agencies } = await q(
-        `SELECT agcd, dpcd, ag_name, unit, unit_name, state_name, dist_name
+        `SELECT agcd, dpcd, ag_name, station_name, unit, unit_name, state_name, dist_name
          FROM agency_master ${where}
          ORDER BY state_name, unit, dist_name, agcd, dpcd`, params);
 
       dataRows = agencies.map(a => [
         period,
-        a.state_name  || '',
-        a.unit        || '',
-        a.unit_name   || '',
-        a.dist_name   || '',
-        a.agcd        || '',
-        a.dpcd        || '',
-        a.ag_name     || '',
+        a.state_name    || '',
+        a.unit          || '',
+        a.unit_name     || '',
+        a.dist_name     || '',
+        a.agcd          || '',
+        a.dpcd          || '',
+        a.station_name  || '',   // Drop Point Name (physical station)
+        a.ag_name       || '',   // Agency Name (agent's business name)
         ...BLANK_COMP_CELLS,
       ]);
     } catch (e) {
@@ -120,7 +121,8 @@ async function buildMasterTemplate(compType, period, unitFilter, q) {
       ['District', 'Pre-filled from master', 'DO NOT EDIT'],
       ['AGCD', 'Agent/Agency Code — pre-filled from master', 'DO NOT EDIT'],
       ['DPCD', 'Drop Point Code — pre-filled from master', 'DO NOT EDIT'],
-      ['Drop Point Name', 'Pre-filled from master', 'DO NOT EDIT'],
+      ['Drop Point Name', 'Physical station/delivery location — pre-filled from master', 'DO NOT EDIT'],
+      ['Agency Name', 'Agent\'s business name — pre-filled from master', 'DO NOT EDIT'],
     ]),
     ['Competitor N Name', 'Competitor newspaper name e.g. Dainik Bhaskar', 'FILL IN'],
     ['Competitor N Copies', 'Competitor copies count', 'FILL IN'],
@@ -154,7 +156,7 @@ const Str = v => String(v || '').trim();
 function rowToRecord(row, compType, enteredBy) {
   // Hawker: "Hawker Code"; Agency (new): "AGCD"; Agency (legacy): "Agent Code"
   const agentCode = Str(row['Hawker Code'] || row['AGCD'] || row['Agent Code']);
-  const agentName = Str(row['Hawker Name'] || row['Agent Name']);
+  const agentName = Str(row['Hawker Name'] || row['Agency Name'] || row['Agent Name']);
   return {
     comp_type:    compType,
     state_name:   Str(row['State']),
