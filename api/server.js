@@ -18,7 +18,10 @@ const DB_CONFIG = {
   user:        process.env.MYSQL_USER     || 'root',
   password:    process.env.MYSQL_PASSWORD || '',
   waitForConnections: true,
-  connectionLimit:    10,
+  // A single Command Centre request fans out to ~16 queries inside one Promise.all;
+  // at 10 the tail of them queued behind the others and the request took far longer
+  // than its slowest query. Raised so one dashboard load does not contend with itself.
+  connectionLimit:    24,
   dateStrings: true,   // return DATE/DATETIME as 'YYYY-MM-DD' strings
 };
 

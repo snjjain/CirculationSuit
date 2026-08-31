@@ -137,6 +137,37 @@ const api = {
     } catch { return null; }
   }
 };
+/* Dashboard fetch that never surfaces a JSON parse error.
+
+   A slow query behind the reverse proxy comes back as the proxy's own HTML error page,
+   and `r.json()` then failed with `Unexpected token '<', "<!DOCTYPE"...` — which tells
+   the user nothing and looks like a bug in the dashboard rather than a timeout. Read
+   the body as text, parse it only when it really is JSON, and translate the gateway
+   codes into something a person can act on. Returns { _err } on failure so every
+   caller's existing error rendering keeps working. */
+async function dashJson(url) {
+  let r;
+  try {
+    r = await fetch(url, { headers: api.h() });
+  } catch (e) {
+    return { _err: 'Could not reach the server. Check your connection and try again.' };
+  }
+  if (r.status === 401) { onAuthExpired(); return { _err: 'Session expired — please sign in again.' }; }
+  const raw = await r.text().catch(() => '');
+  const looksJson = raw.trim().startsWith('{') || raw.trim().startsWith('[');
+  if (looksJson) {
+    try {
+      const j = JSON.parse(raw);
+      if (!r.ok && !j._err) return { _err: j.detail || `Request failed (HTTP ${r.status}).` };
+      return j;
+    } catch (_) { /* fall through to the message below */ }
+  }
+  if (r.status === 504 || r.status === 502 || r.status === 408) {
+    return { _err: 'This range took too long to load and the server timed out. Try a shorter date range, or a single branch.' };
+  }
+  return { _err: `The server returned an unexpected response (HTTP ${r.status}). Please retry.` };
+}
+
 /* Raw call that preserves status + error detail (used by admin screens; supports PATCH) */
 async function apiCall(method, path, body) {
   try {
@@ -4226,10 +4257,9 @@ function _ccLoad() {
   if (st.range) p.set('range', st.range);
   if (st.unit) p.set('unit_code', st.unit);
   if (st.range === 'custom' && st.rangeFrom && st.rangeTo) { p.set('range_from', st.rangeFrom); p.set('range_to', st.rangeTo); }
-  fetch(`${location.origin}/api/command/state-performance?${p}`, { headers: api.h() })
-    .then(r => r.json())
+  dashJson(`${location.origin}/api/command/state-performance?${p}`)
     .then(d => { st.data = d; st._loading = false; if (S.screen === 'command') render(); })
-    .catch(() => { st.data = { _err: true }; st._loading = false; if (S.screen === 'command') render(); });
+    .catch(e => { st.data = { _err: String(e && e.message || e) }; st._loading = false; if (S.screen === 'command') render(); });
 }
 
 /* ── small formatters ── */
@@ -6086,8 +6116,7 @@ function _csLoad() {
   const st = _csState();
   if (st._loading || st.data) return;
   st._loading = true;
-  fetch(`${api.base}/api/command/state-dashboard?${_csParams(st)}`, { headers: api.h() })
-    .then(r => r.json())
+  dashJson(`${api.base}/api/command/state-dashboard?${_csParams(st)}`)
     .then(d => { st.data = d; st._loading = false; if (S.screen === 'cc_state') render(); })
     .catch(e => { st.data = { _err: String(e && e.message || e) }; st._loading = false; if (S.screen === 'cc_state') render(); });
 }
@@ -6098,8 +6127,7 @@ function _csLoadMovers() {
   const st = _csState();
   if (st._movLoading || st.movers) return;
   st._movLoading = true;
-  fetch(`${api.base}/api/command/state-movers?${_csParams(st)}`, { headers: api.h() })
-    .then(r => r.json())
+  dashJson(`${api.base}/api/command/state-movers?${_csParams(st)}`)
     .then(d => { st.movers = d; st._movLoading = false; if (S.screen === 'cc_state') render(); })
     .catch(e => { st.movers = { _err: String(e && e.message || e) }; st._movLoading = false; if (S.screen === 'cc_state') render(); });
 }
@@ -6111,8 +6139,7 @@ function _csLoadShortPay() {
   // The report filters on group_unit_name (RPPL/MP/CG/NATIONAL), not the state name.
   if (st.unit) p.set('unit_code', st.unit); else p.set('state', st.data.os_code || '');
   if (st.spStatus) p.set('payment_status', st.spStatus);
-  fetch(`${api.base}/api/shortpayment/report?${p}`, { headers: api.h() })
-    .then(r => r.json())
+  dashJson(`${api.base}/api/shortpayment/report?${p}`)
     .then(d => { st.sp = d; st._spLoading = false; if (S.screen === 'cc_state') render(); })
     .catch(e => { st.sp = { _err: String(e && e.message || e) }; st._spLoading = false; if (S.screen === 'cc_state') render(); });
 }
