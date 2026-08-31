@@ -5900,19 +5900,21 @@ function _ccCompetitorMarket(st) {
 }
 
 
-/* Which Command Centre a user sees. Persisted per browser, defaults to the current
-   design, and only offered to admins — so the redesign can be previewed against live
-   data in production without any other user seeing it, and reverted in one click. */
+/* Which Command Centre a user sees. Persisted per browser and defaulting to the
+   current design, so nobody is moved to the new one without choosing it. Was
+   admin-only while the redesign was being proved against live data; now open to
+   every user, each keeping their own choice. */
 const CMD_DESIGN_KEY = 'patrika_cmd_design';
-/* Switcher shown only to admins. Rendered by BOTH designs, so whichever is on screen
-   can always get back to the other — a redesign you cannot escape from is a trap. */
+/* Rendered by BOTH designs, so whichever is on screen can always get back to the
+   other — a redesign you cannot escape from is a trap. */
 function _cmdDesignSwitch(which) {
-  if (!(S.user && S.user.isAdmin)) return '';
   const btn = (d, label) => `<button onclick="cmdSetDesign('${d}')" style="padding:4px 12px;border:1px solid var(--brd);border-radius:${d === 'legacy' ? '7px 0 0 7px' : '0 7px 7px 0'};${d === 'new' ? 'border-left:none;' : ''}background:${which === d ? 'var(--navy,#1C2B45)' : 'var(--card)'};color:${which === d ? '#fff' : 'var(--ink)'};font-size:11.5px;font-weight:600;cursor:pointer">${label}</button>`;
   return `<div style="display:flex;align-items:center;gap:9px;margin:-4px 0 12px">
     <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Layout</span>
     <div style="display:flex">${btn('legacy', 'Current')}${btn('new', 'New')}</div>
-    ${which === 'new' ? `<span style="font-size:11px;color:var(--gold-d);font-weight:600">Preview — visible only to you</span>` : ''}
+    <span style="font-size:11px;color:var(--muted)">${which === 'new'
+      ? 'New layout — switch back any time'
+      : 'Try the new layout'}</span>
   </div>`;
 }
 function cmdDesign() { try { return localStorage.getItem(CMD_DESIGN_KEY) === 'new' ? 'new' : 'legacy'; } catch (_) { return 'legacy'; } }
