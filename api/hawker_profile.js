@@ -21,75 +21,60 @@ module.exports = function registerHawkerProfile({ app, q, getScopeUnitCodes }) {
   const R1 = v => Math.round(Number(v) * 10) / 10;
   const fmtDate = d => (d ? String(d).slice(0, 10) : null);
 
-  /* Fields worth showing on the card, grouped the way a person reads them rather
-     than the order Oracle stores them. Anything NULL is dropped at render time,
-     so a sparsely-filled hawker still produces a clean card. */
+  /* The card answers a person's questions about one hawker, so the groups follow how
+     someone actually asks them — who they are, how to reach them, what they distribute,
+     what they earn, how they pay — rather than mirroring the 79-column master. Anything
+     null is dropped at render, so a sparsely-filled hawker still reads cleanly instead
+     of showing a form full of blanks.
+
+     Oracle and the field survey sometimes answer the same question (other_work vs
+     other_business); the survey wins because a person went and asked. */
   const CARD_GROUPS = [
-    /* Field survey — collected by hand, no Oracle equivalent. Deliberately first: it is
-       the half of the record a person actually went and asked about, and it is what
-       makes the card worth opening for someone who already knows the supply numbers. */
-    ['Field survey', [
-      ['actual_name', 'Actual name'], ['marital_status', 'Marital status'],
-      ['house_type', 'House'], ['family_size', 'Family size'],
-      ['family_in_business', 'Family in business'],
-      ['transport_mode', 'Transport'],
-      ['copies_self_delivered', 'Copies delivered self'],
-      ['newspapers_carried', 'Newspapers carried'],
-      ['other_newspaper_copies', 'Other paper copies'],
-      ['income_newspaper', 'Income — newspaper'],
-      ['other_business', 'Other business'],
-      ['income_other_business', 'Income — other business'],
-      ['total_income', 'Total income'],
-      ['payment_nature', 'Payment nature'], ['payment_mode', 'Payment mode'],
-      ['survey_updated_at', 'Surveyed on'],
-    ]],
-    ['Identity', [
-      ['hawker_id', 'Hawker ID'], ['old_hawker_id', 'Old ID'], ['sap_id', 'SAP ID'],
-      ['hawker_type', 'Type'], ['catagory', 'Category'], ['isactive', 'Active'],
-      ['exist', 'Exists'], ['print_label', 'Print label'], ['hawker_seq', 'Sequence'],
-      ['main_hawker_id', 'Main hawker'], ['sub_hawker_id', 'Sub hawker'],
-      ['integration_id', 'Integration ID'], ['rep_code', 'Rep code'],
-    ]],
-    ['Contact', [
-      ['mobile_no', 'Mobile'], ['whatsappno', 'WhatsApp'], ['phone_no', 'Phone'],
-      ['email', 'Email'],
-    ]],
-    ['Address', [
-      ['hawker_add', 'Address'], ['addr2', 'Address 2'], ['addr3', 'Address 3'],
-      ['addr4', 'Address 4'], ['house_no', 'House no'], ['land_mark', 'Landmark'],
-      ['town_suburb', 'Town / suburb'], ['city', 'City'], ['pin', 'PIN'],
-      ['state', 'State'], ['state_code', 'State code'], ['dist_code', 'District code'],
-      ['distribution_area', 'Distribution area'],
-    ]],
     ['Personal', [
-      ['father_name', "Father's name"], ['spouse_name', 'Spouse'], ['gender', 'Gender'],
-      ['dob', 'Date of birth'], ['ma', 'Anniversary'], ['doa', 'DOA'],
-      ['dateofstart', 'Started on'], ['other_work', 'Other work'],
-      ['beat_boys', 'Beat boys'], ['stall_count', 'Stalls'],
+      ['dob', 'Date of birth'],
+      ['ma', 'Anniversary date'],
+      ['marital_status', 'Marital status'],
+      ['father_name', "Father's name"],
+      ['spouse_name', 'Spouse'],
+      ['house_type', 'House'],
+      ['family_size', 'Family size'],
+      ['family_in_business', 'Family members in this business'],
     ]],
-    ['Bank & KYC', [
-      ['beneficiary_name', 'Beneficiary'], ['account_no', 'Account no'],
-      ['bank_name', 'Bank'], ['bankname', 'Bank (alt)'], ['bank_branch', 'Branch'],
-      ['ifsc', 'IFSC'], ['bank_ifse', 'IFSC (alt)'], ['bank_acc_type', 'Account type'],
-      ['address_of_bank', 'Bank address'], ['adhar_no', 'Aadhaar'], ['pan_no', 'PAN'],
-      ['id_id', 'ID type'], ['owner_name', 'Owner name'], ['ag_name', 'Agency'],
+    ['Contact & address', [
+      ['mobile_no', 'Mobile'],
+      ['whatsappno', 'WhatsApp'],
+      ['phone_no', 'Phone'],
+      ['email', 'Email id'],
+      ['_home_address', 'Home address'],
     ]],
-    ['Posting', [
-      ['unit_code', 'Branch code'], ['unit_name', 'Branch'],
-      ['hawker_center_code', 'Centre code'], ['hawker_center_name', 'Centre'],
-      ['sub_center', 'Sub centre'],
+    ['Identity documents', [
+      ['adhar_no', 'Aadhaar card number'],
+      ['pan_no', 'PAN card number'],
     ]],
-    ['Reports to', [
-      ['center_incharge_name', 'Centre incharge'], ['center_incharge_code', 'CI code'],
-      ['old_center_incharge', 'Previous CI'],
-      ['field_officer_name', 'Field officer'], ['field_officer_code', 'FO code'],
-      ['ho_coordinator_name', 'HO coordinator'], ['support_staff_name', 'Support staff'],
-      ['route_incharge_name', 'Route incharge'],
+    ['Distribution', [
+      ['distribution_area', 'Area of distribution'],
+      ['beat_boys', 'Number of beat boys'],
+      ['copies_self_delivered', 'Copies delivered by himself'],
+      ['transport_mode', 'Mode of transport'],
+      ['newspapers_carried', 'Total newspapers carried'],
+      ['other_newspaper_copies', 'Other newspaper copies'],
     ]],
-    ['Record', [
-      ['created_by', 'Created by'], ['created_dt', 'Created on'],
-      ['modify_by', 'Modified by'], ['modify_dt', 'Modified on'],
-      ['attatch_photo_fname', 'Photo file'], ['add1_oth_lang', 'Address (other lang)'],
+    ['Income', [
+      ['income_newspaper', 'Income from newspaper'],
+      ['_other_business', 'Other business'],
+      ['income_other_business', 'Income from other business'],
+      ['total_income', 'Total income'],
+    ]],
+    ['Payment behaviour', [
+      ['payment_nature', 'Payment nature'],
+      ['payment_mode', 'Payment mode'],
+    ]],
+    ['Posting & reporting', [
+      ['unit_name', 'Branch'],
+      ['hawker_center_name', 'Centre'],
+      ['center_incharge_name', 'Centre incharge'],
+      ['field_officer_name', 'Field officer'],
+      ['survey_updated_at', 'Surveyed on'],
     ]],
   ];
 
@@ -182,6 +167,23 @@ module.exports = function registerHawkerProfile({ app, q, getScopeUnitCodes }) {
         fields: fields
           .map(([k, label]) => {
             let v = master[k];
+
+            /* Composed fields. Oracle scatters the address over eight columns and
+               answers "other business" twice (other_work from the ERP, other_business
+               from the survey) — a reader wants one line, not the storage layout. */
+            if (k === '_home_address') {
+              v = [master.hawker_add, master.addr2, master.addr3, master.addr4,
+                   master.house_no, master.land_mark, master.town_suburb, master.city,
+                   master.pin && /[1-9]/.test(String(master.pin)) ? master.pin : null]
+                .map(x => String(x == null ? '' : x).trim())
+                .filter(x => x && x !== '0')
+                // Oracle repeats the same fragment across columns often enough that an
+                // uncollapsed join reads "Sodala, Sodala, Sodala".
+                .filter((x, i, a) => a.findIndex(y => y.toLowerCase() === x.toLowerCase()) === i)
+                .join(', ');
+            }
+            if (k === '_other_business') v = master.other_business || master.other_work;
+
             if (v === null || v === undefined || String(v).trim() === '') return null;
             if (k === 'dob' || k === 'ma' || k === 'doa' || k === 'dateofstart') v = fmtDate(v);
             if (k === 'created_dt' || k === 'modify_dt') v = String(v).slice(0, 19).replace('T', ' ');
@@ -195,6 +197,13 @@ module.exports = function registerHawkerProfile({ app, q, getScopeUnitCodes }) {
             // is worse than showing nothing.
             if (['mobile_no', 'phone_no', 'whatsappno', 'pin'].includes(k) &&
                 !/[1-9]/.test(String(v))) return null;
+            // Tag phone numbers so the card can offer Call / SMS / WhatsApp instead of
+            // making someone copy digits out by hand. Normalised to the last 10 digits;
+            // anything shorter is a landline or a bad capture and gets no actions.
+            if (['mobile_no', 'phone_no', 'whatsappno'].includes(k)) {
+              const digits = String(v).replace(/\D/g, '').slice(-10);
+              if (digits.length === 10) return { key: k, label, value: String(v), tel: digits };
+            }
             return { key: k, label, value: String(v) };
           })
           .filter(Boolean),

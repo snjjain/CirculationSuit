@@ -5152,12 +5152,22 @@ function _ccFlyHawkerPanel(h) {
       <td style="padding:4px 6px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600">${NF(p.copies)}</td>
     </tr>`).join('')}</table>` : '';
 
-  // The master fields, already grouped and stripped of blanks by the API.
-  const details = (d.details || []).map(g => `<div style="margin-bottom:9px">
-    <div style="font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:3px">${e_(g.title)}</div>
-    <div style="background:#fcfcfd;border:1px solid #eef2f7;border-radius:8px;padding:7px 9px">
-      ${g.fields.map(f => `<div style="display:flex;gap:8px;font-size:11.5px;line-height:1.75">
-        <span style="flex:none;width:118px;color:#94a3b8">${e_(f.label)}</span>
+  /* A phone number is something you act on, not read — so each one carries Call, SMS
+     and WhatsApp. tel:/sms: hand off to the device; wa.me works on desktop and phone. */
+  const phoneRow = f => `<div style="display:flex;gap:8px;align-items:center;font-size:11.5px;line-height:1.9">
+    <span style="flex:none;width:132px;color:#94a3b8">${e_(f.label)}</span>
+    <span style="color:#0f172a;font-variant-numeric:tabular-nums;font-weight:600">${e_(f.value)}</span>
+    <span style="display:inline-flex;gap:4px;margin-left:auto">
+      <a href="tel:+91${e_(f.tel)}" title="Call ${e_(f.value)}" style="text-decoration:none;font-size:10.5px;padding:2px 8px;border-radius:12px;background:#eef4ff;color:#1e3a8a;border:1px solid #c7d7fe">📞 Call</a>
+      <a href="sms:+91${e_(f.tel)}" title="SMS ${e_(f.value)}" style="text-decoration:none;font-size:10.5px;padding:2px 8px;border-radius:12px;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0">💬 SMS</a>
+      <a href="https://wa.me/91${e_(f.tel)}" target="_blank" rel="noopener" title="WhatsApp ${e_(f.value)}" style="text-decoration:none;font-size:10.5px;padding:2px 8px;border-radius:12px;background:#dcfce7;color:#15803d;border:1px solid #bbf7d0">WhatsApp</a>
+    </span></div>`;
+
+  const details = (d.details || []).map(g => `<div style="margin-bottom:10px">
+    <div style="font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#0369a1;margin-bottom:4px">${e_(g.title)}</div>
+    <div style="background:#fcfcfd;border:1px solid #eef2f7;border-radius:8px;padding:8px 10px">
+      ${g.fields.map(f => f.tel ? phoneRow(f) : `<div style="display:flex;gap:8px;font-size:11.5px;line-height:1.85">
+        <span style="flex:none;width:132px;color:#94a3b8">${e_(f.label)}</span>
         <span style="color:#0f172a;min-width:0;word-break:break-word">${e_(f.value)}</span></div>`).join('')}
     </div></div>`).join('');
 
@@ -5174,14 +5184,24 @@ function _ccFlyHawkerPanel(h) {
     <div style="font-size:11.5px;color:#475569;margin-bottom:10px">
       ${e_(id.unit_name || id.unit_code)}${id.hawker_center_name ? ` › <b>${e_(id.hawker_center_name)}</b>` : ''}
       ${id.center_incharge_name ? `<div style="font-size:10.5px;color:#94a3b8;margin-top:2px">CI · ${e_(id.center_incharge_name)}${id.field_officer_name ? ` &nbsp;·&nbsp; FO · ${e_(id.field_officer_name)}` : ''}</div>` : ''}
-      ${id.mobile_no ? `<div style="font-size:10.5px;color:#0369a1;margin-top:2px">📱 ${e_(id.mobile_no)}</div>` : ''}
+      ${(() => {
+        const t = String(id.mobile_no || '').replace(/\D/g, '').slice(-10);
+        if (!id.mobile_no) return '';
+        if (t.length !== 10) return `<div style="font-size:10.5px;color:#0369a1;margin-top:2px">📱 ${e_(id.mobile_no)}</div>`;
+        return `<div style="display:flex;align-items:center;gap:6px;margin-top:4px;flex-wrap:wrap">
+          <span style="font-size:11px;color:#0f172a;font-weight:600;font-variant-numeric:tabular-nums">📱 ${e_(id.mobile_no)}</span>
+          <a href="tel:+91${t}" style="text-decoration:none;font-size:10.5px;padding:2px 8px;border-radius:12px;background:#eef4ff;color:#1e3a8a;border:1px solid #c7d7fe">Call</a>
+          <a href="sms:+91${t}" style="text-decoration:none;font-size:10.5px;padding:2px 8px;border-radius:12px;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0">SMS</a>
+          <a href="https://wa.me/91${t}" target="_blank" rel="noopener" style="text-decoration:none;font-size:10.5px;padding:2px 8px;border-radius:12px;background:#dcfce7;color:#15803d;border:1px solid #bbf7d0">WhatsApp</a>
+        </div>`;
+      })()}
     </div>
     ${kpis}
     ${sec(`Supply trend · ${months.length} months`, chart)}
     ${sec('Recent supply days', recentTbl)}
     ${sec(`Publication mix · last 30 days`, pubTbl)}
     ${sec(`Centre ranking${m.centre_size ? ` · ${m.centre_size} hawkers` : ''}`, peerTbl)}
-    ${sec('Master record', details)}
+    ${sec('Hawker details', details)}
   </div>`;
 }
 
