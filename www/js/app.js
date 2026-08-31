@@ -4324,6 +4324,19 @@ window.ccFlyExec = (execCode, name, unitCode) => {
   _ccFlyPush({ kind: 'exec', execCode, name: name || execCode, unitCode: unitCode || '', data: null, loading: true, err: null },
     `${api.base}/api/exec-perf/executive/${encodeURIComponent(execCode)}`, 'execCode');
 };
+// Cash-sale counterpart to ccFlyAgency — every hawker name in the app routes here.
+window.ccFlyHawker = (unitCode, hawkerId, name) => {
+  if (!_ccState().fly) return;
+  if (!unitCode || !hawkerId) { toast('Cannot open hawker — code or branch missing'); return; }
+  _ccFlyPush({ kind: 'hawker', unitCode, hawkerId, name: name || hawkerId, data: null, loading: true, err: null },
+    `${api.base}/api/hawker-profile/${encodeURIComponent(unitCode)}/${encodeURIComponent(hawkerId)}`, 'hawkerId');
+};
+/* Opened from a table with no alert behind it — start a fresh stack so the last
+   Back closes, the same way ccOpenAgencyPanel works. */
+window.openHawkerProfile = (unitCode, hawkerId, name) => {
+  const cc = _ccState(); if (!cc.fly) cc.fly = { kind: 'direct', stack: [] };
+  ccFlyHawker(unitCode, hawkerId, name);
+};
 window.ccFlyBack = () => {
   const st = _ccState(); if (!st.fly || !st.fly.stack) return;
   st.fly.stack.pop();
@@ -5044,6 +5057,113 @@ window.ccFlyUnit = (screen, stateKey, unitCode) => {
 
 /* The agency panel inside the flyout. Same figures as the Agency 360° page, laid out for
    a 560px column instead of a full screen. */
+/* ══ Hawker 360° card ══
+   The cash-sale twin of _ccFlyAgencyPanel. hawker_master carries ~79 columns but any
+   given hawker fills only a handful, so the API groups the non-empty ones and this
+   renders whatever came back rather than a fixed form full of blanks. */
+function _ccFlyHawkerPanel(h) {
+  if (h.loading) return `<div style="padding:26px;text-align:center;color:#64748b;font-size:13px">Loading ${esc(h.name)}…</div>`;
+  if (h.err || !h.data) return `<div style="padding:20px;color:#b91c1c;font-size:13px">Could not load this hawker.<div style="color:#64748b;font-size:11.5px;margin-top:5px">${esc(h.err || 'No data returned.')}</div></div>`;
+
+  const d = h.data, id = d.identity || {}, m = d.metrics || {};
+  const e_ = v => esc(String(v == null ? '' : v));
+  const NF = v => (Number(v) || 0).toLocaleString('en-IN');
+
+  const kpi = (label, val, tone) => `<div style="background:#f8fafc;border:1px solid #eef2f7;border-radius:9px;padding:8px 10px">
+    <div style="font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8">${label}</div>
+    <div style="font-size:15px;font-weight:800;color:${tone || '#0f172a'};margin-top:2px;font-variant-numeric:tabular-nums">${val}</div>
+  </div>`;
+  const sec = (title, inner) => inner ? `<div style="margin-top:14px">
+    <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:6px">${title}</div>${inner}</div>` : '';
+
+  const statusPill = id.is_active
+    ? `<span style="font-size:10px;font-weight:800;color:#15803d;background:#dcfce7;border-radius:9px;padding:2px 9px">ACTIVE</span>`
+    : `<span style="font-size:10px;font-weight:800;color:#b91c1c;background:#fee2e2;border-radius:9px;padding:2px 9px">INACTIVE</span>`;
+
+  // Lifting is the number this card exists to answer, so it leads.
+  const staleTone = m.days_since_supply == null ? '#94a3b8'
+    : m.days_since_supply > 7 ? '#b91c1c' : m.days_since_supply > 2 ? '#b45309' : '#15803d';
+  const kpis = `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+    ${kpi('Avg copies/day', NF(m.current_avg_per_day))}
+    ${kpi('This month', NF(m.this_month_copies))}
+    ${kpi('Trend', m.trend_pct == null ? '—' : (m.trend_pct > 0 ? '+' : '') + m.trend_pct + '%',
+        m.trend_pct == null ? null : m.trend_pct >= 0 ? '#15803d' : '#b91c1c')}
+    ${kpi('Last supply', m.days_since_supply == null ? '—' : m.days_since_supply === 0 ? 'Today' : m.days_since_supply + 'd ago', staleTone)}
+    ${kpi('Centre rank', m.centre_rank ? `#${m.centre_rank}` : '—',
+        m.centre_rank && m.centre_size ? (m.centre_rank <= Math.ceil(m.centre_size * 0.25) ? '#15803d' : null) : null)}
+    ${kpi('Lifetime', NF(m.total_copies))}
+  </div>`;
+
+  // 12-month bars — relative heights say more than twelve numbers in a row.
+  const months = (d.trends && d.trends.monthly || []).slice().reverse();
+  const maxAvg = Math.max(1, ...months.map(x => x.avg_per_day));
+  const chart = months.length > 1 ? `<div style="display:flex;align-items:flex-end;gap:3px;height:56px;padding:4px 2px 0">
+    ${months.map(x => `<div title="${e_(x.month)} · ${NF(x.avg_per_day)} copies/day over ${x.days} days"
+      style="flex:1;min-width:0;background:#0ea5e9;opacity:${0.45 + 0.55 * (x.avg_per_day / maxAvg)};height:${Math.max(3, Math.round(x.avg_per_day / maxAvg * 52))}px;border-radius:2px 2px 0 0"></div>`).join('')}
+  </div>
+  <div style="display:flex;justify-content:space-between;font-size:9.5px;color:#94a3b8;margin-top:3px">
+    <span>${e_(months[0].month)}</span><span>${e_(months[months.length - 1].month)}</span></div>` : '';
+
+  const recent = (d.trends && d.trends.recent || []).slice(0, 12);
+  const recentTbl = recent.length ? `<div style="max-height:190px;overflow:auto;border:1px solid #eef2f7;border-radius:8px">
+    <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+      <thead><tr style="background:#f8fafc"><th style="text-align:left;padding:5px 7px;font-size:9.5px;color:#94a3b8;font-weight:800;text-transform:uppercase">Date</th>
+      <th style="text-align:right;padding:5px 7px;font-size:9.5px;color:#94a3b8;font-weight:800;text-transform:uppercase">Copies</th>
+      <th style="text-align:right;padding:5px 7px;font-size:9.5px;color:#94a3b8;font-weight:800;text-transform:uppercase">Amount</th></tr></thead>
+      <tbody>${recent.map(r => `<tr style="border-top:1px solid #f1f5f9">
+        <td style="padding:4px 7px">${e_(r.date)}</td>
+        <td style="padding:4px 7px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600">${NF(r.copies)}</td>
+        <td style="padding:4px 7px;text-align:right;font-variant-numeric:tabular-nums;color:#64748b">${r.amount ? _apFmtC(r.amount) : '—'}</td>
+      </tr>`).join('')}</tbody></table></div>` : '';
+
+  const peers = d.centre_peers || [];
+  const peerTbl = peers.length > 1 ? `<div style="max-height:180px;overflow:auto;border:1px solid #eef2f7;border-radius:8px">
+    <table style="width:100%;border-collapse:collapse;font-size:11.5px"><tbody>
+    ${peers.map(p => `<tr style="border-top:1px solid #f1f5f9;${p.is_self ? 'background:#eff6ff' : ''}">
+      <td style="padding:4px 7px;color:#94a3b8;width:26px">#${p.rank}</td>
+      <td style="padding:4px 7px">${p.is_self
+        ? `<b style="color:#0369a1">${e_(p.hawker_name)}</b>`
+        : `<a onclick="ccFlyHawker('${_csQ(id.unit_code)}','${_csQ(p.hawker_id)}','${_csQ(p.hawker_name)}')" style="cursor:pointer;color:#1e3a8a">${e_(p.hawker_name)}</a>`}</td>
+      <td style="padding:4px 7px;text-align:right;font-variant-numeric:tabular-nums">${NF(p.avg_copies)}</td>
+    </tr>`).join('')}</tbody></table></div>` : '';
+
+  const pubs = d.publications || [];
+  const pubTbl = pubs.length ? `<table style="width:100%;border-collapse:collapse;font-size:11.5px">
+    ${pubs.map(p => `<tr style="border-top:1px solid #f1f5f9">
+      <td style="padding:4px 6px">${e_(p.pub)}${p.edtn ? `<span style="color:#94a3b8"> · ${e_(p.edtn)}</span>` : ''}</td>
+      <td style="padding:4px 6px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600">${NF(p.copies)}</td>
+    </tr>`).join('')}</table>` : '';
+
+  // The master fields, already grouped and stripped of blanks by the API.
+  const details = (d.details || []).map(g => `<div style="margin-bottom:9px">
+    <div style="font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:3px">${e_(g.title)}</div>
+    <div style="background:#fcfcfd;border:1px solid #eef2f7;border-radius:8px;padding:7px 9px">
+      ${g.fields.map(f => `<div style="display:flex;gap:8px;font-size:11.5px;line-height:1.75">
+        <span style="flex:none;width:118px;color:#94a3b8">${e_(f.label)}</span>
+        <span style="color:#0f172a;min-width:0;word-break:break-word">${e_(f.value)}</span></div>`).join('')}
+    </div></div>`).join('');
+
+  return `<div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      ${statusPill}
+      ${id.hawker_type ? `<span style="font-size:10.5px;color:#64748b">Type ${e_(id.hawker_type)}</span>` : ''}
+      ${id.catagory ? `<span style="font-size:10.5px;color:#64748b">· ${e_(id.catagory)}</span>` : ''}
+      <span style="font-size:10.5px;color:#94a3b8">· ID ${e_(id.hawker_id)}</span>
+    </div>
+    <div style="font-size:11.5px;color:#475569;margin-bottom:10px">
+      ${e_(id.unit_name || id.unit_code)}${id.hawker_center_name ? ` › <b>${e_(id.hawker_center_name)}</b>` : ''}
+      ${id.center_incharge_name ? `<div style="font-size:10.5px;color:#94a3b8;margin-top:2px">CI · ${e_(id.center_incharge_name)}${id.field_officer_name ? ` &nbsp;·&nbsp; FO · ${e_(id.field_officer_name)}` : ''}</div>` : ''}
+      ${id.mobile_no ? `<div style="font-size:10.5px;color:#0369a1;margin-top:2px">📱 ${e_(id.mobile_no)}</div>` : ''}
+    </div>
+    ${kpis}
+    ${sec(`Supply trend · ${months.length} months`, chart)}
+    ${sec('Recent supply days', recentTbl)}
+    ${sec(`Publication mix · last 30 days`, pubTbl)}
+    ${sec(`Centre ranking${m.centre_size ? ` · ${m.centre_size} hawkers` : ''}`, peerTbl)}
+    ${sec('Master record', details)}
+  </div>`;
+}
+
 function _ccFlyAgencyPanel(a) {
   if (a.loading) return `<div style="padding:26px;text-align:center;color:#64748b;font-size:13px">Loading ${esc(a.name)}…</div>`;
   if (a.err || !a.data) return `<div style="padding:20px;color:#b91c1c;font-size:13px">Could not load this agency.<div style="color:#64748b;font-size:11.5px;margin-top:5px">${esc(a.err || 'No data returned.')}</div></div>`;
@@ -5241,6 +5361,30 @@ function _ccFlyout() {
       <div style="border-top:1px solid #e2e8f0;padding:11px 16px;display:flex;gap:9px;justify-content:flex-end">
         <button onclick="ccFlyBack()" style="padding:8px 15px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font-size:12.5px;cursor:pointer">Back</button>
         <button onclick="ccFlyExecFull()" style="padding:8px 15px;border:none;border-radius:8px;background:#7c3aed;color:#fff;font-size:12.5px;font-weight:600;cursor:pointer">Open full performance →</button>
+      </div>
+    </aside>`;
+  }
+
+  // ── A hawker card, same shell as the agency profile in cash-sale colours ──
+  const hw = top && top.kind === 'hawker' ? top : null;
+  if (hw) {
+    return `<div onclick="ccFlyClose()" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:300"></div>
+    <aside role="dialog" aria-modal="true" style="position:fixed;top:0;right:0;bottom:0;width:min(560px,94vw);background:#fff;z-index:301;box-shadow:-8px 0 30px rgba(15,23,42,.18);display:flex;flex-direction:column">
+      <div style="border-top:4px solid #0ea5e9;padding:12px 18px;border-bottom:1px solid #e2e8f0">
+        <div style="display:flex;align-items:flex-start;gap:10px">
+          <button onclick="ccFlyBack()" aria-label="Back"
+            style="flex:none;height:28px;padding:0 10px;border-radius:8px;border:1px solid #e2e8f0;background:#fff;color:#475569;font-size:12px;cursor:pointer">← Back</button>
+          <div style="min-width:0;flex:1">
+            <div style="font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#0ea5e9">Hawker 360° Profile</div>
+            <div style="font-size:16px;font-weight:800;color:#0f172a;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(hw.name)}</div>
+          </div>
+          <button onclick="ccFlyClose()" aria-label="Close"
+            style="flex:none;width:30px;height:30px;border-radius:8px;border:1px solid #e2e8f0;background:#fff;color:#64748b;font-size:17px;line-height:1;cursor:pointer">×</button>
+        </div>
+      </div>
+      <div style="flex:1;overflow:auto;padding:13px 16px">${_ccFlyHawkerPanel(hw)}</div>
+      <div style="border-top:1px solid #e2e8f0;padding:11px 16px;display:flex;gap:9px;justify-content:flex-end">
+        <button onclick="ccFlyClose()" style="padding:8px 15px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font-size:12.5px;cursor:pointer">Close</button>
       </div>
     </aside>`;
   }
@@ -5843,7 +5987,9 @@ window.csHwkPopup = async (execCode, ciName, unit) => {
         const hms = hwkMsAvail ? hmm.hawker[`${unit}|${h.hawker_id}`] : null;
         const msTd = hwkMsAvail ? `<td style="padding:7px 8px;text-align:right;font-size:12px" title="${hms && hms.top_comp ? `Top competitor: ${esc(hms.top_comp)} · ${_ccN(hms.top_comp_copies)} cp` : ''}">${_msPct(hms ? hms.share_pct : null)}</td>` : '';
         return `<tr style="border-top:1px solid #eef2f7" onmouseenter="this.style.background='#f0f9ff'" onmouseleave="this.style.background=''">
-          <td style="padding:7px 14px;font-size:12px;color:#1e293b">${esc(h.hawker_name)}</td>
+          <td style="padding:7px 14px;font-size:12px;color:#1e293b">
+            <a onclick="document.getElementById('cs-hwk-modal')?.remove();openHawkerProfile('${_csQ(unit)}','${_csQ(h.hawker_id)}','${_csQ(h.hawker_name)}')"
+               title="Open hawker profile" style="cursor:pointer;color:#0369a1;text-decoration:underline;text-underline-offset:2px">${esc(h.hawker_name)}</a></td>
           <td style="padding:7px 8px;text-align:right;font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums">${_ccN(h.mtd)}</td>
           <td style="padding:7px 8px;text-align:right;font-size:12px;color:#94a3b8;font-variant-numeric:tabular-nums">${_ccN(h.prev_mtd)}</td>
           <td style="padding:7px 8px;text-align:right;font-size:12px;color:${gc};font-variant-numeric:tabular-nums">${diff >= 0 ? '+' : ''}${_ccN(diff)}</td>
@@ -12673,7 +12819,9 @@ function epExecDetailView() {
         const hRows = cd.hawkers.map((h, i) => {
           const compStr = (h.competitors || []).map(cx => `${esc(cx.name)} ${_n(cx.copies)}`).join(' · ');
           return `<tr style="border-bottom:1px solid #f1f5f9;${i%2===0?'background:#fafafa':''}">
-            <td style="padding:7px 9px;font-size:12.5px;font-weight:600;color:#1e3a8a">${esc(h.hawker_name)}</td>
+            <td style="padding:7px 9px;font-size:12.5px;font-weight:600">
+              <a onclick="openHawkerProfile('${_csQ(selC.unit_code)}','${_csQ(h.hawker_id)}','${_csQ(h.hawker_name)}')"
+                 title="Open hawker profile" style="cursor:pointer;color:#1e3a8a;text-decoration:underline;text-underline-offset:2px">${esc(h.hawker_name)}</a></td>
             <td style="padding:7px 9px;font-size:11px;color:#64748b">${esc(h.hawker_id)}</td>
             <td style="padding:7px 9px;font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums">${_n(h.today_cp)}</td>
             <td style="padding:7px 9px;font-size:12px;text-align:right;color:${_growClr(h.growth_pct)}">${h.growth_pct != null ? (h.growth_pct > 0 ? '+' : '') + h.growth_pct + '%' : '—'}</td>

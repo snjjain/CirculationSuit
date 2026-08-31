@@ -4508,6 +4508,9 @@ require('./agency_rating')({ app, q, getScopeUnitCodes });
 // ── Agency 360° Profile — single-agency drill-down landing page ────────────────
 require('./agency_profile')({ app, q, getScopeUnitCodes });
 
+// ── Hawker 360° Profile — the cash-sale counterpart to the agency profile ─────
+require('./hawker_profile')({ app, q, getScopeUnitCodes });
+
 // ── Strategic AI Nexus — proactive circulation-boss briefing & tour planning ──
 require('./ai_nexus')({ app, q, getScopeUnitCodes, getOuScopeFilter, computeInsights: insightsApi.computeInsights });
 
