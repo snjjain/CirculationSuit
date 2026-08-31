@@ -4997,7 +4997,15 @@ function _ccFlyExecPanel(x) {
       <div style="font-size:11px;color:#64748b;margin-bottom:12px">Cash sale is collected upfront — collection is always 100% for city centres</div>
       <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:14px">
         ${kpi('Centres managed', ci.centres != null ? _ccN(ci.centres) : '—', '#0ea5e9')}
-        ${kpi('Hawkers', ci.hawkers != null ? _ccN(ci.hawkers) : '—', '#0ea5e9')}
+        ${ci.hawkers
+          ? `<div onclick="csHwkPopup('${_csQ(e.executive_code || x.execCode)}','${_csQ(e.exec_name || x.name)}','${_csQ(x.unitCode || ci.unit_code || '')}')"
+                title="Show these hawkers, then click any name for their card"
+                style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:9px;padding:8px 10px;cursor:pointer"
+                onmouseenter="this.style.background='#e0f2fe'" onmouseleave="this.style.background='#f0f9ff'">
+              <div style="font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#0284c7">Hawkers <span style="float:right">›</span></div>
+              <div style="font-size:15px;font-weight:800;color:#0ea5e9;margin-top:2px;font-variant-numeric:tabular-nums">${_ccN(ci.hawkers)}</div>
+            </div>`
+          : kpi('Hawkers', '—', '#0ea5e9')}
         ${kpi('Supply (today)', ci.supply_cur != null ? _ccN(ci.supply_cur) + ' cp' : '—')}
         ${kpi('Growth vs prev', ci.growth_pct != null ? (ci.growth_pct > 0 ? '+' : '') + ci.growth_pct + '%' : '—', growClr)}
         ${kpi('Collection %', '100%', '#15803d')}
@@ -5990,19 +5998,24 @@ window.csHwkPopup = async (execCode, ciName, unit) => {
     const hwkMsAvail = hmm && hmm.available && hmm.hawker && Object.keys(hmm.hawker).length;
     const th = (label, right) => `<th style="padding:8px ${right?'8px':'14px'};text-align:${right?'right':'left'};font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">${label}</th>`;
     body.innerHTML = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:520px">
-      <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">${th('Hawker')}${th('MTD',1)}${th('Prev',1)}${th('Diff',1)}${th('Growth',1)}${hwkMsAvail ? th('Mkt Share',1) : ''}<th style="padding:8px 14px;text-align:right;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Share</th></tr></thead>
+      <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">${th('Hawker')}${th('Today',1)}${th('Avg/day',1)}${th('MTD',1)}${th('Prev Mth',1)}${th('Diff',1)}${th('Growth',1)}${hwkMsAvail ? th('Mkt Share',1) : ''}<th style="padding:8px 14px;text-align:right;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Share</th></tr></thead>
       <tbody>${rows.map(h => {
         const diff = h.mtd - h.prev_mtd;
         const gpct = h.prev_mtd ? diff / h.prev_mtd * 100 : null;
         const share = totalMtd ? (h.mtd / totalMtd * 100).toFixed(1) : '0.0';
         const gc = diff > 0 ? '#15803d' : diff < 0 ? '#dc2626' : '#64748b';
-        const gs = gpct != null ? `${diff >= 0 ? '+' : ''}${gpct.toFixed(1)}%` : diff > 0 ? '+∞' : '0%';
+        // No previous month means the hawker is new to the book, not infinite growth.
+        const gs = gpct != null ? `${diff >= 0 ? '+' : ''}${gpct.toFixed(1)}%`
+          : `<span title="No supply in the previous month — new to this centre" style="color:#94a3b8">new</span>`;
         const hms = hwkMsAvail ? hmm.hawker[`${unit}|${h.hawker_id}`] : null;
         const msTd = hwkMsAvail ? `<td style="padding:7px 8px;text-align:right;font-size:12px" title="${hms && hms.top_comp ? `Top competitor: ${esc(hms.top_comp)} · ${_ccN(hms.top_comp_copies)} cp` : ''}">${_msPct(hms ? hms.share_pct : null)}</td>` : '';
         return `<tr style="border-top:1px solid #eef2f7" onmouseenter="this.style.background='#f0f9ff'" onmouseleave="this.style.background=''">
           <td style="padding:7px 14px;font-size:12px;color:#1e293b">
-            <a onclick="document.getElementById('cs-hwk-modal')?.remove();openHawkerProfile('${_csQ(unit)}','${_csQ(h.hawker_id)}','${_csQ(h.hawker_name)}')"
-               title="Open hawker profile" style="cursor:pointer;color:#0369a1;text-decoration:underline;text-underline-offset:2px">${esc(h.hawker_name)}</a></td>
+            <a onclick="document.getElementById('cs-hwk-modal')?.remove();openHawkerProfile('${_csQ(h.unit_code || unit)}','${_csQ(h.hawker_id)}','${_csQ(h.hawker_name)}')"
+               title="Open hawker card" style="cursor:pointer;color:#0369a1;text-decoration:underline;text-underline-offset:2px">${esc(h.hawker_name)}</a>
+            ${h.payment_nature && /defaul/i.test(h.payment_nature) ? `<span title="Field survey: defaulter" style="margin-left:5px;font-size:9px;font-weight:800;color:#b91c1c;background:#fee2e2;border-radius:7px;padding:1px 5px">DEF</span>` : ''}</td>
+          <td style="padding:7px 8px;text-align:right;font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;color:${h.today_cp ? '#0f172a' : '#cbd5e1'}">${h.today_cp ? _ccN(h.today_cp) : '—'}</td>
+          <td style="padding:7px 8px;text-align:right;font-size:12px;color:#475569;font-variant-numeric:tabular-nums">${_ccN(h.daily_avg)}</td>
           <td style="padding:7px 8px;text-align:right;font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums">${_ccN(h.mtd)}</td>
           <td style="padding:7px 8px;text-align:right;font-size:12px;color:#94a3b8;font-variant-numeric:tabular-nums">${_ccN(h.prev_mtd)}</td>
           <td style="padding:7px 8px;text-align:right;font-size:12px;color:${gc};font-variant-numeric:tabular-nums">${diff >= 0 ? '+' : ''}${_ccN(diff)}</td>
@@ -6013,8 +6026,11 @@ window.csHwkPopup = async (execCode, ciName, unit) => {
       }).join('')}</tbody>
       <tfoot><tr style="background:#f8fafc;border-top:2px solid #e2e8f0">
         <td style="padding:8px 14px;font-size:11.5px;font-weight:800;color:#1e293b">${rows.length} hawkers total</td>
+        <td style="padding:8px 8px;text-align:right;font-size:12.5px;font-weight:800;font-variant-numeric:tabular-nums;color:#0f172a">${_ccN(rows.reduce((s, h) => s + (h.today_cp || 0), 0))}</td>
+        <td style="padding:8px 8px;text-align:right;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:#475569">${_ccN(rows.reduce((s, h) => s + (h.daily_avg || 0), 0))}</td>
         <td style="padding:8px 8px;text-align:right;font-size:13px;font-weight:800;font-variant-numeric:tabular-nums;color:#0f172a">${_ccN(totalMtd)}</td>
-        <td colspan="${hwkMsAvail ? 5 : 4}"></td>
+        <td style="padding:8px 8px;text-align:right;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:#94a3b8">${_ccN(rows.reduce((s, h) => s + (h.prev_mtd || 0), 0))}</td>
+        <td colspan="${hwkMsAvail ? 4 : 3}"></td>
       </tr></tfoot>
     </table></div>`;
   } catch (err) {
