@@ -355,35 +355,77 @@ module.exports = function installCommandCentre({ app, q }) {
   }
 
   // ── Supply: Agent (credit sale) + Cash (hawker), both sides state-bucketed ──
-  async function supplyByState(asOn, prev, unitScope) {
+  /* Supply for the selected window vs the comparison window, as copies per day.
+
+     This used to read two single dates and ignore the range entirely, so on the
+     Command Centre picking Last 3 Months or COVID moved Collection and Coverage while
+     Supply sat on today's count — the range appeared to do nothing. It now averages
+     over each window: a one-day window (Today, COVID) still yields that day's copies,
+     so short ranges read exactly as before.
+
+     Divided by the days in the WINDOW, not the days each state happened to supply, for
+     the same reason as the branch dashboard — a per-group divisor lets an irregular
+     supplier's short-window rate stand in for a whole month. */
+  async function supplyByState(win, prevWin, unitScope) {
     const uCl = unitScope ? ' AND s.unit_code = ?' : '';
     const uP  = unitScope ? [unitScope] : [];
     const hCl = unitScope ? ' AND h.loc_id = ?' : '';
-    const [agent, cash, uhs] = await Promise.all([
-      q(`SELECT COALESCE(NULLIF(s.state_name,''),'OTHER') st,
-                SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) cur,
-                SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
+    const agentSql =
+      `SELECT COALESCE(NULLIF(s.state_name,''),'OTHER') st, SUM(s.sup_copy) tot,
+              COUNT(DISTINCT s.supply_date) days
+       FROM supply_data s FORCE INDEX (idx_sd_cover_range)
+       WHERE s.supply_date BETWEEN ? AND ?
+         AND s.sup_type_code = 'S01' AND COALESCE(s.publ,'') NOT IN ('P14')${uCl}
+       GROUP BY st`;
+    const hawkSql =
+      `SELECT h.loc_id unit, SUM(h.sup_copies) tot, COUNT(DISTINCT h.supply_date) days
+       FROM hawker_supply h FORCE INDEX (idx_hs_cover_range)
+       WHERE h.supply_date BETWEEN ? AND ?${hCl}
+       GROUP BY h.loc_id`;
+
+    const [agentC, agentP, cashC, cashP, credit, uhs] = await Promise.all([
+      q(agentSql, [win.from, win.to, ...uP]),
+      q(agentSql, [prevWin.from, prevWin.to, ...uP]),
+      q(hawkSql,  [win.from, win.to, ...uP]),
+      q(hawkSql,  [prevWin.from, prevWin.to, ...uP]),
+      // The credit-sale filter is applied per agency, so it cannot ride on the
+      // state-level aggregate above; agent copies are corrected by its share below.
+      q(`SELECT COALESCE(NULLIF(s.state_name,''),'OTHER') st, SUM(s.sup_copy) credit_tot,
+                (SELECT SUM(s2.sup_copy) FROM supply_data s2
+                  WHERE s2.supply_date = s.supply_date AND s2.state_name = s.state_name
+                    AND s2.sup_type_code='S01' AND COALESCE(s2.publ,'') NOT IN ('P14')${unitScope ? ' AND s2.unit_code = ?' : ''}) all_tot
          FROM supply_data s
          JOIN (SELECT DISTINCT unit, agcd FROM agency_master
                WHERE ag_class_name = 'CREDIT SALE' AND COALESCE(supply_stop_flag,'N') = 'N'
                  AND (suspend_date IS NULL OR suspend_date > CURDATE())) cm
            ON cm.unit = s.unit_code AND cm.agcd = s.agcd
-         WHERE s.sup_type_code = 'S01' AND COALESCE(s.publ,'') NOT IN ('P14')
-           AND s.supply_date IN (?, ?)${uCl}
-         GROUP BY st`, [asOn, prev, asOn, prev, ...uP]),
-      // hawker_supply has no state column — bucket via the unit's home state.
-      q(`SELECT h.loc_id unit,
-                SUM(CASE WHEN h.supply_date = ? THEN h.sup_copies ELSE 0 END) cur,
-                SUM(CASE WHEN h.supply_date = ? THEN h.sup_copies ELSE 0 END) prv
-         FROM hawker_supply h WHERE h.supply_date IN (?, ?)${hCl}
-         GROUP BY h.loc_id`, [asOn, prev, asOn, prev, ...uP]),
+         WHERE s.supply_date = ? AND s.sup_type_code = 'S01'
+           AND COALESCE(s.publ,'') NOT IN ('P14')${uCl}
+         GROUP BY st, s.supply_date, s.state_name`,
+        [...(unitScope ? [unitScope] : []), win.to, ...uP]),
       unitHomeState(),
     ]);
+    // Share of each state's supply that is credit sale, measured on one day (cheap) and
+    // applied across the window — the mix moves slowly, the volume is what changes.
+    const creditShare = {};
+    credit.rows.forEach(r => {
+      const all = N(r.all_tot);
+      if (all > 0) creditShare[r.st] = N(r.credit_tot) / all;
+    });
+    const avg = (tot, days) => (days > 0 ? Math.round(N(tot) / days) : 0);
+    const agent = { rows: agentC.rows.map(r => ({ st: r.st,
+      cur: Math.round(avg(r.tot, r.days) * (creditShare[r.st] ?? 1)), prv: 0 })) };
+    const agentPrevRows = agentP.rows.map(r => ({ st: r.st,
+      prv: Math.round(avg(r.tot, r.days) * (creditShare[r.st] ?? 1)) }));
+    const cash = { rows: cashC.rows.map(r => ({ unit: r.unit, cur: avg(r.tot, r.days), prv: 0 })) };
+    const cashPrevRows = cashP.rows.map(r => ({ unit: r.unit, prv: avg(r.tot, r.days) }));
     const home = uhs;
 
     const agentCur = blank(), agentPrev = blank(), cashCur = blank(), cashPrev = blank();
-    agent.rows.forEach(r => { const b = bucketOf(r.st); agentCur[b] += N(r.cur); agentPrev[b] += N(r.prv); });
-    cash.rows.forEach(r => { const b = bucketOf(home[r.unit]?.st); cashCur[b] += N(r.cur); cashPrev[b] += N(r.prv); });
+    agent.rows.forEach(r => { agentCur[bucketOf(r.st)] += N(r.cur); });
+    agentPrevRows.forEach(r => { agentPrev[bucketOf(r.st)] += N(r.prv); });
+    cash.rows.forEach(r => { cashCur[bucketOf(home[r.unit]?.st)] += N(r.cur); });
+    cashPrevRows.forEach(r => { cashPrev[bucketOf(home[r.unit]?.st)] += N(r.prv); });
     return { agentCur, agentPrev, cashCur, cashPrev };
   }
 
@@ -567,8 +609,23 @@ module.exports = function installCommandCentre({ app, q }) {
       const win = (_spRqRange === 'custom' && /^\d{4}-\d{2}-\d{2}$/.test(_spFrom || '') && /^\d{4}-\d{2}-\d{2}$/.test(_spTo || ''))
         ? { from: _spFrom, to: _spTo, label: `${_spFrom} → ${_spTo}`, key: 'custom' }
         : resolveRangeWindow(asOn, _spRqRange);
+      /* Same comparison rule as the branch dashboard: default to the window one year
+         back, let the caller name one explicitly, and for COVID compare against today —
+         "18 Mar 2020 vs 18 Mar 2019" is not a question anyone asks of that range. */
+      const _cf = String(req.query.compare_from || '').trim();
+      const _ct = String(req.query.compare_to || '').trim();
+      const _isD = s => /^\d{4}-\d{2}-\d{2}$/.test(s);
+      const prevWin = (_isD(_cf) && _isD(_ct))
+        ? { from: _cf, to: _ct }
+        : (win.key === 'covid'
+          ? { from: asOn, to: asOn }
+          : { from: `${Number(win.from.slice(0, 4)) - 1}${win.from.slice(4)}`,
+              to:   `${Number(win.to.slice(0, 4)) - 1}${win.to.slice(4)}` });
+      // Supply now covers the selected window, so the KPI caption must say so —
+      // a one-day window still reads as a plain date rather than "X → X".
+      const winLabel = win.from === win.to ? `on ${win.to}` : `${win.label} · ${win.from} → ${win.to}`;
       const [sup, col, os, dcr, heads, rng] = await Promise.all([
-        supplyByState(asOn, prev, unitScope),
+        supplyByState(win, prevWin, unitScope),
         collectionByState(asOn, prev, unitScope),
         osByState(unitScope),
         dcrByState(asOn, prev, unitScope),
@@ -633,9 +690,9 @@ module.exports = function installCommandCentre({ app, q }) {
       const osTot = sum(s => s.os.current), osPrevTot = sum(s => s.os.previous);
       const bookTot = sum(s => s.dcr.agencies_total);
       const totals = {
-        supply:        { value: supTot, prev: supPrevTot, growth_pct: r1(pct(supTot, supPrevTot)), window: `on ${asOn}` },
-        agent:         { value: sum(s => s.supply.agent), share_pct: supTot ? r1(sum(s => s.supply.agent) / supTot * 100) : null, window: `on ${asOn}` },
-        cash:          { value: sum(s => s.supply.cash),  share_pct: supTot ? r1(sum(s => s.supply.cash) / supTot * 100) : null, window: `on ${asOn}` },
+        supply:        { value: supTot, prev: supPrevTot, growth_pct: r1(pct(supTot, supPrevTot)), window: winLabel },
+        agent:         { value: sum(s => s.supply.agent), share_pct: supTot ? r1(sum(s => s.supply.agent) / supTot * 100) : null, window: winLabel },
+        cash:          { value: sum(s => s.supply.cash),  share_pct: supTot ? r1(sum(s => s.supply.cash) / supTot * 100) : null, window: winLabel },
         collection:    { value: rng.collection, txn: rng.txn, agencies_paid: rng.agencies_paid, window: win.label },
         collection_pct:{ value: billTot > 0 ? r1(mtdTot / billTot * 100) : null, billed: billTot, collected: mtdTot,
                          window: `this month vs ${col.prev_month_label} billing` },
@@ -648,6 +705,7 @@ module.exports = function installCommandCentre({ app, q }) {
       res.json({
         as_on: asOn, previous: prev, compare: mode, compare_label: label,
         range: win.key, range_label: win.label, range_from: win.from, range_to: win.to,
+        prev_range_from: prevWin.from, prev_range_to: prevWin.to,
         unit_code: unitScope, prev_month_label: col.prev_month_label,
         totals,
         states,

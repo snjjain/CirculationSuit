@@ -4217,6 +4217,19 @@ window.ccSetCustomRange = (field, val) => {
   if (st.rangeFrom && st.rangeTo && st.rangeFrom <= st.rangeTo) { st.data = null; st._loading = false; render(); }
   else render();
 };
+// Which window the selection is measured against — see csSetCompare on the branch view.
+window.ccSetCompare = (field, val) => {
+  const st = _ccState();
+  if (field === 'from') st.cmpFrom = val; else st.cmpTo = val;
+  if (field === 'from' && !st.cmpTo) st.cmpTo = val;
+  if (field === 'to' && !st.cmpFrom) st.cmpFrom = val;
+  if (st.cmpFrom && st.cmpTo && st.cmpFrom <= st.cmpTo) { st.data = null; st._loading = false; }
+  render();
+};
+window.ccClearCompare = () => {
+  const st = _ccState();
+  st.cmpFrom = ''; st.cmpTo = ''; st.data = null; st._loading = false; render();
+};
 window.ccReset = () => { S.live.cc = null; render(); };
 window.ccDrill = (screen, stateKey) => {
   // Hand the destination dashboard the same state the card was showing, so the
@@ -4257,6 +4270,7 @@ function _ccLoad() {
   if (st.range) p.set('range', st.range);
   if (st.unit) p.set('unit_code', st.unit);
   if (st.range === 'custom' && st.rangeFrom && st.rangeTo) { p.set('range_from', st.rangeFrom); p.set('range_to', st.rangeTo); }
+  if (st.cmpFrom && st.cmpTo) { p.set('compare_from', st.cmpFrom); p.set('compare_to', st.cmpTo); }
   dashJson(`${location.origin}/api/command/state-performance?${p}`)
     .then(d => { st.data = d; st._loading = false; if (S.screen === 'command') render(); })
     .catch(e => { st.data = { _err: String(e && e.message || e) }; st._loading = false; if (S.screen === 'command') render(); });
@@ -5699,10 +5713,27 @@ function _cmdViewNew() {
      figures are always dated without a separate crumb line. */
   const bar = `<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:14px;flex-wrap:wrap">
     <div style="font-size:12px;color:#64748b">
-      ${d && !d._err ? `Supply: <b style="color:#0f172a">${esc(d.as_on)}</b> vs <b style="color:#0f172a">${esc(d.previous)}</b> <span style="color:#94a3b8">(${esc(d.compare_label || 'Previous Year')})</span>` : ''}
+      ${d && !d._err ? `${esc(d.range_label || '')}: <b style="color:#0f172a">${esc(d.range_from)}${d.range_from !== d.range_to ? ` → ${esc(d.range_to)}` : ''}</b>${d.prev_range_from
+        ? ` <span style="color:#94a3b8">compared with</span> <b style="color:#0f172a">${esc(d.prev_range_from)}${d.prev_range_from !== d.prev_range_to ? ` → ${esc(d.prev_range_to)}` : ''}</b>` : ''}` : ''}
       ${st.state ? ` · <b style="color:#1e3a8a">${esc(st.state)}</b> <a onclick="ccSet('state','')" style="cursor:pointer;color:#64748b;text-decoration:underline">clear</a>` : ''}
     </div>
     <div style="display:flex;align-items:flex-end;gap:9px">
+      ${(() => {
+        /* Comparison window. Default is the same window a year back; the picker opens
+           on COVID, where "vs one year earlier" would compare two 2019/2020 days and
+           answer nothing — the useful question is COVID against today. */
+        const set = !!(st.cmpFrom && st.cmpTo);
+        const open = set || st.range === 'covid';
+        const dI = (v, f) => `<input type="date" value="${esc(v || '')}" onchange="ccSetCompare('${f}',this.value)" style="padding:6px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;color:#0f172a">`;
+        return `<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">Compare with</div>
+          ${open
+            ? `<div style="display:flex;gap:5px;align-items:center">${dI(st.cmpFrom, 'from')}<span style="color:#94a3b8;font-size:12px">→</span>${dI(st.cmpTo, 'to')}
+                 ${set ? `<a onclick="ccClearCompare()" title="Back to the same window last year" style="cursor:pointer;color:#64748b;font-size:11px;text-decoration:underline">reset</a>` : ''}</div>
+               ${!set ? `<div style="font-size:10.5px;color:#b45309;margin-top:4px">Pick what to compare the COVID period against — today by default.</div>` : ''}`
+            : `<button onclick="ccSetCompare('from','')" title="By default this range is compared with the same window one year earlier"
+                 style="padding:7px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font-size:12px;cursor:pointer">Same window last year ▾</button>`}
+        </div>`;
+      })()}
       <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">Date range</div>
       <select onchange="ccSet('range',this.value)" style="padding:7px 32px 7px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%278%27 viewBox=%270 0 12 8%27%3E%3Cpath fill=%27%2364748b%27 d=%27M6 8L0 0h12z%27/%3E%3C/svg%3E') no-repeat right 10px center;color:#0f172a;font-size:12.5px;min-width:180px;appearance:none;-webkit-appearance:none;font-weight:500;cursor:pointer">
         ${[['mtd','This Month'],['last_month','Last Month'],['last_3m','Last 3 Months'],['last_6m','Last 6 Months'],['fytd','Current FY (YTD)'],['covid','COVID Period (Mar 2020)'],['today','Today'],['custom','Custom Range']]
