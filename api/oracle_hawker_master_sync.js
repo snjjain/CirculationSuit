@@ -421,6 +421,7 @@ async function ensureSchema(conn) {
     support_staff_name VARCHAR(200),
     route_incharge_name VARCHAR(200),
     synced_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    last_seen_at DATETIME,
     UNIQUE KEY uq_hm_hawker (hawker_id),
     INDEX idx_hm_unit    (unit_code),
     INDEX idx_hm_center  (hawker_center_code),
@@ -459,6 +460,31 @@ async function ensureSchema(conn) {
     const m = line.trim().match(/^([a-z_][a-z0-9_]*)\s+(VARCHAR\(\d+\)|BIGINT|DATETIME|DATE|TEXT)\s*,?$/i);
     if (m && m[1].toLowerCase() !== 'id') wanted.push([m[1], m[2]]);
   });
+
+  /* Hand-collected survey fields. Oracle has no equivalent, so they are deliberately
+     absent from COL_LIST — the daily sync cannot see them and therefore cannot
+     overwrite them. Added here so a fresh install has the columns too. */
+  const SURVEY_COLS = [
+    ['actual_name', 'VARCHAR(160)'],
+    ['house_type', 'VARCHAR(20)'],                 // Rented / Self
+    ['family_size', 'INT'],
+    ['family_in_business', 'INT'],
+    ['other_newspaper_copies', 'INT'],
+    ['newspapers_carried', 'VARCHAR(60)'],         // e.g. Rp+DB+Other News Paper
+    ['income_newspaper', 'INT'],
+    ['other_business', 'VARCHAR(80)'],
+    ['income_other_business', 'INT'],
+    ['total_income', 'INT'],
+    ['transport_mode', 'VARCHAR(40)'],
+    ['payment_nature', 'VARCHAR(20)'],             // Daily Clear / Defaulter
+    ['payment_mode', 'VARCHAR(20)'],               // Online / Cash / Both
+    ['copies_self_delivered', 'INT'],
+    ['marital_status', 'VARCHAR(20)'],
+    ['survey_updated_at', 'DATETIME'],
+  ];
+  SURVEY_COLS.forEach(c => wanted.push(c));
+  // Declared after synced_at in the CREATE above, which is where the parse above stops.
+  wanted.push(['last_seen_at', 'DATETIME']);
 
   const missing = wanted.filter(([n]) => !have.has(n.toLowerCase()));
   if (missing.length) {
@@ -515,10 +541,20 @@ async function sync() {
     await ensureSchema(conn);
 
     await conn.query('START TRANSACTION');
-    await conn.query('TRUNCATE TABLE hawker_master');
+
+    /* Upsert, never TRUNCATE. hawker_master holds two kinds of column: the ones Oracle
+       owns (refreshed here) and hand-collected survey fields Oracle has no idea about —
+       family size, income, transport, payment behaviour. A truncate-and-reload would
+       silently wipe the hand-entered half every morning, so the daily run may only
+       overwrite the columns it is the authority for. Everything else is left alone. */
+    const UPDATE_SET = COL_LIST.split(',').map(s => s.trim()).filter(Boolean)
+      .filter(c => c !== 'hawker_id')            // the match key never updates itself
+      .map(c => `${c} = VALUES(${c})`)
+      .concat('last_seen_at = NOW()')
+      .join(', ');
 
     const BATCH = 500;
-    let inserted = 0;
+    let upserted = 0;
     for (let i = 0; i < rows.length; i += BATCH) {
       const chunk = rows.slice(i, i + BATCH);
       // Derived from COL_LIST, never hardcoded — the two drifted apart when the sync
@@ -526,13 +562,22 @@ async function sync() {
       const ph    = chunk.map(() => `(${',?'.repeat(N_COLS).slice(1)})`).join(',');
       const vals  = chunk.flatMap(f => lineToParams(f));
       await conn.execute(
-        `INSERT INTO hawker_master (${COL_LIST}) VALUES ${ph}`, vals);
-      inserted += chunk.length;
+        `INSERT INTO hawker_master (${COL_LIST}) VALUES ${ph}
+         ON DUPLICATE KEY UPDATE ${UPDATE_SET}`, vals);
+      upserted += chunk.length;
     }
+    // New rows never pass through ON DUPLICATE KEY, so stamp them too.
+    await conn.query('UPDATE hawker_master SET last_seen_at = NOW() WHERE last_seen_at IS NULL');
 
     await conn.query('COMMIT');
-    log(`Inserted ${inserted} rows into hawker_master`);
-    return { rows: inserted };
+
+    // Rows Oracle no longer returns are kept — a retired hawker's card must still open —
+    // but say how many so a collapsing extract is visible rather than silent.
+    const [[stale]] = await conn.query(
+      `SELECT COUNT(*) n FROM hawker_master WHERE last_seen_at < DATE_SUB(NOW(), INTERVAL 6 HOUR)`);
+    log(`Upserted ${upserted} rows into hawker_master` +
+        (Number(stale.n) ? ` · ${stale.n} row(s) not in this Oracle extract (kept)` : ''));
+    return { rows: upserted };
   } catch (e) {
     try { await conn.query('ROLLBACK'); } catch (_) {}
     throw e;

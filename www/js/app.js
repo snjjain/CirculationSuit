@@ -5080,6 +5080,16 @@ function _ccFlyHawkerPanel(h) {
     ? `<span style="font-size:10px;font-weight:800;color:#15803d;background:#dcfce7;border-radius:9px;padding:2px 9px">ACTIVE</span>`
     : `<span style="font-size:10px;font-weight:800;color:#b91c1c;background:#fee2e2;border-radius:9px;padding:2px 9px">INACTIVE</span>`;
 
+  /* Payment behaviour comes from the field survey and is the one thing on this card a
+     centre incharge acts on immediately, so it sits in the header rather than buried
+     in the record below. */
+  const sv = d.survey;
+  const payPill = sv && sv.payment_nature
+    ? (/defaul/i.test(sv.payment_nature)
+      ? `<span title="From field survey" style="font-size:10px;font-weight:800;color:#b91c1c;background:#fee2e2;border-radius:9px;padding:2px 9px">DEFAULTER</span>`
+      : `<span title="From field survey" style="font-size:10px;font-weight:800;color:#15803d;background:#dcfce7;border-radius:9px;padding:2px 9px">${e_(sv.payment_nature.toUpperCase())}</span>`)
+    : '';
+
   // Lifting is the number this card exists to answer, so it leads.
   const staleTone = m.days_since_supply == null ? '#94a3b8'
     : m.days_since_supply > 7 ? '#b91c1c' : m.days_since_supply > 2 ? '#b45309' : '#15803d';
@@ -5145,11 +5155,14 @@ function _ccFlyHawkerPanel(h) {
 
   return `<div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-      ${statusPill}
+      ${statusPill}${payPill}
       ${id.hawker_type ? `<span style="font-size:10.5px;color:#64748b">Type ${e_(id.hawker_type)}</span>` : ''}
       ${id.catagory ? `<span style="font-size:10.5px;color:#64748b">· ${e_(id.catagory)}</span>` : ''}
       <span style="font-size:10.5px;color:#94a3b8">· ID ${e_(id.hawker_id)}</span>
     </div>
+    ${id.actual_name && id.actual_name.trim().toUpperCase() !== String(id.hawker_name || '').trim().toUpperCase()
+      ? `<div style="font-size:11.5px;color:#0f172a;margin-bottom:6px">Goes by <b>${e_(id.actual_name)}</b>
+         <span style="color:#94a3b8;font-size:10.5px">· ERP has "${e_(id.hawker_name)}"</span></div>` : ''}
     <div style="font-size:11.5px;color:#475569;margin-bottom:10px">
       ${e_(id.unit_name || id.unit_code)}${id.hawker_center_name ? ` › <b>${e_(id.hawker_center_name)}</b>` : ''}
       ${id.center_incharge_name ? `<div style="font-size:10.5px;color:#94a3b8;margin-top:2px">CI · ${e_(id.center_incharge_name)}${id.field_officer_name ? ` &nbsp;·&nbsp; FO · ${e_(id.field_officer_name)}` : ''}</div>` : ''}

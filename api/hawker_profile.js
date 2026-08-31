@@ -25,6 +25,24 @@ module.exports = function registerHawkerProfile({ app, q, getScopeUnitCodes }) {
      than the order Oracle stores them. Anything NULL is dropped at render time,
      so a sparsely-filled hawker still produces a clean card. */
   const CARD_GROUPS = [
+    /* Field survey — collected by hand, no Oracle equivalent. Deliberately first: it is
+       the half of the record a person actually went and asked about, and it is what
+       makes the card worth opening for someone who already knows the supply numbers. */
+    ['Field survey', [
+      ['actual_name', 'Actual name'], ['marital_status', 'Marital status'],
+      ['house_type', 'House'], ['family_size', 'Family size'],
+      ['family_in_business', 'Family in business'],
+      ['transport_mode', 'Transport'],
+      ['copies_self_delivered', 'Copies delivered self'],
+      ['newspapers_carried', 'Newspapers carried'],
+      ['other_newspaper_copies', 'Other paper copies'],
+      ['income_newspaper', 'Income — newspaper'],
+      ['other_business', 'Other business'],
+      ['income_other_business', 'Income — other business'],
+      ['total_income', 'Total income'],
+      ['payment_nature', 'Payment nature'], ['payment_mode', 'Payment mode'],
+      ['survey_updated_at', 'Surveyed on'],
+    ]],
     ['Identity', [
       ['hawker_id', 'Hawker ID'], ['old_hawker_id', 'Old ID'], ['sap_id', 'SAP ID'],
       ['hawker_type', 'Type'], ['catagory', 'Category'], ['isactive', 'Active'],
@@ -167,6 +185,11 @@ module.exports = function registerHawkerProfile({ app, q, getScopeUnitCodes }) {
             if (v === null || v === undefined || String(v).trim() === '') return null;
             if (k === 'dob' || k === 'ma' || k === 'doa' || k === 'dateofstart') v = fmtDate(v);
             if (k === 'created_dt' || k === 'modify_dt') v = String(v).slice(0, 19).replace('T', ' ');
+            if (k === 'survey_updated_at') v = fmtDate(v);
+            // Rupee amounts read as money, not bare digits.
+            if (['income_newspaper', 'income_other_business', 'total_income'].includes(k)) {
+              v = '₹' + Number(v).toLocaleString('en-IN');
+            }
             if (k === 'isactive' || k === 'exist') v = String(v).toUpperCase() === 'Y' ? 'Yes' : 'No';
             // Oracle stores 0 where no number was captured — a phone column reading "0"
             // is worse than showing nothing.
@@ -191,7 +214,19 @@ module.exports = function registerHawkerProfile({ app, q, getScopeUnitCodes }) {
           hawker_type: master.hawker_type, catagory: master.catagory,
           is_active: String(master.isactive || '').toUpperCase() === 'Y',
           city: master.city, distribution_area: master.distribution_area,
+          // Oracle's name is often an abbreviation; the survey captured what the
+          // hawker actually goes by, so show that as the display name when present.
+          actual_name: master.actual_name || null,
         },
+        survey: master.survey_updated_at ? {
+          surveyed_on: fmtDate(master.survey_updated_at),
+          payment_nature: master.payment_nature || null,
+          payment_mode: master.payment_mode || null,
+          total_income: master.total_income == null ? null : N(master.total_income),
+          family_size: master.family_size == null ? null : N(master.family_size),
+          transport_mode: master.transport_mode || null,
+          copies_self_delivered: master.copies_self_delivered == null ? null : N(master.copies_self_delivered),
+        } : null,
         metrics: {
           current_avg_per_day: thisM ? thisM.avg_per_day : 0,
           this_month_copies:   thisM ? thisM.copies : 0,
