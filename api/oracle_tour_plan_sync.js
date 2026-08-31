@@ -63,6 +63,11 @@ function _runSqlplusSpawn(sqlFile) {
     });
     let stderr = '';
     proc.stderr.on('data', d => { stderr += d.toString(); });
+    // Drain stdout even though the data goes to the spool. An unread pipe fills at ~64KB
+    // and blocks sqlplus mid-query; this is the belt to TERMOUT OFF's braces, and keeps
+    // any SP2-/ORA- message sqlplus prints on stdout available for the error below.
+    let stdout = '';
+    proc.stdout.on('data', d => { if (stdout.length < 65536) stdout += d.toString(); });
     proc.stdin.write(`CONNECT ${connectStr}\n`);
     proc.stdin.write(`@"${sqlFile}"\n`);
     proc.stdin.write('EXIT\n');
@@ -156,8 +161,11 @@ const PLAN_COLS = 44;
 function buildPlanSql(from, to, spoolFile) {
   const T = v => `REPLACE(REPLACE(${v},CHR(28),' '),CHR(10),' ')`;
   return [
+    // TERMOUT OFF is load-bearing, not tidiness: without it sqlplus writes every row to
+    // stdout as well as the spool. Nothing drains that pipe, so past the ~64KB OS buffer
+    // sqlplus blocks on write and never finishes — the spool freezes mid-result.
     'SET PAGESIZE 0', 'SET LINESIZE 32767', 'SET FEEDBACK OFF',
-    'SET TRIMSPOOL ON', 'SET WRAP OFF', 'SET HEADING OFF',
+    'SET TRIMSPOOL ON', 'SET WRAP OFF', 'SET HEADING OFF', 'SET TERMOUT OFF',
     `SPOOL "${spoolFile}"`,
     // col 0  created_by_name_raw ("NAME ~ EMP_CODE" — only the name half is kept)
     // col 1  unit_name … col 41 remark … col 42 station_lat, col 43 station_lng

@@ -62,6 +62,10 @@ function _runSqlplusSpawn(sqlFile) {
     });
     let stderr = '';
     proc.stderr.on('data', d => { stderr += d.toString(); });
+    // Drain stdout: an unread pipe fills at ~64KB and blocks sqlplus mid-query.
+    // Belt to TERMOUT OFF's braces.
+    let stdout = '';
+    proc.stdout.on('data', d => { if (stdout.length < 65536) stdout += d.toString(); });
     proc.stdin.write(`CONNECT ${connectStr}\n`);
     proc.stdin.write(`@"${sqlFile}"\n`);
     proc.stdin.write('EXIT\n');
@@ -189,7 +193,7 @@ function buildAttendanceSql(from, to, spoolFile) {
   const T = v => `REPLACE(REPLACE(${v},CHR(28),' '),CHR(10),' ')`;
   return [
     'SET PAGESIZE 0', 'SET LINESIZE 32767', 'SET FEEDBACK OFF',
-    'SET TRIMSPOOL ON', 'SET WRAP OFF', 'SET HEADING OFF',
+    'SET TRIMSPOOL ON', 'SET WRAP OFF', 'SET HEADING OFF', 'SET TERMOUT OFF',
     `SPOOL "${spoolFile}"`,
     // col 0  executive_name_raw (split later into name + emp_code)
     // col 1  center_name
@@ -314,7 +318,7 @@ function buildVisitSql(from, to, spoolFile) {
   const T = v => `REPLACE(REPLACE(${v},CHR(28),' '),CHR(10),' ')`;
   return [
     'SET PAGESIZE 0', 'SET LINESIZE 32767', 'SET FEEDBACK OFF',
-    'SET TRIMSPOOL ON', 'SET WRAP OFF', 'SET HEADING OFF',
+    'SET TRIMSPOOL ON', 'SET WRAP OFF', 'SET HEADING OFF', 'SET TERMOUT OFF',
     `SPOOL "${spoolFile}"`,
     // col 0  executive_name_raw
     // col 1  center_name (agency+drop_point)
