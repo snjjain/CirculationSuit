@@ -1457,7 +1457,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const win = resolveRangeWindow(asOn, req.query.range || 'mtd');
 
       // Step 1: get hawker IDs + supply totals from hawker_supply (authoritative CI mapping)
-      const { rows: supRows } = await q(
+      const centreSql =
         `SELECT hs.hawker_id, hs.loc_id AS unit_code,
                 SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) today_cp,
                 SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prev_cp,
@@ -1465,8 +1465,31 @@ module.exports = function installCommandCentre({ app, q }) {
          FROM hawker_supply hs
          WHERE hs.center_incharge = ?
            AND hs.supply_date BETWEEN ? AND ?
-         GROUP BY hs.hawker_id, hs.loc_id`,
+         GROUP BY hs.hawker_id, hs.loc_id`;
+
+      let { rows: supRows } = await q(centreSql,
         [asOn, prev, win.from, asOn, execCode, win.from, asOn]);
+
+      /* The Executive Performance screen opens on LAST month, and center_incharge is
+         stamped per supply row — a handover only rewrites it from the handover date
+         onward. So a CI who took a centre over this month has no rows in the default
+         window and the page rendered "No centres found" for someone running 144
+         hawkers. The centre list is a roster, not a time series: if the requested
+         window predates them, fall back to the most recent window in which they were
+         the incharge and say which window the roster came from. */
+      let rosterFrom = win.from, rosterTo = asOn, rosterFellBack = false;
+      if (!supRows.length) {
+        const { rows: last } = await q(
+          `SELECT MAX(supply_date) d FROM hawker_supply WHERE center_incharge = ?`, [execCode]);
+        const lastDate = last[0] && last[0].d ? String(last[0].d).slice(0, 10) : null;
+        if (lastDate) {
+          rosterTo = lastDate;
+          rosterFrom = lastDate.slice(0, 8) + '01';
+          rosterFellBack = true;
+          ({ rows: supRows } = await q(centreSql,
+            [rosterTo, prev, rosterFrom, rosterTo, execCode, rosterFrom, rosterTo]));
+        }
+      }
 
       if (!supRows.length) return res.json({ exec_code: execCode, as_on: asOn, centers: [] });
 
@@ -1516,7 +1539,13 @@ module.exports = function installCommandCentre({ app, q }) {
         };
       }).sort((a, b) => (b.mtd_cp || 0) - (a.mtd_cp || 0));
 
-      res.json({ exec_code: execCode, as_on: asOn, centers: result });
+      res.json({
+        exec_code: execCode, as_on: asOn, centers: result,
+        // Set when the roster could not be built from the requested window — the UI
+        // says so rather than presenting another period's figures as the selected one.
+        roster_from: rosterFrom, roster_to: rosterTo,
+        roster_fallback: rosterFellBack || undefined,
+      });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 

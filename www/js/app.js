@@ -12945,6 +12945,9 @@ function epExecDetailView() {
         <div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px">
           <span style="font-size:13px;font-weight:700">Centre List</span>
           <span style="font-size:11px;color:#64748b">· Click a centre to view its hawkers</span>
+          ${cc && cc.roster_fallback ? `<span title="This incharge has no supply rows in the selected period — showing the centres they run as of the dates below"
+            style="font-size:10.5px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:2px 8px;margin-left:6px">
+            took charge later · showing ${esc(String(cc.roster_from || '').slice(0, 10))} → ${esc(String(cc.roster_to || '').slice(0, 10))}</span>` : ''}
         </div>
         ${centerSection}
       </div>
