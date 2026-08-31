@@ -243,12 +243,31 @@ async function gpsMapFor(q, unitCode) {
 const TAG_HI = { high: 'उच्च', medium: 'मध्यम', low: 'सामान्य' };
 
 // ── Core: verdict for one executive on one date ──────────────────────────────
-async function computeVerdict(q, execName, unitCode, unitName, date) {
+async function computeVerdict(q, execName, unitCode, unitName, date, opts) {
   const [recommendation, gps] = await Promise.all([
     buildAiRecommendation(q, execName, unitCode),
     gpsMapFor(q, unitCode),
   ]);
-  const submittedRows = (await getSubmittedPlan(q, date)).filter(r => r.unit_code === unitCode);
+  /* A branch files one plan covering many executives, so filtering by unit alone
+     credits this executive with the whole branch's stops. agency_master is the
+     authority on who owns an agency — narrow to the rows this person is answerable
+     for. The date sweep has already grouped by owner and passes its slice in. */
+  let submittedRows;
+  if (opts && opts.submittedRows) {
+    submittedRows = opts.submittedRows;
+  } else {
+    const all = (await getSubmittedPlan(q, date)).filter(r => r.unit_code === unitCode);
+    const agcds = [...new Set(all.map(r => r.agcd).filter(Boolean))];
+    let mine = new Set();
+    if (agcds.length) {
+      const { rows: own } = await q(
+        `SELECT agcd FROM agency_master
+         WHERE executive_name = ? AND unit = ? AND CAST(dpcd AS UNSIGNED) = 1
+           AND agcd IN (${agcds.map(() => '?').join(',')})`, [execName, unitCode, ...agcds]);
+      mine = new Set(own.map(r => r.agcd));
+    }
+    submittedRows = all.filter(r => mine.has(r.agcd));
+  }
   const submittedAgcds = new Set(submittedRows.map(r => r.agcd));
 
   const recAgcds = new Set(recommendation.map(r => r.agcd));
@@ -308,9 +327,36 @@ async function computeVerdict(q, execName, unitCode, unitName, date) {
   }
   if (!missing.length && !nearbyGaps.length) lines.push('कोई अतिरिक्त सुझाव नहीं — प्लान पूर्ण है।');
 
+  // What the executive actually filed, in their own visit order — shown before the AI
+  // suggestion so the screen reads "here is your plan, here is what we would change".
+  // recMap carries the AI's scoring across so a stop can say why it does or does not rank.
+  const recMap = new Map(recommendation.map(r => [r.agcd, r]));
+  const submitted = submittedRows
+    .slice()
+    .sort((a, b) => String(a.from_time || '').localeCompare(String(b.from_time || '')))
+    .map((r, i) => {
+      const rec = recMap.get(r.agcd) || null;
+      return {
+        stop_no: i + 1,
+        agcd: r.agcd, unit_code: r.unit_code,
+        ag_name: r.agency_name || r.agcd,
+        station_name: r.station_name || '',
+        from_time: r.from_time || null, till_time: r.till_time || null,
+        visit_purpose: r.visit_purpose || null, call_type: r.call_type_name || null,
+        approved: String(r.approved_flag || '').toUpperCase() === 'Y',
+        outstanding: rec ? rec.outstanding : N(r.current_outstanding),
+        growth_target: N(r.current_growth_target),
+        days_since_visit: rec ? rec.days_since_visit : null,
+        // In the AI route = a high-priority stop the executive picked correctly.
+        is_priority: !!rec,
+        ai_rank: rec ? rec.stop_no : null,
+      };
+    });
+
   return {
     exec_name: execName, unit_code: unitCode, unit_name: unitName, date,
     is_correct: isCorrect, overlap_pct: overlapPct,
+    submitted,
     matched, missing, low_priority: lowPriority, nearby_gaps: nearbyGaps,
     // The full suggested trip in stop order, each flagged with whether it is already
     // in the executive's own plan — this is what the screen and the alert both show.
@@ -332,11 +378,13 @@ async function computeVerdictsForDate(q, date, unitCode) {
   const submittedRows = await getSubmittedPlan(q, date);
   const byExec = await attachOwnerAndGroup(q, submittedRows);
   const results = [];
-  for (const { exec_name, unit_code, unit_name } of byExec.values()) {
+  for (const { exec_name, unit_code, unit_name, submitted } of byExec.values()) {
     if (isPlaceholderExec(exec_name)) continue;
     if (unitCode && unit_code !== unitCode) continue;
     try {
-      results.push(await computeVerdict(q, exec_name, unit_code, unit_name, date));
+      // The grouping above already resolved ownership — hand that slice straight in
+      // rather than making computeVerdict re-derive it per executive.
+      results.push(await computeVerdict(q, exec_name, unit_code, unit_name, date, { submittedRows: submitted }));
     } catch (e) { /* one exec's failure shouldn't sink the sweep */ }
   }
   return results;

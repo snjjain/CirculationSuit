@@ -4563,15 +4563,32 @@ function _ccTpPlanText(s) {
   }
   if (s.tab === 'today') {
     const d = s.data || {};
-    L.push('🗞 राजस्थान पत्रिका — आज का सुझावित Visit Plan');
+    L.push('🗞 राजस्थान पत्रिका — आज का टूर प्लान');
     L.push(`👤 ${d.exec_name || ''} (${d.unit_name || d.unit_code || ''}) · 📅 ${d.date || ''}`);
-    if (d.route_label) L.push(`🛣 Route: ${d.route_label}${d.route_total_km ? ' · ' + d.route_total_km + ' km' : ''}`);
+    // Own plan first, then the suggestion — the same order the screen shows.
+    const own = d.submitted || [];
     L.push('');
+    if (own.length) {
+      L.push(`📝 आपका बनाया गया प्लान (${own.length} एजेंसी):`);
+      own.forEach(a => {
+        L.push(`${a.stop_no}. ${a.is_priority ? '🟢' : '🟡'} ${a.ag_name}${a.station_name ? ' (' + a.station_name + ')' : ''}`);
+        const bits = [];
+        if (a.from_time) bits.push(a.from_time + (a.till_time ? '–' + a.till_time : ''));
+        if (a.outstanding > 0) bits.push('बकाया ₹' + Number(a.outstanding).toLocaleString('en-IN'));
+        bits.push(a.is_priority ? 'प्राथमिकता वाली' : 'सामान्य प्राथमिकता');
+        L.push('   ' + bits.join(' · '));
+      });
+    } else {
+      L.push('📝 आपने आज के लिए कोई टूर प्लान दर्ज नहीं किया है।');
+    }
+    L.push('');
+    L.push(`🤖 AI सुझावित प्लान${d.route_label ? ' — ' + d.route_label + ' रूट' : ''}${d.route_total_km ? ' (लगभग ' + d.route_total_km + ' किमी)' : ''}:`);
     (d.suggested_route || d.missing || []).forEach((a, i) => {
       L.push(`${a.stop_no || i + 1}. ${a.in_plan ? '✅' : '❌'} ${a.ag_name || ''}${a.city ? ' (' + a.city + ')' : ''}`);
       const bits = [];
       if (a.outstanding > 0) bits.push('बकाया ₹' + Number(a.outstanding).toLocaleString('en-IN'));
       bits.push(a.days_since_visit == null || a.days_since_visit >= 999 ? 'कभी visit नहीं' : a.days_since_visit + ' दिन से visit नहीं');
+      if (a.in_plan) bits.push('आपके प्लान में है');
       L.push('   ' + bits.join(' · '));
     });
     if (d.hindi_message) { L.push(''); L.push(d.hindi_message); }
@@ -4772,22 +4789,49 @@ function _ccFlyExecTourPlan(x) {
     </div>
     ${d.route_label ? `<div style="font-size:10.5px;color:#64748b;margin-bottom:7px">🛣 ${esc_(d.route_label)}${d.route_total_km ? ' · ' + esc_(d.route_total_km) + ' km' : ''}</div>` : ''}`;
 
-    if (!stops.length) return sectionWrap(tabs + controls + head +
-      `<div style="font-size:11.5px;color:#94a3b8;padding:6px">No tour plan filed for this date.</div>`);
+    // The executive's own filed plan comes first — you cannot judge a correction
+    // without seeing what is being corrected.
+    const own = d.submitted || [];
+    const ownBlock = own.length
+      ? `<div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#0369a1;margin:2px 0 5px">
+           Executive's own plan · ${own.length} stop${own.length > 1 ? 's' : ''}</div>
+         <div style="max-height:210px;overflow:auto;border:1px solid #bae6fd;border-radius:8px;background:#f8fdff">
+           <table style="width:100%;border-collapse:collapse"><tbody>
+           ${own.map(a => {
+             const bits = [];
+             if (a.from_time) bits.push(esc_(a.from_time) + (a.till_time ? '–' + esc_(a.till_time) : ''));
+             if (a.visit_purpose) bits.push(esc_(a.visit_purpose));
+             bits.push(a.is_priority
+               ? `<span style="color:#15803d;font-weight:700">✓ priority stop${a.ai_rank ? ' · AI rank ' + a.ai_rank : ''}</span>`
+               : `<span style="color:#b45309">low priority</span>`);
+             return row(a.stop_no, a.is_priority ? '🟢' : '🟡', a.ag_name, a.station_name,
+               bits.join(' · '), a.outstanding > 0 ? _apFmtC(a.outstanding) : '');
+           }).join('')}
+           </tbody></table></div>`
+      : `<div style="font-size:11.5px;color:#b45309;background:#fffbeb;border-radius:8px;padding:8px 10px;margin-bottom:8px">
+           No tour plan filed by this executive for ${esc_(d.date || '')}.</div>`;
 
-    const body = `<div style="max-height:300px;overflow:auto;border:1px solid #eef2f7;border-radius:8px">
-      <table style="width:100%;border-collapse:collapse">
-        <thead><tr style="background:#f8fafc"><th style="text-align:left;padding:5px 6px;font-size:9.5px;color:#94a3b8;font-weight:800;text-transform:uppercase">Stop</th>
-        <th style="text-align:left;padding:5px 6px;font-size:9.5px;color:#94a3b8;font-weight:800;text-transform:uppercase">Agency · why it ranks</th>
-        <th style="text-align:right;padding:5px 6px;font-size:9.5px;color:#94a3b8;font-weight:800;text-transform:uppercase">Dues</th></tr></thead>
-        <tbody>${stops.map((a, i) => {
-          const never = a.days_since_visit == null || a.days_since_visit >= 999;
-          const meta = never ? 'never visited' : `${a.days_since_visit}d since visit`;
-          return row(a.stop_no || i + 1, a.in_plan ? '✅' : '❌', a.ag_name || a.agcd,
-            a.station_name || a.city, meta, a.outstanding > 0 ? _apFmtC(a.outstanding) : '');
-        }).join('')}</tbody></table></div>
-      ${d.hindi_message ? `<div style="margin-top:8px;padding:8px 10px;background:#fffbeb;border-radius:8px;font-size:11px;color:#78350f;white-space:pre-wrap;line-height:1.6">${esc_(d.hindi_message)}</div>` : ''}`;
-    return sectionWrap(tabs + controls + head + body + sendBar);
+    if (!stops.length) return sectionWrap(tabs + controls + head + ownBlock);
+
+    const aiBlock = `<div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#7c3aed;margin:12px 0 5px">
+        AI suggested plan · ${stops.length} stop${stops.length > 1 ? 's' : ''}${d.route_label ? ' · ' + esc_(d.route_label) : ''}</div>
+      <div style="max-height:260px;overflow:auto;border:1px solid #e9d5ff;border-radius:8px;background:#fdfaff">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:#faf5ff"><th style="text-align:left;padding:5px 6px;font-size:9.5px;color:#a78bfa;font-weight:800;text-transform:uppercase">Stop</th>
+          <th style="text-align:left;padding:5px 6px;font-size:9.5px;color:#a78bfa;font-weight:800;text-transform:uppercase">Agency · why it ranks</th>
+          <th style="text-align:right;padding:5px 6px;font-size:9.5px;color:#a78bfa;font-weight:800;text-transform:uppercase">Dues</th></tr></thead>
+          <tbody>${stops.map((a, i) => {
+            const never = a.days_since_visit == null || a.days_since_visit >= 999;
+            const meta = (never ? 'never visited' : `${a.days_since_visit}d since visit`)
+              + (a.in_plan ? ' · <span style="color:#15803d;font-weight:700">already in plan</span>' : '');
+            return row(a.stop_no || i + 1, a.in_plan ? '✅' : '❌', a.ag_name || a.agcd,
+              a.station_name || a.city, meta, a.outstanding > 0 ? _apFmtC(a.outstanding) : '');
+          }).join('')}</tbody></table></div>`;
+
+    const note = d.hindi_message
+      ? `<div style="margin-top:8px;padding:8px 10px;background:#fffbeb;border-radius:8px;font-size:11px;color:#78350f;white-space:pre-wrap;line-height:1.6">${esc_(d.hindi_message)}</div>`
+      : '';
+    return sectionWrap(tabs + controls + head + ownBlock + aiBlock + note + sendBar);
   }
 
   // ── Next day: single-day AI plan ──
