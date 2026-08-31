@@ -701,7 +701,21 @@ module.exports = function installCommandCentre({ app, q }) {
         ? { from: rqFrom, to: rqTo, label: `${rqFrom} → ${rqTo}`, key: 'custom' }
         : resolveRangeWindow(asOn, rqRange);
       // Same window shifted one year back — used for YoY supply avg and collection comparison
-      const prevWin = { from: `${Number(win.from.slice(0, 4)) - 1}${win.from.slice(4)}`, to: `${Number(win.to.slice(0, 4)) - 1}${win.to.slice(4)}` };
+      /* What the selected window is measured against. The default is the same window a
+         year earlier, which is the right question for a normal range. It is the wrong
+         question for COVID: "18 Mar 2020 vs 18 Mar 2019" compares two pre-pandemic-ish
+         days, when what anyone actually wants is "where are we now against the COVID
+         floor". So the caller may name the comparison window explicitly, and for COVID
+         the default flips to today rather than a year before 2020. */
+      const cmpFrom = String(req.query.compare_from || '').trim();
+      const cmpTo   = String(req.query.compare_to || '').trim();
+      const isDate  = s => /^\d{4}-\d{2}-\d{2}$/.test(s);
+      const prevWin = (isDate(cmpFrom) && isDate(cmpTo))
+        ? { from: cmpFrom, to: cmpTo }
+        : (win.key === 'covid'
+          ? { from: asOn, to: asOn }
+          : { from: `${Number(win.from.slice(0, 4)) - 1}${win.from.slice(4)}`,
+              to:   `${Number(win.to.slice(0, 4)) - 1}${win.to.slice(4)}` });
       const allUnits = await unitsOfState(stateKey);
       const unitName = {}; allUnits.forEach(u => { unitName[u.unit_code] = u.unit_name; });
 
@@ -768,13 +782,28 @@ module.exports = function installCommandCentre({ app, q }) {
              WHERE s.supply_date BETWEEN ? AND ? AND s.unit_code IN (${IN})
                AND s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')
              GROUP BY s.unit_code, s.agcd`, [from, to, ...codes]);
-          const [cur, prv, credit] = await Promise.all([
+          /* Copies per day must divide by the DAYS IN THE WINDOW, not by the days each
+             agency happened to supply. Dividing per-group inflates the total: an agency
+             that lifted on 3 days of a month reports its 3-day average as if it ran all
+             month, and the state total is the sum of those. Scope-wide divisor keeps
+             sum(group averages) equal to (total copies / days), which is what "average
+             daily supply" means. */
+          const windowDays = (from, to) => q(
+            `SELECT COUNT(DISTINCT s.supply_date) d FROM supply_data s FORCE INDEX (idx_sd_cover_range)
+             WHERE s.supply_date BETWEEN ? AND ? AND s.unit_code IN (${IN})
+               AND s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')`,
+            [from, to, ...codes]);
+          const [cur, prv, credit, curD, prvD] = await Promise.all([
             scan(win.from, win.to),
             scan(prevWin.from, prevWin.to),
             q(`SELECT DISTINCT unit, agcd FROM agency_master
                WHERE ag_class_name='CREDIT SALE' AND COALESCE(supply_stop_flag,'N')='N'
                  AND (suspend_date IS NULL OR suspend_date > CURDATE())`),
+            windowDays(win.from, win.to),
+            windowDays(prevWin.from, prevWin.to),
           ]);
+          const curDays = N(curD.rows[0] && curD.rows[0].d) || 0;
+          const prvDays = N(prvD.rows[0] && prvD.rows[0].d) || 0;
           const isCredit = new Set(credit.rows.map(r => `${r.unit}|${r.agcd}`));
           const merged = new Map();
           const put = (rows, prefix) => rows.forEach(r => {
@@ -786,7 +815,7 @@ module.exports = function installCommandCentre({ app, q }) {
             });
             const m = merged.get(k);
             m[`${prefix}_total`] = N(r.total);
-            m[`${prefix}_days`]  = N(r.days);
+            m[`${prefix}_days`]  = prefix === 'cur' ? curDays : prvDays;
           });
           put(cur.rows, 'cur');
           put(prv.rows, 'prv');
@@ -802,8 +831,15 @@ module.exports = function installCommandCentre({ app, q }) {
              FROM hawker_supply FORCE INDEX (idx_hs_cover_range)
              WHERE supply_date BETWEEN ? AND ? AND loc_id IN (${IN})
              GROUP BY loc_id, center_incharge`, [from, to, ...codes]);
+          /* Same scope-wide divisor as agent supply, and it matters far more here: a
+             centre changing hands mid-month splits its days across two incharge codes,
+             so per-group averaging counted the same centre twice — once at each
+             incharge's short-window rate. That overstated cash sale by 17.8%. */
+          const windowDays = (from, to) => q(
+            `SELECT COUNT(DISTINCT supply_date) d FROM hawker_supply FORCE INDEX (idx_hs_cover_range)
+             WHERE supply_date BETWEEN ? AND ? AND loc_id IN (${IN})`, [from, to, ...codes]);
           // Centre and hawker counts are a point-in-time headcount, not a range total.
-          const [cur, prv, today] = await Promise.all([
+          const [cur, prv, today, curD, prvD] = await Promise.all([
             scan(win.from, win.to),
             scan(prevWin.from, prevWin.to),
             q(`SELECT loc_id unit_code, center_incharge,
@@ -814,7 +850,11 @@ module.exports = function installCommandCentre({ app, q }) {
                FROM hawker_supply
                WHERE supply_date = ? AND loc_id IN (${IN})
                GROUP BY loc_id, center_incharge`, [asOn, ...codes]),
+            windowDays(win.from, win.to),
+            windowDays(prevWin.from, prevWin.to),
           ]);
+          const curDays = N(curD.rows[0] && curD.rows[0].d) || 0;
+          const prvDays = N(prvD.rows[0] && prvD.rows[0].d) || 0;
           const merged = new Map();
           const key = r => `${r.unit_code}|${r.center_incharge || ''}`;
           const seed = r => {
@@ -825,8 +865,8 @@ module.exports = function installCommandCentre({ app, q }) {
             });
             return merged.get(key(r));
           };
-          cur.rows.forEach(r => { const m = seed(r); m.cur_total = N(r.total); m.cur_days = N(r.days); });
-          prv.rows.forEach(r => { const m = seed(r); m.prv_total = N(r.total); m.prv_days = N(r.days); });
+          cur.rows.forEach(r => { const m = seed(r); m.cur_total = N(r.total); m.cur_days = curDays; });
+          prv.rows.forEach(r => { const m = seed(r); m.prv_total = N(r.total); m.prv_days = prvDays; });
           today.rows.forEach(r => { const m = seed(r); m.centres = N(r.centres);
             m.hawkers = N(r.hawkers); m.cent_name = r.cent_name;
             m.center_incharge_name = r.center_incharge_name; });

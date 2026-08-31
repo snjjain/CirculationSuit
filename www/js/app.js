@@ -6110,8 +6110,26 @@ function _csParams(st) {
     p.set('range_from', st.rangeFrom);
     p.set('range_to', st.rangeTo);
   }
+  // An explicitly chosen comparison window overrides the default of "same window last
+  // year" — the point of the COVID range is to compare it against a date you pick.
+  if (st.cmpFrom && st.cmpTo) { p.set('compare_from', st.cmpFrom); p.set('compare_to', st.cmpTo); }
   return p;
 }
+window.csSetCompare = (field, val) => {
+  const st = _csState();
+  if (field === 'from') st.cmpFrom = val; else st.cmpTo = val;
+  // Single-day windows are the common case here, so mirror one date into the other
+  // rather than making someone fill the same value twice.
+  if (field === 'from' && !st.cmpTo) st.cmpTo = val;
+  if (field === 'to' && !st.cmpFrom) st.cmpFrom = val;
+  if (st.cmpFrom && st.cmpTo && st.cmpFrom <= st.cmpTo) { _csReset(st); }
+  render();
+};
+window.csClearCompare = () => {
+  const st = _csState();
+  st.cmpFrom = ''; st.cmpTo = '';
+  _csReset(st); render();
+};
 function _csLoad() {
   const st = _csState();
   if (st._loading || st.data) return;
@@ -6865,6 +6883,29 @@ VIEWS.cc_state = () => {
     </div>` : ''}
   </div>`;
 
+  /* Which window the selection is measured against. Left alone it is the same window a
+     year earlier, which is the right question for a normal range and the wrong one for
+     COVID — comparing 18 Mar 2020 with 18 Mar 2019 answers nothing anyone asked. The
+     picker is always available and is opened by default on the COVID range, where the
+     comparison is the entire point. */
+  const cmpSet = !!(st.cmpFrom && st.cmpTo);
+  const cmpOpen = cmpSet || st.range === 'covid';
+  const cmpBox = `<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">Compare with</div>
+    ${cmpOpen ? `<div style="display:flex;gap:6px;align-items:center">
+        <input type="date" value="${esc(st.cmpFrom || '')}" onchange="csSetCompare('from',this.value)"
+          title="Compare the selected range against this window"
+          style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;color:#0f172a;background:#fff">
+        <span style="color:#94a3b8;font-size:12px">→</span>
+        <input type="date" value="${esc(st.cmpTo || '')}" onchange="csSetCompare('to',this.value)"
+          style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;color:#0f172a;background:#fff">
+        ${cmpSet ? `<a onclick="csClearCompare()" title="Back to the same window last year"
+          style="cursor:pointer;color:#64748b;font-size:11px;text-decoration:underline">reset</a>` : ''}
+      </div>
+      ${!cmpSet ? `<div style="font-size:10.5px;color:#b45309;margin-top:4px">Pick the dates to compare the COVID period against — today by default.</div>` : ''}`
+    : `<button onclick="csSetCompare('from','')" style="padding:6px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font-size:12px;cursor:pointer"
+         title="By default this range is compared with the same window one year earlier">Same window last year ▾</button>`}
+  </div>`;
+
   const crumb = `<div style="font-size:12px;color:#64748b">
     <a onclick="go('command')" style="cursor:pointer;color:#1e3a8a;text-decoration:underline">Command Centre</a>
     ${d && !d._err && !d.detail ? ` › ${st.unit
@@ -6891,9 +6932,10 @@ VIEWS.cc_state = () => {
       ${_owner ? `<div style="font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:2px">${_owner}</div>` : ''}
       <div style="font-size:20px;font-weight:800;color:#0f172a;margin-bottom:3px">${d && !d._err && !d.detail ? esc(d.unit_name || d.state_name) : 'Loading…'}</div>
       ${crumb}
-      ${d && !d._err && !d.detail ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px">${esc(d.range_label)}: <b style="color:#475569">${esc(d.range_from)} → ${esc(d.range_to)}</b>${d.prev_range_from ? ` · same window last year: ${esc(d.prev_range_from)} → ${esc(d.prev_range_to)}` : ''}</div>` : ''}
+      ${d && !d._err && !d.detail ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px">${esc(d.range_label)}: <b style="color:#475569">${esc(d.range_from)} → ${esc(d.range_to)}</b>${d.prev_range_from
+        ? ` · compared with <b style="color:#475569">${esc(d.prev_range_from)}${d.prev_range_from !== d.prev_range_to ? ` → ${esc(d.prev_range_to)}` : ''}</b>` : ''}</div>` : ''}
     </div>
-    ${sel}
+    <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap">${sel}${cmpBox}</div>
   </div>`;
 
   if (st._loading || !d) return bar + _cmdSkel() + _cmdSkel();
