@@ -4468,6 +4468,376 @@ function _ccFlyExecDrillBody(x, e, ags) {
       <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums;color:${(a.total_outstanding||0)>0?'#b91c1c':'#0f172a'}">${_apFmtC(a.total_outstanding)}</td></tr>`).join('')));
 }
 
+/* ══ Tour Plan inside the executive flyout ══
+   Same three engines the DCR screen offers (today's plan vs AI route, next-day plan,
+   7-day plan), scoped to the one executive whose card is open — so a manager reading an
+   alert can see what this person should be doing today without leaving the Command Centre.
+   The plan APIs key on the DCR emp_code, not executive_code; the exec payload now carries
+   both, and tour-plan-validation keys on exec_name + unit_code. */
+const _TP_API = () => location.origin.replace(':8123', ':8001');
+
+function _tpState(x) { return x._tp || (x._tp = { tab: '', date: '', data: null, loading: false, err: '' }); }
+
+window.ccTpTab = (tab) => {
+  const x = _ccFlyTop(); if (!x || x.kind !== 'exec') return;
+  const s = _tpState(x);
+  s.tab = (s.tab === tab ? '' : tab);
+  s.data = null; s.err = ''; s.loading = false;
+  if (s.tab === 'today') _ccTpLoadToday(x);
+  render();
+};
+
+window.ccTpDate = (v) => {
+  const x = _ccFlyTop(); if (!x || x.kind !== 'exec') return;
+  const s = _tpState(x); s.date = v; s.data = null; s.err = '';
+  if (s.tab === 'today') _ccTpLoadToday(x);
+  render();
+};
+
+// Today's submitted plan vs the AI-recommended route (GET, no generation cost).
+function _ccTpLoadToday(x) {
+  const e = (x.data && x.data.exec) || {};
+  const s = _tpState(x);
+  const name = e.exec_name || x.name;
+  const unit = e.unit_code || x.unitCode || '';
+  if (!name || !unit) { s.err = 'Executive name or branch missing — cannot match a tour plan.'; return; }
+  const date = s.date || todayISO();
+  s.loading = true; s.err = '';
+  fetch(`${_TP_API()}/api/tour-plan-validation/${encodeURIComponent(name)}?unit_code=${encodeURIComponent(unit)}&date=${encodeURIComponent(date)}`,
+    { headers: api.h() })
+    .then(r => r.json())
+    .then(d => {
+      s.loading = false;
+      if (d && d.detail) { s.err = d.detail; s.data = null; }
+      else s.data = d;
+      if (_ccFlyLive()) render();
+    })
+    .catch(err => { s.loading = false; s.err = String(err.message || err); if (_ccFlyLive()) render(); });
+}
+
+// Next-day and 7-day plans run an LLM server-side, so they only fire on an explicit click.
+window.ccTpGenerate = async (kind) => {
+  const x = _ccFlyTop(); if (!x || x.kind !== 'exec') return;
+  const e = (x.data && x.data.exec) || {};
+  const s = _tpState(x);
+  const empCode = e.emp_code || e.executive_code || x.execCode;
+  if (!empCode) { toast('Cannot generate — employee code missing for this executive'); return; }
+
+  const isWeek = kind === 'week';
+  const dt = s.date || (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
+  s.loading = true; s.err = ''; s.data = null; render();
+
+  try {
+    const r = await fetch(`${_TP_API()}/api/dcr-analytics/${isWeek ? 'week-plan' : 'next-day-plan'}`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(isWeek ? { emp_code: empCode, start_date: dt } : { emp_code: empCode, plan_date: dt }),
+    });
+    const d = await r.json();
+    s.loading = false;
+    if (!r.ok) { s.err = d.detail || 'Plan generation failed'; }
+    else s.data = d;
+  } catch (err) { s.loading = false; s.err = String(err.message || err); }
+  if (_ccFlyLive()) render();
+};
+
+// Plain-text builders — reused for both Telegram and the mail body.
+function _ccTpPlanText(s) {
+  const p = (s.data && s.data.plan) || {};
+  const pri = v => v === 'high' ? '🔴' : v === 'medium' ? '🟡' : '⚪';
+  const L = [];
+  if (s.tab === 'week') {
+    const total = (p.days || []).reduce((a, d) => a + (d.total_target || 0), 0);
+    L.push('🗞 राजस्थान पत्रिका — अगले 7 दिनों का Visit Plan');
+    L.push(`👤 ${p.exec || ''} (${p.unit || ''}) · शुरू: ${p.start_date || ''}`);
+    if (total > 0) L.push(`💰 Week Recovery Target: ₹${total.toLocaleString('en-IN')}`);
+    (p.days || []).forEach(day => {
+      L.push(`\n📅 Day ${day.day} — ${day.date}`);
+      if (day.focus_message) L.push(`🎯 ${day.focus_message}`);
+      (day.visits || []).forEach((v, i) => {
+        L.push(`${i + 1}. ${pri(v.priority)} ${v.ag_name || ''}${v.city ? ' (' + v.city + ')' : ''}`);
+        if (v.action) L.push(`${v.action}${v.target_amount > 0 ? ' · Target: ₹' + v.target_amount.toLocaleString('en-IN') : ''}`);
+        if (v.key_point) L.push(`⚠️ ${v.key_point}`);
+      });
+    });
+    return L.join('\n');
+  }
+  if (s.tab === 'today') {
+    const d = s.data || {};
+    L.push('🗞 राजस्थान पत्रिका — आज का सुझावित Visit Plan');
+    L.push(`👤 ${d.exec_name || ''} (${d.unit_name || d.unit_code || ''}) · 📅 ${d.date || ''}`);
+    if (d.route_label) L.push(`🛣 Route: ${d.route_label}${d.route_total_km ? ' · ' + d.route_total_km + ' km' : ''}`);
+    L.push('');
+    (d.suggested_route || d.missing || []).forEach((a, i) => {
+      L.push(`${a.stop_no || i + 1}. ${a.in_plan ? '✅' : '❌'} ${a.ag_name || ''}${a.city ? ' (' + a.city + ')' : ''}`);
+      const bits = [];
+      if (a.outstanding > 0) bits.push('बकाया ₹' + Number(a.outstanding).toLocaleString('en-IN'));
+      bits.push(a.days_since_visit == null || a.days_since_visit >= 999 ? 'कभी visit नहीं' : a.days_since_visit + ' दिन से visit नहीं');
+      L.push('   ' + bits.join(' · '));
+    });
+    if (d.hindi_message) { L.push(''); L.push(d.hindi_message); }
+    return L.join('\n');
+  }
+  // next-day
+  const visits = p.visits || [];
+  const total = visits.reduce((a, v) => a + (v.target_amount || 0), 0);
+  L.push('🗞 राजस्थान पत्रिका — कल का Visit Plan');
+  L.push(`📅 ${p.date ? p.date.split('-').reverse().join('/') : ''} · 👤 ${p.exec || ''} (${p.unit || ''})`);
+  if (p.focus_message) L.push(`\n🎯 ${p.focus_message}`);
+  if (total > 0) L.push(`\n💰 Total Recovery Target: ₹${total.toLocaleString('en-IN')}`);
+  L.push('');
+  visits.forEach((v, i) => {
+    L.push(`${v.rank || i + 1}. ${pri(v.priority)} ${v.ag_name || ''}${v.city ? ' (' + v.city + ')' : ''}`);
+    if (v.action) L.push(`${v.action}${v.target_amount > 0 ? ' · Recovery Target: ₹' + v.target_amount.toLocaleString('en-IN') : ''}`);
+    if (v.key_point) L.push(`⚠️ ${v.key_point}`);
+    L.push('');
+  });
+  L.push('📈 Special Focus:');
+  L.push('हर Visit में सिर्फ Recovery ही नहीं, बल्कि Copy Growth का clear Commitment लेना भी ज़रूरी है। 💪');
+  return L.join('\n');
+}
+
+window.ccTpTelegram = async () => {
+  const x = _ccFlyTop(); if (!x || x.kind !== 'exec') return;
+  const s = _tpState(x); if (!s.data) return;
+  const e = (x.data && x.data.exec) || {};
+  const execName = e.exec_name || x.name || '';
+  const empCode = e.emp_code || e.executive_code || x.execCode || '';
+  let pre = { mobile: '', linked: false, enabled: true, bot_username: null };
+  try {
+    const r = await fetch(`${_TP_API()}/api/telegram/resolve?emp_code=${encodeURIComponent(empCode)}&name=${encodeURIComponent(execName)}`,
+      { headers: api.h() });
+    pre = await r.json();
+  } catch (_) {}
+  if (!pre.enabled) { toast('⚠ Telegram bot not configured — set TELEGRAM_BOT_TOKEN in server .env'); return; }
+  const text = _ccTpPlanText(s);
+  modal(`<h3>✈️ Send Plan on Telegram</h3>
+    <p style="font-size:12px;color:var(--ink-2)">To <b>${esc(execName)}</b>. ${pre.linked ? '<span style="color:var(--grn)">✓ Telegram linked</span>' : pre.mobile ? '<span style="color:#d97706">Number found — link status will be checked on send</span>' : 'Enter executive mobile number.'}</p>
+    <input id="ccTgMob" type="tel" maxlength="10" value="${esc(pre.mobile || '')}" placeholder="10-digit mobile" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;margin-bottom:8px;background:var(--bg);color:var(--ink)">
+    <textarea id="ccTgText" rows="12" style="width:100%;padding:8px;border:1px solid var(--brd2);border-radius:6px;font-size:12px;background:var(--bg);color:var(--ink)">${esc(text)}</textarea>
+    <div id="ccTgErr" style="color:var(--red);font-size:12px;margin-top:6px"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn pri block" onclick="_ccTpTgSend('${esc(empCode)}')">Send</button>
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+};
+
+window._ccTpTgSend = async (empCode) => {
+  const mob = document.getElementById('ccTgMob')?.value?.replace(/\D/g, '').slice(-10);
+  const full = document.getElementById('ccTgText')?.value || '';
+  const errEl = document.getElementById('ccTgErr');
+  if (!mob || mob.length !== 10) { errEl.textContent = 'Enter a valid 10-digit mobile'; return; }
+  errEl.textContent = 'Sending…';
+
+  // Telegram caps a message at 4096 chars; a 7-day plan runs past that, so split on day
+  // boundaries rather than letting the server truncate mid-plan.
+  const parts = [];
+  if (full.length <= 3800) parts.push(full);
+  else {
+    let cur = '';
+    full.split(/(?=\n📅 Day )/).forEach(chunk => {
+      if ((cur + chunk).length > 3600 && cur) { parts.push(cur); cur = chunk; }
+      else cur += chunk;
+    });
+    if (cur) parts.push(cur);
+  }
+
+  try {
+    for (let i = 0; i < parts.length; i++) {
+      const text = parts.length > 1 ? `${parts[i]}\n\n(भाग ${i + 1}/${parts.length})` : parts[i];
+      const r = await fetch(`${_TP_API()}/api/telegram/send`, {
+        method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mobile: mob, text, emp_code: empCode || '' }),
+      });
+      const d = await r.json();
+      if (r.status === 404 && d.detail === 'not_linked') {
+        errEl.innerHTML = `This number is not linked yet.<br><b>Ask the executive to:</b> open Telegram → search <b>@${esc(d.bot_username || 'the bot')}</b> → press <b>Start</b> → tap <b>📱 Share my number</b>. Then send again.`;
+        return;
+      }
+      if (!r.ok) { errEl.textContent = d.detail || 'Send failed'; return; }
+    }
+    closeModals();
+    toast(`✈️ Plan sent on Telegram ✓${parts.length > 1 ? ` (${parts.length} parts)` : ''}`);
+  } catch (e) { errEl.textContent = 'Send failed: ' + e.message; }
+};
+
+window.ccTpEmail = () => {
+  const x = _ccFlyTop(); if (!x || x.kind !== 'exec') return;
+  const s = _tpState(x); if (!s.data) return;
+  const e = (x.data && x.data.exec) || {};
+  const execCode = e.executive_code || x.execCode || '';
+  const execName = e.exec_name || x.name || '';
+  const label = s.tab === 'week' ? '7-Day Tour Plan' : s.tab === 'today' ? "Today's Suggested Plan" : 'Next Day Visit Plan';
+  const roles = [
+    ['edtn_incharge',  'Edition Incharge',      e.edtn_incharge_name],
+    ['circ_incharge',  'Circulation Incharge',  e.circ_incharge_name],
+    ['zonal_head',     'Zonal Head',            e.zonal_head_name],
+    ['vp_circulation', 'VP Circulation',        e.vp_circulation_name],
+  ].filter(r => r[2]);
+  if (!roles.length) { toast('No reporting hierarchy on record for this executive'); return; }
+
+  modal(`<h3>✉️ Email Plan</h3>
+    <p style="font-size:12px;color:var(--ink-2)">${esc(label)} for <b>${esc(execName)}</b></p>
+    <div class="fld"><label>Send to</label>
+      ${roles.map(([k, lbl, nm]) => `<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;padding:3px 0;font-weight:400">
+        <input type="checkbox" class="ccTpRole" value="${k}" ${k === 'circ_incharge' ? 'checked' : ''}>
+        ${esc(lbl)} <span style="color:var(--muted)">· ${esc(nm)}</span></label>`).join('')}
+    </div>
+    <div class="fld"><label>Subject</label>
+      <input id="ccTpSubj" class="inp" value="${esc(label + ' — ' + execName)}"></div>
+    <div class="fld"><label>Message</label>
+      <textarea id="ccTpBody" rows="12" class="inp" style="font-size:12px">${esc(_ccTpPlanText(s))}</textarea></div>
+    <div id="ccTpMailErr" style="color:var(--red);font-size:12px;margin-bottom:6px"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn pri block" onclick="_ccTpMailSend('${esc(execCode)}')">Send Email</button>
+      <button class="btn" onclick="closeModals()">Cancel</button>
+    </div>`);
+};
+
+window._ccTpMailSend = async (execCode) => {
+  const roles = [...document.querySelectorAll('.ccTpRole:checked')].map(el => el.value);
+  const subject = document.getElementById('ccTpSubj')?.value || '';
+  const message = document.getElementById('ccTpBody')?.value || '';
+  const errEl = document.getElementById('ccTpMailErr');
+  if (!roles.length) { errEl.textContent = 'Select at least one recipient'; return; }
+  errEl.textContent = 'Sending…';
+  try {
+    const r = await fetch(`${_TP_API()}/api/exec-perf/email`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ exec_code: execCode, to_roles: roles, subject, message }),
+    });
+    const d = await r.json();
+    if (!r.ok) { errEl.textContent = d.detail || 'Email failed'; return; }
+    closeModals();
+    toast(`✉️ Sent to ${(d.sent_to || []).length || roles.length} recipient(s) ✓`);
+  } catch (e) { errEl.textContent = 'Send failed: ' + e.message; }
+};
+
+/* The Tour Plan section rendered into the executive flyout. */
+function _ccFlyExecTourPlan(x) {
+  const s = _tpState(x);
+  const e = (x.data && x.data.exec) || {};
+  const esc_ = v => esc(String(v == null ? '' : v));
+  const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
+
+  const tab = (key, label) => {
+    const on = s.tab === key;
+    return `<button onclick="ccTpTab('${key}')" style="padding:5px 11px;border:1px solid ${on ? '#7c3aed' : '#e2e8f0'};border-radius:16px;background:${on ? '#7c3aed' : '#fff'};color:${on ? '#fff' : '#475569'};font-size:11px;font-weight:${on ? 700 : 500};cursor:pointer;white-space:nowrap">${label}</button>`;
+  };
+  const tabs = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">
+    ${tab('today', '🧭 Today · AI Match')}${tab('next', '📋 Next Day Plan')}${tab('week', '📅 7-Day Plan')}</div>`;
+
+  if (!s.tab) return sectionWrap(tabs + `<div style="font-size:11.5px;color:#94a3b8;padding:2px">Pick a plan view above — matched against this executive's own agencies.</div>`);
+
+  const dateVal = s.date || (s.tab === 'today' ? todayISO() : tomorrow);
+  const dateLbl = s.tab === 'today' ? 'Plan date' : s.tab === 'week' ? 'Week starts' : 'Plan for';
+  const controls = `<div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:9px">
+    <span style="font-size:10.5px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.04em">${dateLbl}</span>
+    <input type="date" value="${esc_(dateVal)}" onchange="ccTpDate(this.value)"
+      style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:7px;font-size:11.5px;color:#0f172a">
+    ${s.tab === 'today'
+      ? `<button onclick="ccTpTab('today')" style="padding:4px 11px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;font-size:11.5px;cursor:pointer">↻ Re-check</button>`
+      : `<button onclick="ccTpGenerate('${s.tab === 'week' ? 'week' : 'next'}')" ${s.loading ? 'disabled' : ''}
+           style="padding:4px 12px;border:none;border-radius:7px;background:${s.loading ? '#c4b5fd' : '#7c3aed'};color:#fff;font-size:11.5px;font-weight:700;cursor:${s.loading ? 'wait' : 'pointer'}">
+           ${s.loading ? 'Generating…' : '✨ Generate Plan'}</button>`}
+  </div>`;
+
+  if (s.loading) return sectionWrap(tabs + controls + `<div style="padding:20px;text-align:center;color:#7c3aed;font-size:12px">
+    ${s.tab === 'today' ? 'Matching plan against AI route…' : 'AI is building the plan — usually well under a minute…'}</div>`);
+  if (s.err) return sectionWrap(tabs + controls + `<div style="padding:12px;background:#fef2f2;border-radius:8px;color:#b91c1c;font-size:11.5px">${esc_(s.err)}</div>`);
+  if (!s.data) return sectionWrap(tabs + controls + `<div style="font-size:11.5px;color:#94a3b8;padding:2px">Press <b>Generate Plan</b> to build a plan for ${esc_(e.exec_name || x.name)}.</div>`);
+
+  const sendBar = `<div style="display:flex;gap:7px;margin-top:10px">
+    <button onclick="ccTpEmail()" style="flex:1;padding:6px;border:1px solid #e2e8f0;border-radius:7px;background:#fff;font-size:11.5px;font-weight:600;cursor:pointer;color:#1e3a8a">✉️ Email</button>
+    <button onclick="ccTpTelegram()" style="flex:1;padding:6px;border:none;border-radius:7px;background:#0ea5e9;color:#fff;font-size:11.5px;font-weight:700;cursor:pointer">✈️ Telegram</button>
+  </div>`;
+
+  const row = (n, flag, name, city, meta, amt) => `<tr style="border-top:1px solid #f1f5f9">
+    <td style="padding:5px 6px;color:#94a3b8;font-size:10.5px;vertical-align:top">${n}</td>
+    <td style="padding:5px 6px">
+      <div style="font-size:11.5px"><span style="margin-right:4px">${flag}</span><b style="color:#1e3a8a">${esc_(name)}</b></div>
+      ${city ? `<div style="font-size:10px;color:#94a3b8">${esc_(city)}</div>` : ''}
+      ${meta ? `<div style="font-size:10px;color:#64748b;margin-top:1px">${meta}</div>` : ''}
+    </td>
+    <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums;font-size:11px;color:#b91c1c;vertical-align:top;white-space:nowrap">${amt || ''}</td></tr>`;
+
+  // ── Today: submitted plan vs AI-recommended route ──
+  if (s.tab === 'today') {
+    const d = s.data;
+    const stops = d.suggested_route || d.missing || [];
+    const pillTone = d.is_correct ? ['#dcfce7', '#15803d'] : ['#fee2e2', '#b91c1c'];
+    const head = `<div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+      <span style="background:${pillTone[0]};color:${pillTone[1]};font-size:10.5px;font-weight:800;padding:2px 9px;border-radius:12px">
+        ${d.is_correct ? '✓ Plan on target' : '✗ Needs rework'} · ${d.overlap_pct}% match</span>
+      <span style="font-size:10.5px;color:#64748b">Planned ${d.submitted_count || 0} · Missed ${(d.missing || []).length}</span>
+    </div>
+    ${d.route_label ? `<div style="font-size:10.5px;color:#64748b;margin-bottom:7px">🛣 ${esc_(d.route_label)}${d.route_total_km ? ' · ' + esc_(d.route_total_km) + ' km' : ''}</div>` : ''}`;
+
+    if (!stops.length) return sectionWrap(tabs + controls + head +
+      `<div style="font-size:11.5px;color:#94a3b8;padding:6px">No tour plan filed for this date.</div>`);
+
+    const body = `<div style="max-height:300px;overflow:auto;border:1px solid #eef2f7;border-radius:8px">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:#f8fafc"><th style="text-align:left;padding:5px 6px;font-size:9.5px;color:#94a3b8;font-weight:800;text-transform:uppercase">Stop</th>
+        <th style="text-align:left;padding:5px 6px;font-size:9.5px;color:#94a3b8;font-weight:800;text-transform:uppercase">Agency · why it ranks</th>
+        <th style="text-align:right;padding:5px 6px;font-size:9.5px;color:#94a3b8;font-weight:800;text-transform:uppercase">Dues</th></tr></thead>
+        <tbody>${stops.map((a, i) => {
+          const never = a.days_since_visit == null || a.days_since_visit >= 999;
+          const meta = never ? 'never visited' : `${a.days_since_visit}d since visit`;
+          return row(a.stop_no || i + 1, a.in_plan ? '✅' : '❌', a.ag_name || a.agcd,
+            a.station_name || a.city, meta, a.outstanding > 0 ? _apFmtC(a.outstanding) : '');
+        }).join('')}</tbody></table></div>
+      ${d.hindi_message ? `<div style="margin-top:8px;padding:8px 10px;background:#fffbeb;border-radius:8px;font-size:11px;color:#78350f;white-space:pre-wrap;line-height:1.6">${esc_(d.hindi_message)}</div>` : ''}`;
+    return sectionWrap(tabs + controls + head + body + sendBar);
+  }
+
+  // ── Next day: single-day AI plan ──
+  if (s.tab === 'next') {
+    const p = s.data.plan || {};
+    const visits = p.visits || [];
+    const total = visits.reduce((a, v) => a + (v.target_amount || 0), 0);
+    const pri = v => v === 'high' ? '🔴' : v === 'medium' ? '🟡' : '⚪';
+    const head = `<div style="margin-bottom:8px">
+      <div style="font-size:11.5px;color:#0f172a;font-weight:700">${esc_(p.exec || '')} · ${esc_(p.date || '')}</div>
+      ${p.focus_message ? `<div style="font-size:11px;color:#7c3aed;margin-top:3px">🎯 ${esc_(p.focus_message)}</div>` : ''}
+      ${total > 0 ? `<div style="font-size:11px;color:#b91c1c;margin-top:2px">💰 Recovery target ${_apFmtC(total)}</div>` : ''}
+      ${s.data.model ? `<div style="font-size:9.5px;color:#cbd5e1;margin-top:2px">engine · ${esc_(s.data.model)}</div>` : ''}</div>`;
+    const body = `<div style="max-height:300px;overflow:auto;border:1px solid #eef2f7;border-radius:8px">
+      <table style="width:100%;border-collapse:collapse"><tbody>
+      ${visits.map((v, i) => row(v.rank || i + 1, pri(v.priority), v.ag_name || v.ag_code, v.city,
+        [v.action ? esc_(v.action) : '', v.key_point ? `<span style="color:#b45309">⚠️ ${esc_(v.key_point)}</span>` : ''].filter(Boolean).join('<br>'),
+        v.target_amount > 0 ? _apFmtC(v.target_amount) : '')).join('')}
+      </tbody></table></div>`;
+    return sectionWrap(tabs + controls + head + body + sendBar);
+  }
+
+  // ── 7-day plan ──
+  const p = s.data.plan || {};
+  const days = p.days || [];
+  const pri = v => v === 'high' ? '🔴' : v === 'medium' ? '🟡' : '⚪';
+  const weekTot = days.reduce((a, d) => a + (d.total_target || 0), 0);
+  const head = `<div style="margin-bottom:8px">
+    <div style="font-size:11.5px;color:#0f172a;font-weight:700">${esc_(p.exec || '')} · from ${esc_(p.start_date || '')}</div>
+    ${weekTot > 0 ? `<div style="font-size:11px;color:#b91c1c;margin-top:2px">💰 Week target ${_apFmtC(weekTot)}</div>` : ''}</div>`;
+  const body = `<div style="max-height:340px;overflow:auto">
+    ${days.map(day => `<div style="margin-bottom:9px;border:1px solid #eef2f7;border-radius:8px;overflow:hidden">
+      <div style="background:#faf5ff;padding:5px 8px;border-bottom:1px solid #f1f5f9">
+        <b style="font-size:11px;color:#7c3aed">Day ${day.day} · ${esc_(day.date)}</b>
+        ${day.total_target > 0 ? `<span style="float:right;font-size:10.5px;color:#b91c1c">${_apFmtC(day.total_target)}</span>` : ''}
+        ${day.focus_message ? `<div style="font-size:10px;color:#64748b;margin-top:2px">${esc_(day.focus_message)}</div>` : ''}
+      </div>
+      <table style="width:100%;border-collapse:collapse"><tbody>
+      ${(day.visits || []).map((v, i) => row(i + 1, pri(v.priority), v.ag_name || v.ag_code, v.city,
+        v.action ? esc_(v.action) : '', v.target_amount > 0 ? _apFmtC(v.target_amount) : '')).join('')}
+      </tbody></table></div>`).join('')}</div>`;
+  return sectionWrap(tabs + controls + head + body + sendBar);
+
+  function sectionWrap(inner) {
+    return `<div style="margin-top:14px">
+      <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:6px">Tour Plan</div>
+      <div style="background:#fcfcfd;border:1px solid #eef2f7;border-radius:10px;padding:10px">${inner}</div></div>`;
+  }
+}
+
 function _ccFlyExecPanel(x) {
   if (x.loading) return `<div style="padding:26px;text-align:center;color:#64748b;font-size:13px">Loading ${esc(x.name)}…</div>`;
   if (x.err || !x.data) return `<div style="padding:20px;color:#b91c1c;font-size:13px">Could not load this executive.<div style="color:#64748b;font-size:11.5px;margin-top:5px">${esc(x.err || 'No data returned.')}</div></div>`;
@@ -4605,6 +4975,7 @@ function _ccFlyExecPanel(x) {
       ${kpi('Coverage', cov == null ? '—' : cov + '%', cov != null && cov < 20 ? '#b91c1c' : '#15803d', 'coverage')}
     </div>
     ${_ccFlyExecDrillBody(x, e, ags)}
+    ${_ccFlyExecTourPlan(x)}
     ${sec('Posting', `<div>${fact('Branch', e.units)}${fact('State', e.state_name)}</div>`)}
     ${sec('Reports to', chain)}
     ${sec('Agencies by dues', agTable)}

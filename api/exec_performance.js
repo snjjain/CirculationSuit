@@ -379,6 +379,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const [execInfo, supR, colR, ouR, agencies, hierR, dcrVisitsR, dcrSummR, dcrLogR] = await Promise.all([
         q(`SELECT executive_code, MAX(executive_name) exec_name, MAX(unit_state_nm) state_name,
                   GROUP_CONCAT(DISTINCT unit_name ORDER BY unit_name SEPARATOR ' / ') units,
+                  GROUP_CONCAT(DISTINCT unit ORDER BY unit) unit_codes,
                   COUNT(DISTINCT agcd) agency_count
            FROM agency_master WHERE executive_code = ?
            GROUP BY executive_code`, [execCode]),
@@ -503,8 +504,13 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
           executive_code:       execCode,
           exec_name:            ei.exec_name || execCode,
           exec_designation:     hier.exec_desig || null,
+          // DCR/HR employee codes — the tour-plan endpoints key on these, not exec_code.
+          emp_codes:            empCodes,
+          emp_code:             empCodes.find(c => c !== execCode) || execCode,
           state_name:           ei.state_name,
           units:                ei.units,
+          unit_codes:           String(ei.unit_codes || '').split(',').map(s => s.trim()).filter(Boolean),
+          unit_code:            String(ei.unit_codes || '').split(',').map(s => s.trim()).filter(Boolean)[0] || null,
           agency_count:         N(ei.agency_count),
           total_supply:         N(supR.rows[0]?.total),
           daily_supply:         N(supR.rows[0]?.supply_days) > 0 ? Math.round(N(supR.rows[0]?.total) / N(supR.rows[0]?.supply_days)) : N(supR.rows[0]?.total),
