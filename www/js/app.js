@@ -5777,27 +5777,38 @@ function _cmdViewNew() {
   const anyState = st.state || (shown[0] && shown[0].key) || 'RAJASTHAN';
   // Fixed 4 columns so the eight cards read as a balanced 4-over-4 block rather than
   // auto-fitting into a ragged 5/3 split at common widths.
+  /* Every headline card states what it is being measured against, the way the state
+     cards below already did — a number on its own leaves the reader to guess whether it
+     is good. "was" only reads correctly when the comparison window is in the past; on a
+     COVID-style comparison it is "now", and the movement is stated in time order so a
+     decline cannot show as a green rise. */
+  const cmpLater = !!d.compare_is_later;
+  const wasWord = cmpLater ? 'now' : 'was';
+  const cmpTrend = (cur, prev, growth, invert) => cmpLater
+    ? _ccSinceTrend(cur, prev) : _ccTrend(growth, invert);
+  const wasLine = (val, fmt) => (val == null ? ''
+    : `<br><span style="color:#475569">${wasWord} ${fmt(val)}</span>`);
+
   const topStrip = !t.supply ? '' : `<div class="cc-strip" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:18px">
     ${_ccTopCard({ label: st.state ? esc(shown[0] ? shown[0].name : '') + ' Supply' : 'Total Supply', color: '#3b82f6',
       value: _ccN(t.supply.value),
-      // When the comparison is a LATER date, the movement is stated in time order and
-      // the comparison figure is spelled out — otherwise the card shows a past period's
-      // number with no sense of where it stands now.
-      trend: d.compare_is_later ? _ccSinceTrend(t.supply.value, t.supply.prev) : _ccTrend(t.supply.growth_pct),
-      sub: d.compare_is_later
-        ? `Agent + Cash · ${esc(t.supply.window)}<br><span style="color:#475569">${_ccN(t.supply.prev)} on ${esc(d.prev_range_to)}</span>`
-        : `Agent + Cash · ${esc(t.supply.window)}`,
+      trend: cmpTrend(t.supply.value, t.supply.prev, t.supply.growth_pct),
+      sub: `Agent + Cash · ${esc(t.supply.window)}${wasLine(t.supply.prev, _ccN)}`,
       onClick: `ccDrill('supply_dash','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Agent Sale', color: '#6366f1',
       value: _ccN(t.agent.value),
-      sub: `${t.agent.share_pct == null ? '' : t.agent.share_pct + '% of supply · '}credit agencies`,
+      trend: cmpTrend(t.agent.value, t.agent.prev, t.agent.growth_pct),
+      sub: `${t.agent.share_pct == null ? '' : t.agent.share_pct + '% of supply · '}credit agencies${wasLine(t.agent.prev, _ccN)}`,
       barPct: t.agent.share_pct, onClick: `ccDrill('supply_dash','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Cash Sale', color: '#f59e0b',
       value: _ccN(t.cash.value),
-      sub: `${t.cash.share_pct == null ? '' : t.cash.share_pct + '% of supply · '}city / hawker`,
+      trend: cmpTrend(t.cash.value, t.cash.prev, t.cash.growth_pct),
+      sub: `${t.cash.share_pct == null ? '' : t.cash.share_pct + '% of supply · '}city / hawker${wasLine(t.cash.prev, _ccN)}`,
       barPct: t.cash.share_pct, onClick: `ccDrill('supply_dash','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Collection', color: '#22c55e',
-      value: _ccINR(t.collection.value), sub: `${_ccN(t.collection.txn)} receipts · ${esc(t.collection.window)}`,
+      value: _ccINR(t.collection.value),
+      trend: cmpTrend(t.collection.value, t.collection.prev, t.collection.growth_pct),
+      sub: `${_ccN(t.collection.txn)} receipts · ${esc(t.collection.window)}${wasLine(t.collection.prev, _ccINR)}`,
       onClick: `ccDrill('collections','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Collection vs Billing', color: '#10b981',
       value: (t.collection_pct.value == null ? '—' : t.collection_pct.value + '%'),
@@ -5805,14 +5816,19 @@ function _cmdViewNew() {
       barPct: t.collection_pct.value, onClick: `ccDrill('collections','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Outstanding', color: '#ef4444',
       value: _ccINR(t.outstanding.value), trend: _ccTrend(t.outstanding.growth_pct, true),
-      sub: `balance ${esc(t.outstanding.window)}`, onClick: `ccDrill('outstanding','${q(anyState)}')` })}
+      // Outstanding is a balance as on today, so it is always measured against the
+      // previous snapshot — the selected range never applies to it.
+      sub: `balance ${esc(t.outstanding.window)}${wasLine(t.outstanding.prev, _ccINR)}`,
+      onClick: `ccDrill('outstanding','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Critical Agencies', color: '#dc2626',
       value: _ccN(t.critical.value), sub: `of ${_ccN(t.critical.of)} · ${esc(t.critical.window)}`,
       barPct: t.critical.of ? (t.critical.value / t.critical.of) * 100 : null,
       onClick: `ccDrill('outstanding','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Field Coverage', color: '#8b5cf6',
       value: (t.coverage.pct == null ? '—' : t.coverage.pct + '%'),
-      sub: `${_ccN(t.coverage.value)} of ${_ccN(t.coverage.of)} agencies · ${esc(t.coverage.window)}`,
+      trend: cmpTrend(t.coverage.value, t.coverage.prev, t.coverage.growth_pct),
+      sub: `${_ccN(t.coverage.value)} of ${_ccN(t.coverage.of)} agencies · ${esc(t.coverage.window)}${
+        t.coverage.prev == null ? '' : `<br><span style="color:#475569">${wasWord} ${_ccN(t.coverage.prev)} agencies visited</span>`}`,
       barPct: t.coverage.pct, onClick: `ccDrill('dcr_analytics','${q(anyState)}')` })}
   </div>
   <style>@media(max-width:1180px){.cc-strip{grid-template-columns:repeat(2,minmax(0,1fr))!important}}

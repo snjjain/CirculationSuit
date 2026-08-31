@@ -624,13 +624,16 @@ module.exports = function installCommandCentre({ app, q }) {
       // Supply now covers the selected window, so the KPI caption must say so —
       // a one-day window still reads as a plain date rather than "X → X".
       const winLabel = win.from === win.to ? `on ${win.to}` : `${win.label} · ${win.from} → ${win.to}`;
-      const [sup, col, os, dcr, heads, rng] = await Promise.all([
+      const [sup, col, os, dcr, heads, rng, rngPrev] = await Promise.all([
         supplyByState(win, prevWin, unitScope),
         collectionByState(asOn, prev, unitScope),
         osByState(unitScope),
         dcrByState(asOn, prev, unitScope),
         stateHeads(),
         rangeTotals(win, unitScope),
+        // The same totals over the comparison window, so Collection and Field Coverage
+        // can show what they are being measured against instead of a bare percentage.
+        rangeTotals(prevWin, unitScope),
       ]);
 
       const states = STATES.map(s => {
@@ -691,14 +694,25 @@ module.exports = function installCommandCentre({ app, q }) {
       const bookTot = sum(s => s.dcr.agencies_total);
       const totals = {
         supply:        { value: supTot, prev: supPrevTot, growth_pct: r1(pct(supTot, supPrevTot)), window: winLabel },
-        agent:         { value: sum(s => s.supply.agent), share_pct: supTot ? r1(sum(s => s.supply.agent) / supTot * 100) : null, window: winLabel },
-        cash:          { value: sum(s => s.supply.cash),  share_pct: supTot ? r1(sum(s => s.supply.cash) / supTot * 100) : null, window: winLabel },
-        collection:    { value: rng.collection, txn: rng.txn, agencies_paid: rng.agencies_paid, window: win.label },
+        /* Every card that has something to be measured against now carries that figure
+           and its own growth, so the strip reads the way the state cards below it do —
+           a number, what it was, and which way it moved. */
+        agent:         { value: sum(s => s.supply.agent), prev: sum(s => s.supply.agent_previous),
+                         growth_pct: r1(pct(sum(s => s.supply.agent), sum(s => s.supply.agent_previous))),
+                         share_pct: supTot ? r1(sum(s => s.supply.agent) / supTot * 100) : null, window: winLabel },
+        cash:          { value: sum(s => s.supply.cash), prev: sum(s => s.supply.cash_previous),
+                         growth_pct: r1(pct(sum(s => s.supply.cash), sum(s => s.supply.cash_previous))),
+                         share_pct: supTot ? r1(sum(s => s.supply.cash) / supTot * 100) : null, window: winLabel },
+        collection:    { value: rng.collection, prev: rngPrev.collection,
+                         growth_pct: r1(pct(rng.collection, rngPrev.collection)),
+                         txn: rng.txn, agencies_paid: rng.agencies_paid, window: win.label },
         collection_pct:{ value: billTot > 0 ? r1(mtdTot / billTot * 100) : null, billed: billTot, collected: mtdTot,
                          window: `this month vs ${col.prev_month_label} billing` },
         outstanding:   { value: osTot, prev: osPrevTot, growth_pct: r1(pct(osTot, osPrevTot)), window: `as on today` },
         critical:      { value: sum(s => s.os.critical_agencies), of: sum(s => s.os.agencies), window: 'agencies above ₹1 L' },
-        coverage:      { value: rng.agencies_visited, of: bookTot, visits: rng.visits, execs: rng.execs_active,
+        coverage:      { value: rng.agencies_visited, prev: rngPrev.agencies_visited,
+                         growth_pct: r1(pct(rng.agencies_visited, rngPrev.agencies_visited)),
+                         of: bookTot, visits: rng.visits, prev_visits: rngPrev.visits, execs: rng.execs_active,
                          pct: bookTot ? r1(rng.agencies_visited / bookTot * 100) : null, window: win.label },
       };
 
