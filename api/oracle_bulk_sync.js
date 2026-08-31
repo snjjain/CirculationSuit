@@ -448,8 +448,16 @@ async function syncChunk(conn, chunk, tmpDir, chunkNo, totalChunks) {
   log(`[chunk ${chunkNo}/${totalChunks}] Querying Oracle: ${chunk.from} → ${chunk.to} ...`);
 
   const startOracle = Date.now();
-  await runSqlplus(sqlFile);
+  const rc = await runSqlplus(sqlFile);
   const oracleSecs = Math.round((Date.now() - startOracle) / 1000);
+
+  // A timeout SIGKILLs sqlplus and resolves -1, leaving a PARTIALLY written spool that
+  // still passes the existsSync guard below. Falling through would delete the chunk's
+  // date range and re-insert only what made it — silent data loss.
+  if (typeof rc === 'number' && rc !== 0) {
+    throw new Error(`sqlplus exit ${rc}${rc === -1 ? ' (timed out and was killed)' : ''} ` +
+      `for ${chunk.from}→${chunk.to} — MySQL left untouched`);
+  }
 
   if (!fs.existsSync(spoolFile)) {
     throw new Error('sqlplus produced no spool file');

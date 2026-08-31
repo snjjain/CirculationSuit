@@ -341,8 +341,17 @@ async function oracleQuery(fromDate, toDate) {
 
   fs.writeFileSync(sqlFile, buildSqlScript(spoolFile, fromDate, toDate), 'utf8');
   const t0 = Date.now();
-  await runSqlplus(sqlFile);
+  const rc = await runSqlplus(sqlFile);
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+
+  // A timeout SIGKILLs sqlplus and resolves -1, leaving a PARTIALLY written spool that
+  // still passes the existsSync guard below. Falling through would delete the day and
+  // re-insert only the rows that made it — silent data loss. Abort and keep what MySQL has.
+  if (typeof rc === 'number' && rc !== 0) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    throw new Error(`sqlplus exit ${rc}${rc === -1 ? ' (timed out and was killed)' : ''} ` +
+      `for ${fromDate}→${toDate} — MySQL left untouched`);
+  }
 
   if (!fs.existsSync(spoolFile)) {
     fs.rmSync(tmpDir, { recursive: true, force: true });

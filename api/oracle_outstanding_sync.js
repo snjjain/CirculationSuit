@@ -250,7 +250,16 @@ async function syncPeriod(conn, periodLabel, periodFrom, periodTo) {
   const t0 = Date.now();
 
   fs.writeFileSync(sqlFile, buildScript(periodFrom, periodTo, spoolPath), 'utf8');
-  await runSqlplus(sqlFile);
+  const rc = await runSqlplus(sqlFile);
+
+  // A timeout SIGKILLs sqlplus and resolves -1, leaving a PARTIALLY written spool.
+  // Parsing it would delete the whole period snapshot and re-insert only the rows that
+  // made it — silent data loss. Abort and keep the snapshot MySQL already holds.
+  if (typeof rc === 'number' && rc !== 0) {
+    try { fs.rmSync(tmpDir, { recursive: true }); } catch (_) {}
+    throw new Error(`sqlplus exit ${rc}${rc === -1 ? ' (timed out and was killed)' : ''} ` +
+      `for ${periodLabel} — MySQL left untouched`);
+  }
 
   const rows = parseSpool(spoolFile);
   log(`[${periodLabel}] Oracle returned ${rows.length} rows in ${((Date.now() - t0) / 1000).toFixed(0)}s`);

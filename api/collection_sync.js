@@ -325,7 +325,15 @@ async function syncBatch(conn, fromDate, toDate) {
   try {
     fs.writeFileSync(sqlFile, buildSqlScript(fromDate, toDate, spoolFile), 'utf8');
     log(`  [${fromDate} → ${toDate}] Running Oracle query...`);
-    await runSqlplus(sqlFile);
+    const rc = await runSqlplus(sqlFile);
+
+    // A timeout SIGKILLs sqlplus and resolves -1, leaving a PARTIALLY written spool that
+    // still passes the existsSync guard below. Falling through would delete the range and
+    // re-insert only the rows that made it — silent data loss. Abort, keep what MySQL has.
+    if (typeof rc === 'number' && rc !== 0) {
+      throw new Error(`sqlplus exit ${rc}${rc === -1 ? ' (timed out and was killed)' : ''} ` +
+        `for ${fromDate}→${toDate} — MySQL left untouched`);
+    }
 
     if (!fs.existsSync(spoolFile)) {
       log(`  [${fromDate} → ${toDate}] No spool file produced — skipping`);

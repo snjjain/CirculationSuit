@@ -229,8 +229,16 @@ async function syncPlan(conn, from, to, onLog) {
   if (fs.existsSync(spoolFile)) fs.unlinkSync(spoolFile);
 
   onLog(`  [tour-plan] Oracle ${from}→${to}…`);
-  await runSqlplus(sqlFile);
+  const rc = await runSqlplus(sqlFile);
 
+  /* A killed or failed sqlplus still leaves the rows it managed to spool. Reading that
+     partial file and then deleting the whole date range wipes real data and reports
+     success — which is exactly how 2026-08-04→31 was lost. Refuse to touch MySQL
+     unless Oracle actually finished. */
+  if (rc !== 0) {
+    throw new Error(`sqlplus did not complete for ${from}→${to} (exit ${rc}` +
+      `${rc === -1 ? ' — timed out and was killed' : ''}). MySQL left untouched.`);
+  }
   if (!fs.existsSync(spoolFile)) {
     onLog(`  [tour-plan] WARNING: no spool file, skipping`);
     return 0;
@@ -238,6 +246,18 @@ async function syncPlan(conn, from, to, onLog) {
   const raw  = fs.readFileSync(spoolFile, 'utf8');
   const rows = raw.split('\n').filter(l => l.includes(SEP));
   onLog(`  [tour-plan] ${rows.length} rows from Oracle`);
+
+  /* Second guard for the failure sqlplus does not report: a clean exit over a
+     truncated result. Oracle is the source of truth so a genuine drop is possible
+     (plans cancelled, a month purged), but losing most of a range silently is not
+     something to do on a schedule — make the operator confirm with --force. */
+  const [[prior]] = await conn.query(
+    `SELECT COUNT(*) n FROM cir_tour_plan_dtl WHERE visit_date BETWEEN ? AND ?`, [from, to]);
+  const had = Number(prior.n) || 0;
+  if (had >= 50 && rows.length < had * 0.5 && !process.argv.includes('--force')) {
+    throw new Error(`Refusing to overwrite ${from}→${to}: MySQL has ${had} rows but Oracle ` +
+      `returned only ${rows.length}. Re-run to confirm it is real, or pass --force to accept.`);
+  }
 
   const [del] = await conn.execute(
     `DELETE FROM cir_tour_plan_dtl WHERE visit_date BETWEEN ? AND ?`, [from, to]);
