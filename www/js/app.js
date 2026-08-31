@@ -4297,6 +4297,19 @@ function _ccTrend(pct, invert) {
   const col = pct === 0 ? 'var(--muted)' : good ? '#15803d' : '#b91c1c';
   return `<span style="color:${col};font-weight:700;font-size:11.5px;white-space:nowrap">${pct === 0 ? '' : up ? '▲' : '▼'} ${up && pct !== 0 ? '+' : ''}${pct}%</span>`;
 }
+/* Change shown in TIME order, for when the comparison window is later than the
+   selected one — the COVID case. "COVID 27.2L vs today 16.9L, +63%" is arithmetically
+   right and reads as a rise, when supply has actually fallen 38.6% since. Here the
+   selected window is the earlier one, so the honest statement is what happened to it
+   afterwards: value → prev, phrased "since". */
+function _ccSinceTrend(value, prev) {
+  const a = Number(value) || 0, b = Number(prev);
+  if (!a || b == null || isNaN(b)) return `<span style="color:var(--muted);font-size:11px">—</span>`;
+  const pct = Math.round((b / a - 1) * 1000) / 10;
+  const col = pct === 0 ? 'var(--muted)' : pct > 0 ? '#15803d' : '#b91c1c';
+  return `<span title="Change from the selected window to the comparison window"
+    style="color:${col};font-weight:700;font-size:11.5px;white-space:nowrap">${pct === 0 ? '' : pct > 0 ? '▲' : '▼'} ${pct > 0 ? '+' : ''}${pct}% since</span>`;
+}
 function _ccBar(pctVal, color) {
   const w = Math.max(0, Math.min(100, Number(pctVal) || 0));
   return `<div style="height:6px;background:#eef2f7;border-radius:4px;overflow:hidden;margin-top:5px">
@@ -5614,7 +5627,7 @@ function _ccKpiRow(label, value, sub, trendHtml, barPct, barColor, onClick) {
 }
 
 /* ── state performance card ── */
-function _ccStateCard(s) {
+function _ccStateCard(s, d) {
   const st = _CC_STATUS[s.supply.status] || _CC_STATUS.watch;
   // Card-level status is the worst of the four, so a card can never look calm while
   // one of its KPIs is critical.
@@ -5636,14 +5649,21 @@ function _ccStateCard(s) {
 
     ${/* Agent (credit) and cash (city) sale are separate businesses, so the card reports
           them on their own lines instead of one supply figure with a footnote. */''}
+    ${/* "was X" is only true when the comparison window is in the past. Comparing a
+          past range against today — the COVID case — it is "now X", and the movement
+          has to be stated in time order or a decline shows a green up-arrow. */''}
     ${_ccKpiRow('AGENT SALE (CREDIT)', _ccN(s.supply.agent) + ' cp',
-      `was ${_ccN(s.supply.agent_previous)}`,
-      _ccTrend(s.supply.agent_growth_pct),
+      `${d && d.compare_is_later ? 'now' : 'was'} ${_ccN(s.supply.agent_previous)}`,
+      d && d.compare_is_later ? _ccSinceTrend(s.supply.agent, s.supply.agent_previous)
+                              : _ccTrend(s.supply.agent_growth_pct),
       null, null, `ccOpenState('${q(s.key)}')`)}
 
     ${_ccKpiRow('CASH SALE (CITY)', _ccN(s.supply.cash) + ' cp',
-      s.supply.cash || s.supply.cash_previous ? `was ${_ccN(s.supply.cash_previous)}` : 'agent sale only — no city centres',
-      _ccTrend(s.supply.cash_growth_pct),
+      s.supply.cash || s.supply.cash_previous
+        ? `${d && d.compare_is_later ? 'now' : 'was'} ${_ccN(s.supply.cash_previous)}`
+        : 'agent sale only — no city centres',
+      d && d.compare_is_later ? _ccSinceTrend(s.supply.cash, s.supply.cash_previous)
+                              : _ccTrend(s.supply.cash_growth_pct),
       null, null, `ccOpenState('${q(s.key)}')`)}
 
     ${_ccKpiRow('COLLECTION', _ccINR(s.collection.current),
@@ -5760,7 +5780,13 @@ function _cmdViewNew() {
   const topStrip = !t.supply ? '' : `<div class="cc-strip" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:18px">
     ${_ccTopCard({ label: st.state ? esc(shown[0] ? shown[0].name : '') + ' Supply' : 'Total Supply', color: '#3b82f6',
       value: _ccN(t.supply.value),
-      trend: _ccTrend(t.supply.growth_pct), sub: `Agent + Cash · ${esc(t.supply.window)}`,
+      // When the comparison is a LATER date, the movement is stated in time order and
+      // the comparison figure is spelled out — otherwise the card shows a past period's
+      // number with no sense of where it stands now.
+      trend: d.compare_is_later ? _ccSinceTrend(t.supply.value, t.supply.prev) : _ccTrend(t.supply.growth_pct),
+      sub: d.compare_is_later
+        ? `Agent + Cash · ${esc(t.supply.window)}<br><span style="color:#475569">${_ccN(t.supply.prev)} on ${esc(d.prev_range_to)}</span>`
+        : `Agent + Cash · ${esc(t.supply.window)}`,
       onClick: `ccDrill('supply_dash','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Agent Sale', color: '#6366f1',
       value: _ccN(t.agent.value),
@@ -5822,7 +5848,7 @@ function _cmdViewNew() {
 
   const cards = `<div style="font-size:11px;font-weight:800;letter-spacing:.06em;color:#64748b;text-transform:uppercase;margin:0 0 8px 2px">State-wise Performance</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:12px;margin-bottom:18px">
-    ${shown.map(_ccStateCard).join('')}
+    ${shown.map(x => _ccStateCard(x, d)).join('')}
   </div>`;
 
   const alerts = (d.alerts || []).filter(a => !st.state || a.state === st.state);

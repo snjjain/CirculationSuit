@@ -706,6 +706,12 @@ module.exports = function installCommandCentre({ app, q }) {
         as_on: asOn, previous: prev, compare: mode, compare_label: label,
         range: win.key, range_label: win.label, range_from: win.from, range_to: win.to,
         prev_range_from: prevWin.from, prev_range_to: prevWin.to,
+        /* True when the comparison window is LATER than the selected one — which is the
+           normal case for COVID, compared against today. The growth figure is then not
+           growth at all: "COVID 27.2L vs today 16.9L, +63%" reads as a rise when supply
+           has in fact fallen 38.6% since. The UI uses this to state the change in time
+           order instead of showing a green arrow on a decline. */
+        compare_is_later: prevWin.from > win.to,
         unit_code: unitScope, prev_month_label: col.prev_month_label,
         totals,
         states,
