@@ -1051,8 +1051,9 @@ module.exports = function installCommandCentre({ app, q }) {
         const h = hierIdx[e.exec_code]; if (!h) return;
         const zhName = cleanName(h.zonal); if (!zhName) return;
         const zhKey = h.zonal_code || zhName;
-        if (!zhMap[zhKey]) zhMap[zhKey] = { zh_code: h.zonal_code, zh_name: zhName, ...aggMk(), cis: {} };
+        if (!zhMap[zhKey]) zhMap[zhKey] = { zh_code: h.zonal_code, zh_name: zhName, ...aggMk(), unit_set: new Set(), cis: {} };
         addAgg(zhMap[zhKey], e);
+        (e.units || []).forEach(u => zhMap[zhKey].unit_set.add(u));
         const ciName = cleanName(h.circ) || '—';
         const ciKey = h.circ_code || ciName;
         if (!zhMap[zhKey].cis[ciKey]) zhMap[zhKey].cis[ciKey] = { ci_code: h.circ_code, ci_name: ciName, ...aggMk(), daks: {} };
@@ -1083,6 +1084,53 @@ module.exports = function installCommandCentre({ app, q }) {
           }))),
         }))),
       })));
+
+      /* One person often holds two rungs at once — a Zonal Head who is also the
+         Circulation Incharge for their own zone. Rendered literally that puts the same
+         name on two stacked rows carrying identical numbers, which reads as a data bug.
+         Two cases, handled differently because they carry different information:
+           · sole child, same name  → pure repetition. Drop the child, lift its children
+             onto the parent, so ZH → Dak → Exec.
+           · same name beside other children → the split is real (43 execs = 35 direct
+             + 8 under another CI). Keep the row, flag it `self` so the UI can say so. */
+      const _sameName = (a, b) =>
+        String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase();
+
+      /* Two different employees can carry the same name (there are two Jitendra Joshis,
+         on different employee codes and different branches). Name alone then reads as a
+         duplicated row, so tell those apart by the branches each one actually covers. */
+      const _zhNameCount = {};
+      zh_perf.forEach(zh => {
+        const k = String(zh.zh_name || '').trim().toUpperCase();
+        _zhNameCount[k] = (_zhNameCount[k] || 0) + 1;
+      });
+      zh_perf.forEach(zh => {
+        const units = [...(zh.unit_set || [])].map(u => unitName[u] || u).sort();
+        delete zh.unit_set;
+        if (_zhNameCount[String(zh.zh_name || '').trim().toUpperCase()] > 1) {
+          zh.zh_hint = units.slice(0, 3).join(', ') + (units.length > 3 ? ` +${units.length - 3}` : '');
+        }
+      });
+
+      zh_perf.forEach(zh => {
+        if (zh.cis.length === 1 && _sameName(zh.cis[0].ci_name, zh.zh_name)) {
+          zh.daks_direct = zh.cis[0].daks;   // ZH wears the CI hat alone — skip the rung
+          zh.cis = [];
+        } else {
+          zh.cis.forEach(ci => { if (_sameName(ci.ci_name, zh.zh_name)) ci.self = true; });
+        }
+        const collapseDaks = holder => {
+          if (!holder) return;
+          const daks = holder.daks_direct || holder.daks;
+          if (!daks || daks.length !== 1) return;
+          const parentName = holder.ci_name || holder.zh_name;
+          if (!_sameName(daks[0].dak_name, parentName)) return;
+          holder.execs_direct = daks[0].execs;
+          if (holder.daks_direct) holder.daks_direct = []; else holder.daks = [];
+        };
+        collapseDaks(zh);
+        zh.cis.forEach(collapseDaks);
+      });
 
       res.json({
         state: stateKey, state_name: meta.name,

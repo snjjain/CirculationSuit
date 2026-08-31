@@ -6230,9 +6230,19 @@ function _csZHRows(st, d) {
     if (!msAvail || !ex.exec_code) return null;
     return (ms.by_exec && ms.by_exec[ex.exec_code]) || (ms.by_ci && ms.by_ci[ex.exec_code]) || null;
   };
-  const dakMs = dak => msAvail ? _msRoll((dak.execs || []).map(execMs)) : null;
-  const ciMs  = ci  => msAvail ? _msRoll((ci.daks || []).flatMap(d => (d.execs || []).map(execMs))) : null;
-  const zhMs  = zh  => msAvail ? _msRoll((zh.cis || []).flatMap(c => (c.daks || []).flatMap(d => (d.execs || []).map(execMs)))) : null;
+  /* Walk every executive under a node. A collapsed rung parks its survivors on
+     `execs_direct` / `daks_direct`, so rolling up `cis`/`daks` alone would silently
+     read zero market share for any Zonal Head who is also their own incharge. */
+  const execsUnder = n => {
+    if (!n) return [];
+    if (n.execs) return n.execs;
+    if (n.execs_direct) return n.execs_direct;
+    const kids = [...(n.daks_direct || []), ...(n.daks || []), ...(n.cis || [])];
+    return kids.flatMap(execsUnder);
+  };
+  const dakMs = dak => msAvail ? _msRoll(execsUnder(dak).map(execMs)) : null;
+  const ciMs  = ci  => msAvail ? _msRoll(execsUnder(ci).map(execMs))  : null;
+  const zhMs  = zh  => msAvail ? _msRoll(execsUnder(zh).map(execMs))  : null;
   const msCell = v => msAvail ? tdR(_msPct(v)) : '';
 
   const metricsRow = (r, msVal) => tdR(NF(r.agent_cur)) + tdR(NF(r.cash_cur)) + tdR(GP(r.growth_pct))
@@ -6240,6 +6250,31 @@ function _csZHRows(st, d) {
     + tdR(NF(r.os)) + tdR(CR(r.critical)) + tdR(VS(r.visits)) + msCell(msVal) + tdC(ST(r));
 
   const rows = [];
+  /* One person often holds two rungs — a Zonal Head who is also the Circulation Incharge
+     for their own zone. The API drops a rung that would only repeat its parent's name and
+     numbers and hands the survivors down as `daks_direct` / `execs_direct`, so the same
+     name never appears twice in a row. Where the same name sits *beside* other children
+     the split is real, and that row is flagged `self` and badged DIRECT instead. */
+  const execRow = (ex, pad) => `<tr onclick="event.stopPropagation();${ex.exec_code ? `ccOpenExecPanel('${_csQ(ex.exec_code)}','${_csQ(ex.exec_name)}','')` : ''}" style="cursor:pointer;background:#fff;border-top:1px solid #f8fafc" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='#fff'">
+      <td style="padding:4px 8px;padding-left:${pad}px">
+        <span style="font-size:11.5px;color:${ex.desig === 'CI' ? '#0ea5e9' : '#374151'}">${esc(ex.exec_name)}</span>
+        ${ex.desig ? `<span style="font-size:9px;color:#94a3b8;margin-left:3px">${esc(ex.desig)}</span>` : ''}
+      </td>${metricsRow(ex, (execMs(ex) || {}).share_pct ?? null)}</tr>`;
+
+  const pushDaks = (daks, parentKey, pad) => {
+    (daks || []).forEach(dak => {
+      const dakKey = parentKey + '|' + (dak.dak_code || dak.dak_name);
+      const dakE = exp.has(dakKey);
+      rows.push(`<tr onclick="event.stopPropagation();csZhToggle('${_csQ(dakKey)}')" style="cursor:pointer;background:#fafafa;border-top:1px solid #e2e8f0" onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background='#fafafa'">
+        <td style="padding:5px 8px;padding-left:${pad}px">
+          <span style="font-size:10px;color:#94a3b8;margin-right:4px">${dakE ? '▾' : '▶'}</span>
+          <span style="font-size:11.5px;color:#374151;font-weight:600">${esc(dak.dak_name)}</span>
+          <span style="font-size:10px;color:#94a3b8;margin-left:4px">${dak.n_execs} exec</span>
+        </td>${metricsRow(dak, dakMs(dak))}</tr>`);
+      if (dakE) (dak.execs || []).forEach(ex => rows.push(execRow(ex, pad + 16)));
+    });
+  };
+
   zh_perf.forEach(zh => {
     const zhKey = zh.zh_code || zh.zh_name;
     const zhE = exp.has(zhKey);
@@ -6247,9 +6282,16 @@ function _csZHRows(st, d) {
       <td style="padding:7px 8px">
         <span style="font-size:11px;color:#6366f1;margin-right:6px">${zhE ? '▾' : '▶'}</span>
         <b style="font-size:12.5px;color:#1e3a8a">${esc(zh.zh_name)}</b>
+        ${zh.zh_hint ? `<span title="Another zonal head shares this name — shown by the branches each one covers" style="font-size:10px;color:#94a3b8;margin-left:5px">· ${esc(zh.zh_hint)}</span>` : ''}
         <span style="font-size:10px;color:#6366f1;margin-left:5px">${zh.n_execs} exec</span>
       </td>${metricsRow(zh, zhMs(zh))}</tr>`);
     if (!zhE) return;
+
+    // ZH is also the sole CI here — that rung was dropped, so its children hang
+    // straight off the ZH row instead of repeating the name one line down.
+    if (zh.execs_direct) { zh.execs_direct.forEach(ex => rows.push(execRow(ex, 38))); return; }
+    if (zh.daks_direct)  { pushDaks(zh.daks_direct, zhKey, 22); return; }
+
     zh.cis.forEach(ci => {
       const ciKey = zhKey + '|' + (ci.ci_code || ci.ci_name);
       const ciE = exp.has(ciKey);
@@ -6257,27 +6299,12 @@ function _csZHRows(st, d) {
         <td style="padding:6px 8px;padding-left:22px">
           <span style="font-size:10px;color:#0284c7;margin-right:5px">${ciE ? '▾' : '▶'}</span>
           <span style="font-size:12px;color:#0369a1;font-weight:700">${esc(ci.ci_name)}</span>
+          ${ci.self ? `<span title="Same person as the Zonal Head — the branches they run directly, apart from the other incharges below" style="font-size:9px;font-weight:700;color:#6366f1;background:#eef2ff;border-radius:8px;padding:1px 6px;margin-left:5px">DIRECT</span>` : ''}
           <span style="font-size:10px;color:#94a3b8;margin-left:4px">${ci.n_execs} exec</span>
         </td>${metricsRow(ci, ciMs(ci))}</tr>`);
       if (!ciE) return;
-      ci.daks.forEach(dak => {
-        const dakKey = ciKey + '|' + (dak.dak_code || dak.dak_name);
-        const dakE = exp.has(dakKey);
-        rows.push(`<tr onclick="event.stopPropagation();csZhToggle('${_csQ(dakKey)}')" style="cursor:pointer;background:#fafafa;border-top:1px solid #e2e8f0" onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background='#fafafa'">
-          <td style="padding:5px 8px;padding-left:38px">
-            <span style="font-size:10px;color:#94a3b8;margin-right:4px">${dakE ? '▾' : '▶'}</span>
-            <span style="font-size:11.5px;color:#374151;font-weight:600">${esc(dak.dak_name)}</span>
-            <span style="font-size:10px;color:#94a3b8;margin-left:4px">${dak.n_execs} exec</span>
-          </td>${metricsRow(dak, dakMs(dak))}</tr>`);
-        if (!dakE) return;
-        dak.execs.forEach(ex => {
-          rows.push(`<tr onclick="event.stopPropagation();${ex.exec_code ? `ccOpenExecPanel('${_csQ(ex.exec_code)}','${_csQ(ex.exec_name)}','')` : ''}" style="cursor:pointer;background:#fff;border-top:1px solid #f8fafc" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='#fff'">
-            <td style="padding:4px 8px;padding-left:54px">
-              <span style="font-size:11.5px;color:${ex.desig === 'CI' ? '#0ea5e9' : '#374151'}">${esc(ex.exec_name)}</span>
-              ${ex.desig ? `<span style="font-size:9px;color:#94a3b8;margin-left:3px">${esc(ex.desig)}</span>` : ''}
-            </td>${metricsRow(ex, (execMs(ex) || {}).share_pct ?? null)}</tr>`);
-        });
-      });
+      if (ci.execs_direct) { ci.execs_direct.forEach(ex => rows.push(execRow(ex, 54))); return; }
+      pushDaks(ci.daks, ciKey, 38);
     });
   });
   return rows.join('');
