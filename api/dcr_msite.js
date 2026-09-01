@@ -568,10 +568,15 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         q(`SELECT period_label, SUM(bill_amt) amt FROM agency_outstanding
            WHERE unit_code = ? AND ag_code = ? AND period_label <> 'CURRENT'
            GROUP BY period_label ORDER BY period_label DESC LIMIT 14`, [unit, code]),
-        q(`SELECT -COALESCE(SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END), 0) collected,
+        /* Bucketed by month rather than summed, because the window that matters is not
+           known until the bill month is resolved below. Two years back so a bill month
+           older than the current FY is still covered. */
+        q(`SELECT DATE_FORMAT(coll_date, '%Y-%m') mth,
+                  -COALESCE(SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END), 0) collected,
                   COUNT(*) txns, MAX(coll_date) last_date
            FROM agency_collection WHERE unit_code = ? AND ag_code = ? AND is_valid = 1
-             AND coll_date >= ?`, [unit, code, fyStart]),
+             AND coll_date >= DATE_SUB(CURDATE(), INTERVAL 24 MONTH)
+           GROUP BY 1`, [unit, code]),
         q(`SELECT ROUND(SUM(sup_copy) / NULLIF(COUNT(DISTINCT supply_date), 0)) daily_copies
            FROM supply_data WHERE unit_code = ? AND agcd = ? AND sup_type_code = 'S01'
              AND COALESCE(publ,'') NOT IN ('P14')
@@ -598,6 +603,24 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         }
       }
 
+      /* Recovery against that bill. A monthly bill is raised at month end and settled
+         over the month that follows, so what pays it off is every receipt banked from
+         the 1st of the next month onward — not receipts inside the bill month, which
+         were paying the month before it. */
+      const buckets = coll.rows;
+      const fyMonth = fyStart.slice(0, 7);
+      const collectionFy = buckets.filter(r => r.mth >= fyMonth).reduce((s, r) => s + N(r.collected), 0);
+      const lastDate = buckets.reduce((mx, r) => (!mx || r.last_date > mx ? r.last_date : mx), null);
+
+      let billFrom = null, billColl = 0, billTxns = 0;
+      if (lastBillMonth) {
+        const [y, mo] = lastBillMonth.split('-').map(Number);
+        billFrom = (mo === 12 ? y + 1 : y) + '-' + String(mo === 12 ? 1 : mo + 1).padStart(2, '0');
+        const since = buckets.filter(r => r.mth >= billFrom);
+        billColl = since.reduce((s, r) => s + N(r.collected), 0);
+        billTxns = since.reduce((s, r) => s + N(r.txns), 0);
+      }
+
       res.json({
         unit_code: unit, target_code: code,
         ag_name: m.ag_name || null,
@@ -611,9 +634,11 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         outstanding: N(cur.rows[0] && cur.rows[0].outstanding),
         last_supply: iso(cur.rows[0] && cur.rows[0].last_supply),
         last_bill: lastBill, last_bill_month: lastBillMonth, last_bill_basis: billBasis,
-        collection_fy: N(coll.rows[0] && coll.rows[0].collected),
-        collection_txns: N(coll.rows[0] && coll.rows[0].txns),
-        last_collection_date: iso(coll.rows[0] && coll.rows[0].last_date),
+        bill_collection: billColl, bill_collection_from: billFrom, bill_collection_txns: billTxns,
+        bill_balance: Math.max(0, lastBill - billColl),
+        bill_recovered_pct: lastBill > 0 ? Math.round(billColl / lastBill * 100) : null,
+        collection_fy: collectionFy,
+        last_collection_date: iso(lastDate),
         fy_from: fyStart,
       });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }

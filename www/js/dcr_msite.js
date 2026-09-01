@@ -384,7 +384,10 @@ function _autoPanel() {
       ${cell('Daily copies', _NN(a.daily_copies))}
       ${cell('Outstanding', `<span style="color:${a.outstanding > 100000 ? 'var(--d-bad)' : 'var(--d-ink)'}">${_INR(a.outstanding)}</span>`)}
       ${cell(`Last bill${a.last_bill_month ? ' · ' + a.last_bill_month : ''}`, _INR(a.last_bill))}
-      ${cell('Collection this FY', _INR(a.collection_fy))}
+      ${!(a.last_bill > 0) ? '' : cell('Received against it',
+        `<span style="color:${a.bill_recovered_pct >= 90 ? 'var(--d-ok)' : a.bill_recovered_pct >= 50 ? 'var(--d-warn)' : 'var(--d-bad)'}">${_INR(a.bill_collection)}</span>`
+        + `<span style="font-size:11px;color:var(--d-mut);font-weight:400"> · ${a.bill_recovered_pct}%</span>`)}
+      ${!(a.last_bill > 0) ? '' : cell('Balance of that bill', _INR(a.bill_balance))}
       ${cell('Last collection', a.last_collection_date ? esc(a.last_collection_date) : '')}
     </div></div>`;
 }
