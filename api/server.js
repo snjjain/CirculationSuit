@@ -3848,26 +3848,59 @@ app.get('/api/collection/app-usage', async (req, res) => {
     const sc = await getColScopeFilter(req);
     const { clause: rc, params: rp } = colFilters(req.query);
     const clause = rc + sc.clause, params = [...rp, ...sc.params];
-    const { rows } = await q(`
-      SELECT state_name, branch_name,
-             COUNT(DISTINCT ag_code) AS agencies,
-             COUNT(DISTINCT CASE WHEN payment_cat LIKE 'PAYMENT GAT%' THEN ag_code END) AS app_agencies,
-             -COALESCE(SUM(CASE WHEN payment_cat LIKE 'PAYMENT GAT%' THEN amount ELSE 0 END),0) AS app_amount,
-             -COALESCE(SUM(amount),0) AS total_amount
-      FROM agency_collection
-      WHERE is_valid=1 ${clause}
-      GROUP BY state_name, branch_name
-      ORDER BY state_name, branch_name
-    `, params);
-    res.json({ rows: rows.map(r => ({
-      state_name:   r.state_name || '—',
-      branch_name:  r.branch_name || '—',
-      agencies:     Number(r.agencies) || 0,
-      app_agencies: Number(r.app_agencies) || 0,
-      app_amount:   Number(r.app_amount) || 0,
-      total_amount: Number(r.total_amount) || 0,
-      app_pct:      Number(r.total_amount) > 0 ? Math.round(Number(r.app_amount) / Number(r.total_amount) * 1000) / 10 : 0,
-    })) });
+    /* Grouped by BRANCH, then bucketed into the branch's own state.
+
+       agency_collection.state_name is the AGENCY's state, not the branch's, and a branch
+       serves agencies across borders — so grouping by it split one branch across many
+       states: Jaipur RP appeared under Madhya Pradesh, Maharashtra, Jharkhand, Himachal,
+       Delhi, J&K and Gujarat, Alwar and Jhunjhunu under Haryana, Surat under Dadra &
+       Nagar Haveli. Each fragment also carried its own denominator, so the app-adoption
+       percentages were computed against a sliver of the branch's collection.
+
+       Home state is the state most of a branch's agencies sit in — the same rule
+       unitHomeState() uses for supply bucketing and the state dashboard, so the reports
+       cannot disagree with each other. */
+    const [{ rows }, homeRows] = await Promise.all([
+      q(`SELECT unit_code, branch_name,
+                COUNT(DISTINCT ag_code) AS agencies,
+                COUNT(DISTINCT CASE WHEN payment_cat LIKE 'PAYMENT GAT%' THEN ag_code END) AS app_agencies,
+                -COALESCE(SUM(CASE WHEN payment_cat LIKE 'PAYMENT GAT%' THEN amount ELSE 0 END),0) AS app_amount,
+                -COALESCE(SUM(amount),0) AS total_amount
+         FROM agency_collection
+         WHERE is_valid=1 ${clause}
+         GROUP BY unit_code, branch_name
+         ORDER BY branch_name`, params),
+      q(`SELECT unit, state_name, COUNT(*) c FROM agency_master
+         WHERE state_name IS NOT NULL AND state_name <> '' GROUP BY unit, state_name`),
+    ]);
+    const home = {};
+    homeRows.rows.forEach(r => {
+      const n = Number(r.c) || 0;
+      if (!home[r.unit] || n > home[r.unit].c) home[r.unit] = { st: r.state_name, c: n };
+    });
+
+    // One branch can still appear under two unit codes; fold those together so the
+    // branch is a single line with one denominator.
+    const merged = new Map();
+    rows.forEach(r => {
+      const st = (home[r.unit_code] && home[r.unit_code].st) || r.state_name || '—';
+      const k = `${st}|${r.branch_name || '—'}`;
+      if (!merged.has(k)) merged.set(k, {
+        state_name: st, branch_name: r.branch_name || '—',
+        agencies: 0, app_agencies: 0, app_amount: 0, total_amount: 0,
+      });
+      const m = merged.get(k);
+      m.agencies     += Number(r.agencies) || 0;
+      m.app_agencies += Number(r.app_agencies) || 0;
+      m.app_amount   += Number(r.app_amount) || 0;
+      m.total_amount += Number(r.total_amount) || 0;
+    });
+
+    res.json({ rows: [...merged.values()]
+      .sort((a, b) => a.state_name.localeCompare(b.state_name) || a.branch_name.localeCompare(b.branch_name))
+      .map(r => ({ ...r,
+        app_pct: r.total_amount > 0 ? Math.round(r.app_amount / r.total_amount * 1000) / 10 : 0,
+      })) });
   } catch (e) { res.status(500).json({ detail: String(e) }); }
 });
 
