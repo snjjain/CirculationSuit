@@ -1,513 +1,541 @@
 /* ════════════════════════════════════════════════════════════════════════════
-   DCR M-Site — the field forms, inside the dashboard SSO.
+   DCR M-Site — field forms inside the dashboard SSO.
 
-   Built to the team's own prototype (dcr-forms-prototype.html): three work modes,
-   the tabs under each, and the same fields in the same order — because those fields
-   are what the circulation business actually asks in the field, and re-inventing
-   them would only make the app disagree with how people already work.
+   Built to the team's own prototype, then tightened on their review:
+     · dropdowns instead of chip rows, so a form fits a screen instead of scrolling
+     · light weights, small type, no boxed sections — density over decoration
+     · calling is its OWN form, not a mode inside a visit form
+     · Approvals lists approved plans only and opens the visit already filled in
+     · the bottom bar belongs to this app while you are in it
 
-   Two things the prototype could not do, added here:
-     · rights — the home screen shows an icon per form the user is entitled to, and
-       nothing else. The entitlement comes from the server, never from the UI.
-     · virtual call — an executive who is not on the road can still ring an agent,
-       hawker or reader and file the report. A call is recorded as a call: no
-       geofence, no selfie, counted apart from field visits at day close, because
-       dressing a phone call up as a visit is exactly the dishonesty this app exists
-       to remove.
-
-   Responsive rather than phone-only: one column on a handset, two on a tablet or
-   desktop, since incharges will open the same forms on a laptop.
+   A field executive fills these standing in a shop with one thumb. Every extra
+   scroll is a reason to fill it later, badly, from memory.
    ════════════════════════════════════════════════════════════════════════════ */
 
 const DM = {
   ctx: null, rights: null, loading: false, err: null,
-  mode: null,                 // null = home | agent | hawker | office
-  tab: 0,
-  form: {}, extra: {},        // current form values
-  targets: null, targetsKey: '', search: '',
-  centres: null, hawkers: null,
-  plan: null, planDate: null,
-  pending: null, team: null, live: null,
-  geo: null, geoAt: 0, geoErr: null,
-  photo: null,
-  callMode: false,            // filling the form from a phone call
-  busy: '', toastMsg: '',
+  mode: null, form: {}, extra: {},
+  targets: null, targetsKey: '', targetType: 'agent', search: '',
+  centres: null, plan: null, planDate: null, approved: null,
+  pending: null, team: null, live: null, day: null,
+  geo: null, geoAt: 0, geoErr: null, photo: null,
+  fbSet: 'basic', busy: '', flyout: null,
 };
 
 function _dmOn() { return S.screen === 'app_dcr' || String(S.screen || '').startsWith('dcrm'); }
-const _dmINR = n => '₹' + (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-const _dmN   = n => (Number(n) || 0).toLocaleString('en-IN');
-const _dmQ   = v => String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-const _dmDay = () => new Date().toISOString().slice(0, 10);
-const _dmNow = () => new Date().toTimeString().slice(0, 5);
+const _INR = n => '₹' + (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+const _NN  = n => (Number(n) || 0).toLocaleString('en-IN');
+const _Q   = v => String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+const _DAY = () => new Date().toISOString().slice(0, 10);
+const _NOW = () => new Date().toTimeString().slice(0, 5);
 
-async function _dmApi(path, opts) {
+async function _api(path, opts) {
   const r = await fetch(`${api.base}/api/dcr-m${path}`, {
     ...(opts || {}), headers: { ...api.h(), ...((opts && opts.headers) || {}) } });
   const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch (_) {}
   if (!r.ok) throw new Error((j && j.detail) || `Request failed (${r.status})`);
   return j || {};
 }
-
-function _dmGeo(force) {
-  return new Promise((resolve, reject) => {
-    if (!force && DM.geo && Date.now() - DM.geoAt < 30000) return resolve(DM.geo);
-    if (!navigator.geolocation) return reject(new Error('This device cannot provide a location.'));
+function _geo(force) {
+  return new Promise((res, rej) => {
+    if (!force && DM.geo && Date.now() - DM.geoAt < 30000) return res(DM.geo);
+    if (!navigator.geolocation) return rej(new Error('This device cannot provide a location.'));
     navigator.geolocation.getCurrentPosition(
       p => { DM.geo = { lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6),
-               accuracy: Math.round(p.coords.accuracy || 0) };
-             DM.geoAt = Date.now(); DM.geoErr = null; resolve(DM.geo); },
-      e => { DM.geoErr = e.message || 'Location unavailable'; reject(new Error(DM.geoErr)); },
+             accuracy: Math.round(p.coords.accuracy || 0) }; DM.geoAt = Date.now(); res(DM.geo); },
+      e => { DM.geoErr = e.message; rej(new Error(e.message)); },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
   });
 }
-
-async function _dmLoad(force) {
+async function _load(force) {
   if (DM.loading || (DM.ctx && DM.rights && !force)) return;
   DM.loading = true; DM.err = null;
-  try {
-    const [c, r] = await Promise.all([_dmApi('/context'), _dmApi('/rights')]);
-    DM.ctx = c; DM.rights = r.forms || {};
-  } catch (e) { DM.err = e.message; }
-  DM.loading = false;
-  if (_dmOn()) render();
+  try { const [c, r] = await Promise.all([_api('/context'), _api('/rights')]);
+        DM.ctx = c; DM.rights = r.forms || {}; }
+  catch (e) { DM.err = e.message; }
+  DM.loading = false; if (_dmOn()) render();
 }
 
-// ── UI atoms ────────────────────────────────────────────────────────────────
-const C = { ink: 'var(--ink,#0f172a)', mut: '#64748b', line: 'var(--brd2,#e6eaf0)',
-            card: 'var(--card,#fff)', s2: 'var(--surface-2,#f8fafc)' };
+/* ── atoms ──────────────────────────────────────────────────────────────────
+   Sections are a label and a hairline, not a card in a card. Labels are normal
+   weight; only values that carry meaning are emphasised. */
+const K = { ink: 'var(--ink,#0f172a)', mut: '#64748b', line: 'var(--brd2,#e6eaf0)', s2: 'var(--surface-2,#f8fafc)' };
+const IN = 'width:100%;padding:9px 10px;border:1px solid #d7dde5;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;color:#0f172a;font-family:inherit';
 
-const _card = (inner, s) => `<div style="background:${C.card};border:1px solid ${C.line};border-radius:14px;padding:15px;margin-bottom:12px;${s || ''}">${inner}</div>`;
+const _sec = t => `<div style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#9aa5b4;margin:15px 0 7px;padding-bottom:5px;border-bottom:1px solid ${K.line}">${t}</div>`;
+const _f = (label, ctl, req, hint) => `<div style="margin-bottom:10px">
+  <label style="display:block;font-size:12px;color:${K.mut};margin-bottom:4px">${label}${req ? ' <span style="color:#dc2626">*</span>' : ''}</label>
+  ${ctl}${hint ? `<div style="font-size:10.5px;color:#9aa5b4;margin-top:3px">${hint}</div>` : ''}</div>`;
+const _row = (a, b) => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">${a}${b}</div>`;
 
-const _sec = t => `<div style="font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#94a3b8;margin:16px 0 8px">${t}</div>`;
-
-const _lbl = (t, req) => `<label style="display:block;font-size:12.5px;font-weight:700;color:${C.ink};margin-bottom:5px">${t}${req ? ' <span style="color:#dc2626">*</span>' : ''}</label>`;
-
-const _IN = 'width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:10px;font-size:14.5px;box-sizing:border-box;background:#fff;color:#0f172a;font-family:inherit';
-
-const _inp = (k, ph, type, extra) => `${''}<input id="f_${k}" value="${esc(DM.form[k] || '')}" type="${type || 'text'}"
-  placeholder="${esc(ph || '')}" oninput="dmSet('${k}',this.value)" ${extra || ''} style="${_IN}">`;
-
-const _sel = (k, opts, ph) => `<select id="f_${k}" onchange="dmSet('${k}',this.value)" style="${_IN}">
+const _in = (k, ph, type, extra) => `<input id="f_${k}" value="${esc(DM.form[k] || '')}" type="${type || 'text'}"
+  placeholder="${esc(ph || '')}" oninput="dmSet('${k}',this.value)" ${extra || ''} style="${IN}">`;
+const _sel = (k, opts, ph, onX) => `<select onchange="${onX ? `dmSetX('${k}',this.value)` : `dmSet('${k}',this.value)`};render()" style="${IN}">
   <option value="">${esc(ph || '-- Select --')}</option>
   ${opts.map(o => { const [v, l] = Array.isArray(o) ? o : [o, o];
-    return `<option value="${esc(v)}" ${DM.form[k] === v ? 'selected' : ''}>${esc(l)}</option>`; }).join('')}
-</select>`;
+    const cur = onX ? DM.extra[k] : DM.form[k];
+    return `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`;
+const _txt = (k, ph, rows) => `<textarea id="f_${k}" rows="${rows || 2}" placeholder="${esc(ph || '')}"
+  oninput="dmSet('${k}',this.value)" style="${IN}">${esc(DM.form[k] || '')}</textarea>`;
+const _xin = (k, ph, type) => `<input value="${esc(DM.extra[k] || '')}" type="${type || 'text'}" placeholder="${esc(ph || '')}"
+  oninput="dmSetX('${k}',this.value)" style="${IN}">`;
 
-const _txt = (k, ph, rows) => `<textarea id="f_${k}" rows="${rows || 3}" placeholder="${esc(ph || '')}"
-  oninput="dmSet('${k}',this.value)" style="${_IN}">${esc(DM.form[k] || '')}</textarea>`;
-
-const _fld = (label, control, req, hint) => `<div style="margin-bottom:13px">${_lbl(label, req)}${control}
-  ${hint ? `<div style="font-size:11px;color:${C.mut};margin-top:4px">${hint}</div>` : ''}</div>`;
-
-const _btn = (label, onclick, kind, extra) => {
-  const k = { pri: 'background:#1e3a8a;color:#fff;border:none',
-              ok: 'background:#15803d;color:#fff;border:none',
-              warn: 'background:#b45309;color:#fff;border:none',
-              ghost: `background:#fff;color:#334155;border:1px solid #cbd5e1` }[kind || 'ghost'];
-  return `<button onclick="${onclick}" ${extra || ''} style="${k};border-radius:11px;padding:13px 16px;
-    font-size:14.5px;font-weight:700;cursor:pointer;width:100%;min-height:48px">${label}</button>`;
+/* Multi-select as a compact dropdown-plus-tags: a chip row for eight publications
+   costs three rows of scroll, this costs one. */
+const _multi = (k, opts, ph) => {
+  const cur = DM.extra[k] || [];
+  return `<select onchange="dmMulti('${k}',this.value);this.value=''" style="${IN}">
+      <option value="">${esc(ph || 'Add…')}</option>
+      ${opts.filter(o => !cur.includes(Array.isArray(o) ? o[0] : o))
+        .map(o => { const [v, l] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(v)}">${esc(l)}</option>`; }).join('')}
+    </select>
+    ${cur.length ? `<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">${cur.map(v =>
+      `<span style="font-size:11.5px;background:#eef2f7;border-radius:12px;padding:3px 8px;color:#334155">${esc(v)}
+        <a onclick="dmMulti('${k}','${_Q(v)}')" style="cursor:pointer;color:#94a3b8;margin-left:3px">×</a></span>`).join('')}</div>` : ''}`;
 };
 
-const _chip = (t, tone) => { const c = { good: '#15803d,#dcfce7', warn: '#b45309,#fef3c7',
-  bad: '#b91c1c,#fee2e2', info: '#0369a1,#e0f2fe', mute: '#64748b,#f1f5f9' }[tone || 'mute'].split(',');
-  return `<span style="font-size:10.5px;font-weight:800;color:${c[0]};background:${c[1]};border-radius:9px;padding:3px 9px;white-space:nowrap;display:inline-block">${t}</span>`; };
-
-/* Multi-choice chips — the prototype used these for competitor papers and outcomes,
-   and they beat a dropdown when someone is standing in a shop with one thumb free. */
-const _chips = (k, opts, multi) => {
-  const cur = multi ? (DM.extra[k] || []) : DM.extra[k];
-  return `<div style="display:flex;flex-wrap:wrap;gap:7px">${opts.map(o => {
-    const [v, l] = Array.isArray(o) ? o : [o, o];
-    const on = multi ? cur.includes(v) : cur === v;
-    return `<button type="button" onclick="dmChip('${k}','${_dmQ(v)}',${!!multi})"
-      style="border:1.5px solid ${on ? '#1e3a8a' : '#cbd5e1'};background:${on ? '#1e3a8a' : '#fff'};
-      color:${on ? '#fff' : '#334155'};border-radius:20px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer">${esc(l)}</button>`;
-  }).join('')}</div>`;
+const _btn = (l, on, kind, ex) => {
+  const s = { pri: 'background:#1e3a8a;color:#fff;border:none', ok: 'background:#15803d;color:#fff;border:none',
+              ghost: 'background:#fff;color:#334155;border:1px solid #d7dde5' }[kind || 'ghost'];
+  return `<button onclick="${on}" ${ex || ''} style="${s};border-radius:9px;padding:11px 14px;font-size:14px;font-weight:600;cursor:pointer;width:100%;min-height:44px">${l}</button>`;
 };
+const _tag = (t, tone) => { const c = { good: '#15803d,#e8f6ee', warn: '#b45309,#fdf3e3', bad: '#b91c1c,#fdeceb',
+  info: '#0369a1,#e6f2fb', mute: '#64748b,#f1f5f9' }[tone || 'mute'].split(',');
+  return `<span style="font-size:10.5px;color:${c[0]};background:${c[1]};border-radius:9px;padding:2px 7px;white-space:nowrap">${t}</span>`; };
 
-window.dmSet   = (k, v) => { DM.form[k] = v; };
-window.dmSetX  = (k, v) => { DM.extra[k] = v; };
-window.dmChip  = (k, v, multi) => {
-  if (multi) { const a = DM.extra[k] || []; DM.extra[k] = a.includes(v) ? a.filter(x => x !== v) : a.concat(v); }
-  else DM.extra[k] = DM.extra[k] === v ? null : v;
-  render();
-};
+window.dmSet  = (k, v) => { DM.form[k] = v; };
+window.dmSetX = (k, v) => { DM.extra[k] = v; };
+window.dmMulti = (k, v) => { const a = DM.extra[k] || [];
+  DM.extra[k] = a.includes(v) ? a.filter(x => x !== v) : a.concat(v); render(); };
 
-// ── HOME — icons for the forms this user is entitled to ─────────────────────
+// ── flyout ──────────────────────────────────────────────────────────────────
+/* Used where a choice would otherwise push the form off-screen: picking an
+   agency, or the 23-question feedback set. It overlays instead of expanding. */
+function _flyout() {
+  if (!DM.flyout) return '';
+  const f = DM.flyout;
+  return `<div onclick="dmFly(null)" style="position:fixed;inset:0;background:rgba(15,23,42,.4);z-index:400"></div>
+  <div style="position:fixed;left:0;right:0;bottom:0;max-height:86vh;background:#fff;z-index:401;
+      border-radius:16px 16px 0 0;box-shadow:0 -8px 30px rgba(15,23,42,.2);display:flex;flex-direction:column">
+    <div style="padding:12px 15px;border-bottom:1px solid ${K.line};display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:14px;font-weight:600;color:${K.ink}">${esc(f.title)}</span>
+      <button onclick="dmFly(null)" style="border:none;background:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1">×</button>
+    </div>
+    <div style="flex:1;overflow:auto;padding:13px 15px">${f.body()}</div>
+  </div>`;
+}
+window.dmFly = k => { DM.flyout = k; render(); };
+
+// ── home: small icons, light type, no boxes ─────────────────────────────────
 const FORMS = [
-  { key: 'plan_tour',    mode: 'agent',  tab: 0, icon: '🗺️', name: 'Plan Tour',        desc: 'Plan tomorrow’s agency visits for approval', tint: '#d97706' },
-  { key: 'agency_visit', mode: 'agent',  tab: 2, icon: '🏪', name: 'Agency Visit',     desc: 'Collection, growth commitment, selfie',       tint: '#d97706' },
-  { key: 'center_attn',  mode: 'hawker', tab: 0, icon: '📍', name: 'Centre Attendance',desc: 'Mark at your cash-sale centre',               tint: '#15803d' },
-  { key: 'hawker_visit', mode: 'hawker', tab: 1, icon: '🛵', name: 'Hawker Visit',     desc: 'Outstanding and collection from hawkers',     tint: '#15803d' },
-  { key: 'reader_visit', mode: 'hawker', tab: 2, icon: '📰', name: 'Reader Visit',     desc: 'Survey readers, capture leads',               tint: '#15803d' },
-  { key: 'new_area',     mode: 'hawker', tab: 3, icon: '🧭', name: 'New Area',         desc: 'Survey a new area for growth',                tint: '#15803d' },
-  { key: 'office_work',  mode: 'office', tab: 0, icon: '🏢', name: 'Office / Other',   desc: 'Meetings, legal, assigned work',              tint: '#1d4ed8' },
+  { key: 'plan_tour',    icon: '🗺️', name: 'Plan Tour' },
+  { key: 'agency_visit', icon: '🏪', name: 'Agency Visit' },
+  { key: 'agent_feedback', icon: '📝', name: 'Agent Feedback' },
+  { key: 'calling',      icon: '📞', name: 'Calling' },
+  { key: 'center_attn',  icon: '📍', name: 'Attendance' },
+  { key: 'hawker_visit', icon: '🛵', name: 'Hawker Visit' },
+  { key: 'reader_visit', icon: '📰', name: 'Reader Visit' },
+  { key: 'new_area',     icon: '🧭', name: 'New Area' },
+  { key: 'office_work',  icon: '🏢', name: 'Office / Other' },
 ];
 
-function _dmHome() {
+function _home() {
   const c = DM.ctx, t = c.trip;
   const allowed = FORMS.filter(f => DM.rights && DM.rights[f.key]);
 
-  const head = _card(`
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
-      <div style="min-width:0">
-        <div style="font-size:18px;font-weight:800;color:${C.ink}">${esc(c.staff.name)}</div>
-        <div style="font-size:12px;color:${C.mut};margin-top:2px">${esc(c.staff.designation || 'Field Executive')}${c.staff.unit_code ? ' · ' + esc(c.staff.unit_code) : ''}</div>
-        <div style="font-size:12px;color:${C.mut};margin-top:1px">${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
-      </div>
-      ${t && t.status === 'active' ? _chip('ON DUTY', 'good') : t ? _chip('DAY CLOSED', 'mute') : _chip('NOT STARTED', 'warn')}
+  const head = `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:3px">
+      <span style="font-size:15px;color:${K.ink}">${esc(c.staff.name)}</span>
+      ${t && t.status === 'active' ? _tag('On duty', 'good') : t ? _tag('Day closed', 'mute') : _tag('Not started', 'warn')}
     </div>
-    ${t ? `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:13px">
-      ${[['Visits', t.visits || 0], ['Done', t.completed || 0], ['Collected', _dmINR(t.collected || 0)]]
-        .map(([l, v]) => `<div style="background:${C.s2};border-radius:10px;padding:9px;text-align:center">
-          <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;color:#94a3b8">${l}</div>
-          <div style="font-size:16px;font-weight:800;color:${C.ink};margin-top:2px">${v}</div></div>`).join('')}
-    </div>` : ''}`);
+    <div style="font-size:11.5px;color:${K.mut};margin-bottom:12px">${esc(c.staff.designation || 'Field Executive')}${c.staff.unit_code ? ' · ' + esc(c.staff.unit_code) : ''} · ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</div>
+    ${t ? `<div style="display:flex;gap:18px;font-size:12px;color:${K.mut};margin-bottom:13px">
+        <span>Entries <b style="color:${K.ink};font-weight:600">${t.visits || 0}</b></span>
+        <span>Collected <b style="color:${K.ink};font-weight:600">${_INR(t.collected || 0)}</b></span>
+      </div>` : `<div style="margin-bottom:13px">${_btn(DM.busy === 'trip' ? 'Starting…' : 'Start duty', 'dmStartTrip()', 'ok', DM.busy === 'trip' ? 'disabled' : '')}</div>`}`;
 
-  const trip = t && t.status === 'active'
-    ? ''
-    : t ? '' : _card(`<div style="font-size:12.5px;color:${C.mut};margin-bottom:10px">
-        Start your duty to begin logging. Attendance and location are captured on the first entry.</div>
-      ${_btn(DM.busy === 'trip' ? 'Starting…' : '▶ Start duty', 'dmStartTrip()', 'ok', DM.busy === 'trip' ? 'disabled' : '')}`);
+  if (!allowed.length) return head + `<div style="font-size:12.5px;color:${K.mut};padding:16px 0">No forms have been assigned to you. Your incharge decides which DCR forms you can use.</div>`;
 
-  if (!allowed.length) {
-    return head + trip + _card(`<div style="text-align:center;padding:18px;color:${C.mut}">
-      <div style="font-size:30px;margin-bottom:7px">🔒</div>
-      <div style="font-weight:700;color:${C.ink};margin-bottom:4px">No forms assigned</div>
-      <div style="font-size:12.5px">Your incharge decides which DCR forms you can use. Ask them to enable the ones you need.</div></div>`);
-  }
-
-  /* Icon grid — exactly the forms this person may file, nothing greyed out. Showing a
-     locked tile only invites a support call about a form they will never be given. */
-  const grid = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">
-    ${allowed.map(f => `<button onclick="dmOpen('${f.key}')" style="text-align:left;background:${C.card};
-      border:1px solid ${C.line};border-radius:14px;padding:14px;cursor:pointer;display:flex;flex-direction:column;gap:6px;min-height:118px">
-      <div style="width:42px;height:42px;border-radius:11px;background:${f.tint}1a;display:flex;align-items:center;justify-content:center;font-size:21px">${f.icon}</div>
-      <div style="font-weight:800;font-size:14px;color:${C.ink};line-height:1.25">${f.name}</div>
-      <div style="font-size:11.5px;color:${C.mut};line-height:1.35">${f.desc}</div>
+  /* Small icons, four across on a phone. A tile is an icon and a word — the
+     description text that was here only made the grid twice as tall. */
+  const grid = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:6px">
+    ${allowed.map(f => `<button onclick="dmOpen('${f.key}')" style="background:none;border:none;cursor:pointer;
+        padding:10px 4px;border-radius:10px;display:flex;flex-direction:column;align-items:center;gap:5px"
+        onmouseenter="this.style.background='${K.s2}'" onmouseleave="this.style.background='none'">
+      <span style="font-size:23px;line-height:1">${f.icon}</span>
+      <span style="font-size:11px;color:${K.ink};text-align:center;line-height:1.25">${f.name}</span>
     </button>`).join('')}
   </div>`;
 
-  const more = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:14px">
-    ${_btn('📋 My day', 'dmOpenDay()', 'ghost')}
-    ${(S.user && S.user.hierarchyLevel <= 4) ? _btn('👥 My team', 'dmOpenTeam()', 'ghost') : _btn('🗺️ My tours', "dmOpen('plan_tour_list')", 'ghost')}
-  </div>
-  ${t && t.status === 'active' ? `<div style="margin-top:9px">${_btn('🏁 End duty & close day', 'dmEndTrip()', 'ghost')}</div>` : ''}`;
-
-  return head + trip + _sec('Your forms') + grid + more;
+  return head + _sec('Forms') + grid;
 }
 
 window.dmOpen = key => {
-  DM.form = {}; DM.extra = {}; DM.photo = null; DM.callMode = false; DM.err = null;
-  if (key === 'plan_tour_list') { DM.mode = 'plan_list'; render(); return; }
-  const f = FORMS.find(x => x.key === key);
-  if (!f) return;
-  DM.mode = key;
-  DM.form.visit_date = _dmDay();
-  DM.form.check_in = _dmNow();
+  DM.form = {}; DM.extra = {}; DM.photo = null; DM.err = null; DM.flyout = null;
+  DM.form.visit_date = _DAY(); DM.form.check_in = _NOW();
+  DM.mode = key; DM.targets = null; DM.targetsKey = ''; DM.search = '';
+  if (key === 'calling') DM.targetType = 'agent';
   render();
 };
-window.dmHome = () => { DM.mode = null; DM.err = null; render(); };
-window.dmOpenDay = async () => { DM.mode = 'day'; try { DM.day = await _dmApi('/day-close'); } catch (e) { DM.err = e.message; } render(); };
-window.dmOpenTeam = async () => {
-  DM.mode = 'team';
-  try { const [t, p, l] = await Promise.all([_dmApi('/team'), _dmApi('/tour/pending'), _dmApi('/team-live')]);
-    DM.team = t; DM.pending = p; DM.live = l; } catch (e) { DM.err = e.message; }
-  render();
-};
+window.dmHome = () => { DM.mode = null; DM.err = null; DM.flyout = null; render(); };
 
-// ── virtual call ────────────────────────────────────────────────────────────
-/* The switch that makes a form honest. Turning it on drops the geofence and the selfie
-   requirement, dials the number if one is known, and stamps the record as a call. */
-function _callBar(mobile) {
-  const tel = String(mobile || '').replace(/\D/g, '').slice(-10);
-  return `<div style="background:${DM.callMode ? '#eff6ff' : C.s2};border:1px solid ${DM.callMode ? '#93c5fd' : C.line};
-      border-radius:12px;padding:12px;margin-bottom:13px">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-      <div style="min-width:0">
-        <div style="font-size:13px;font-weight:800;color:${C.ink}">${DM.callMode ? '📞 Filing from a phone call' : 'Not on site?'}</div>
-        <div style="font-size:11.5px;color:${C.mut};margin-top:2px">${DM.callMode
-          ? 'No location or selfie needed. This is recorded as a call, not a field visit.'
-          : 'Call instead and file the same report.'}</div>
-      </div>
-      <button onclick="dmToggleCall()" style="flex:none;border:1px solid ${DM.callMode ? '#1d4ed8' : '#cbd5e1'};
-        background:${DM.callMode ? '#1d4ed8' : '#fff'};color:${DM.callMode ? '#fff' : '#334155'};
-        border-radius:20px;padding:8px 14px;font-size:12.5px;font-weight:700;cursor:pointer">${DM.callMode ? 'On' : 'Call'}</button>
-    </div>
-    ${DM.callMode && tel.length === 10 ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
-      <a href="tel:+91${tel}" style="text-decoration:none;text-align:center;background:#15803d;color:#fff;border-radius:10px;padding:11px;font-size:13.5px;font-weight:700">📞 Dial ${tel}</a>
-      <a href="https://wa.me/91${tel}" target="_blank" rel="noopener" style="text-decoration:none;text-align:center;background:#fff;border:1px solid #cbd5e1;color:#334155;border-radius:10px;padding:11px;font-size:13.5px;font-weight:700">WhatsApp</a>
-    </div>` : DM.callMode ? `<div style="font-size:11.5px;color:#b45309;margin-top:8px">No mobile number on record for this contact — dial from your own list.</div>` : ''}
-  </div>`;
-}
-window.dmToggleCall = () => { DM.callMode = !DM.callMode; render(); };
-
-// ── shared pickers ──────────────────────────────────────────────────────────
+// ── target picker (flyout) ──────────────────────────────────────────────────
 async function _loadTargets(type) {
   const key = `${type}|${DM.search}`;
   if (DM.targetsKey === key && DM.targets) return;
   DM.targetsKey = key;
-  try { const r = await _dmApi(`/targets?type=${type}&limit=60${DM.search ? '&q=' + encodeURIComponent(DM.search) : ''}`);
-        DM.targets = r.rows || []; } catch (e) { DM.targets = []; DM.err = e.message; }
+  try { const r = await _api(`/targets?type=${type}&limit=60${DM.search ? '&q=' + encodeURIComponent(DM.search) : ''}`);
+        DM.targets = r.rows || []; } catch (e) { DM.targets = []; }
   if (_dmOn()) render();
 }
 window.dmSearch = (() => { let t; return v => { DM.search = v; clearTimeout(t);
   t = setTimeout(() => { DM.targets = null; DM.targetsKey = ''; render(); }, 350); }; })();
 
-/* Picking who the form is about. The chosen row carries its dues and copies forward so
-   the executive sees the reason for the call while filling the report. */
-function _picker(type, label) {
+function _pickerBody(type) {
   _loadTargets(type);
-  const sel = DM.form._target;
-  if (sel) {
-    return _fld(label, `<div style="border:1px solid #bfdbfe;background:#eff6ff;border-radius:11px;padding:12px">
-      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-        <div style="min-width:0"><div style="font-weight:800;font-size:14px;color:${C.ink}">${esc(sel.target_name || sel.target_code)}</div>
-          <div style="font-size:11.5px;color:${C.mut};margin-top:2px">${esc(sel.city || sel.centre || '')} · ${esc(sel.target_code)}</div></div>
-        <a onclick="dmClearTarget()" style="cursor:pointer;color:#1d4ed8;font-size:12px;text-decoration:underline;flex:none">change</a>
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px">
-        ${Number(sel.outstanding) > 0 ? _chip('Dues ' + _dmINR(sel.outstanding), Number(sel.outstanding) > 100000 ? 'bad' : 'warn') : ''}
-        ${sel.avg_copies ? _chip(_dmN(sel.avg_copies) + ' cp/day', 'info') : ''}
-        ${sel.last_visit ? _chip('Last ' + String(sel.last_visit).slice(0, 10), 'mute') : _chip('Never visited', 'warn')}
-      </div></div>`, true);
-  }
-  const rows = (DM.targets || []).slice(0, 25).map(r => `<div onclick='dmPickTarget(${JSON.stringify(r).replace(/'/g, "&#39;")})'
-      style="border:1px solid ${C.line};border-radius:10px;padding:11px;margin-bottom:7px;cursor:pointer;background:${C.card}">
-      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-        <div style="min-width:0"><div style="font-weight:700;font-size:13.5px;color:${C.ink};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.target_name || r.target_code)}</div>
-          <div style="font-size:11px;color:${C.mut}">${esc(r.city || r.centre || '')}</div></div>
-        ${Number(r.outstanding) > 0 ? _chip(_dmINR(r.outstanding), Number(r.outstanding) > 100000 ? 'bad' : 'warn') : ''}
-      </div></div>`).join('');
-  return _fld(label, `<input value="${esc(DM.search)}" oninput="dmSearch(this.value)" placeholder="Type 3 letters of the name…" style="${_IN};margin-bottom:9px">
-    <div style="max-height:290px;overflow:auto">${DM.targets ? (rows || `<div style="color:#94a3b8;font-size:13px;padding:10px">No match.</div>`) : `<div style="color:#94a3b8;font-size:13px;padding:10px">Loading…</div>`}</div>`, true);
+  const rows = (DM.targets || []).slice(0, 40).map(r => `<div onclick='dmPick(${JSON.stringify(r).replace(/'/g, "&#39;")})'
+    style="padding:9px 2px;border-bottom:1px solid ${K.line};cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:center">
+    <div style="min-width:0"><div style="font-size:13.5px;color:${K.ink};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.target_name || r.target_code)}</div>
+      <div style="font-size:11px;color:${K.mut}">${esc(r.city || r.centre || '')}</div></div>
+    ${Number(r.outstanding) > 0 ? _tag(_INR(r.outstanding), Number(r.outstanding) > 100000 ? 'bad' : 'warn') : ''}</div>`).join('');
+  return `<input value="${esc(DM.search)}" oninput="dmSearch(this.value)" placeholder="Type 3 letters…" style="${IN};margin-bottom:9px" autofocus>
+    ${DM.targets ? (rows || `<div style="font-size:12.5px;color:${K.mut};padding:10px 0">No match.</div>`) : `<div style="font-size:12.5px;color:${K.mut};padding:10px 0">Loading…</div>`}`;
 }
-window.dmPickTarget = r => { DM.form._target = r; DM.search = ''; render(); };
-window.dmClearTarget = () => { DM.form._target = null; DM.targets = null; DM.targetsKey = ''; render(); };
+window.dmPick = r => { DM.form._target = r; DM.search = ''; DM.flyout = null; render(); };
 
-// ── FORM: Plan Tour ─────────────────────────────────────────────────────────
+function _pickField(type, label) {
+  const s = DM.form._target;
+  const title = type === 'hawker' ? 'Select hawker' : 'Select agency';
+  return _f(label, s
+    ? `<div onclick="dmFly({title:'${title}',body:()=>_pickerBody('${type}')})" style="${IN};cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:center">
+        <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.target_name || s.target_code)}</span>
+        ${Number(s.outstanding) > 0 ? _tag(_INR(s.outstanding), 'warn') : ''}</div>`
+    : `<div onclick="dmFly({title:'${title}',body:()=>_pickerBody('${type}')})" style="${IN};cursor:pointer;color:#9aa5b4">Tap to choose…</div>`, true);
+}
+
+// ── forms ───────────────────────────────────────────────────────────────────
 const PURPOSES = ['Recovery – Outstanding Amount', 'Growth Discussion', 'New Agreement / Contract',
-  'Reader Feedback Collection', 'Scheme & Offer Promotion', 'Supply Complaint Redressal',
-  'Relationship Visit', 'Competitor Analysis Visit', 'Other'];
-const PAPERS = ['Dainik Bhaskar', 'Times of India', 'Navbharat Times', 'Amar Ujala', 'Hindustan Times'];
+  'Agency Change', 'Reader Feedback Collection', 'Scheme & Offer Promotion',
+  'Supply Complaint Redressal', 'Relationship Visit', 'Competitor Analysis Visit', 'Other'];
+const PAPERS = ['Dainik Bhaskar', 'Amar Ujala', 'Hindustan', 'Times of India', 'Navbharat Times', 'Local Newspaper'];
 
-function _formPlanTour() {
-  return _card(_sec('Tour planning') +
-    _fld('Date of tour', _inp('visit_date', '', 'date'), true) +
-    _picker('agent', 'Select agency') +
-    _fld('Tentative visit time', _inp('check_in', '', 'time'), false, 'Can be changed during the actual visit') +
-    _fld('Visit purpose', _sel('purpose', PURPOSES, '-- Select purpose --'), true) +
-    _fld('Purpose description', _txt('remarks', 'What do you intend to achieve on this visit?')) +
-
-    _sec('Competitor supply in agent area') +
-    `<div style="border:1px solid ${C.line};border-radius:11px;overflow:hidden;margin-bottom:13px">
-      ${PAPERS.map((p, i) => `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;${i ? 'border-top:1px solid ' + C.line : ''}">
-        <span style="flex:1;font-size:13.5px;color:${C.ink}">${p}</span>
-        <input type="number" inputmode="numeric" placeholder="copies" value="${esc((DM.extra.comp || {})[p] || '')}"
-          oninput="dmComp('${_dmQ(p)}',this.value)" style="width:96px;padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13.5px;text-align:right;box-sizing:border-box">
-      </div>`).join('')}
-    </div>` +
-
+function _fPlanTour() {
+  return _sec('Tour planning') +
+    _row(_f('Date', _in('visit_date', '', 'date'), true), _f('Time', _in('check_in', '', 'time'))) +
+    _pickField('agent', 'Agency') +
+    _f('Purpose', _sel('purpose', PURPOSES, '-- Select purpose --'), true) +
+    _f('What do you intend to achieve?', _txt('remarks', '', 2)) +
+    _sec('Competitor supply in area') +
+    _f('Publications carried', _multi('comp_papers', PAPERS, 'Add publication…')) +
+    ((DM.extra.comp_papers || []).length ? (DM.extra.comp_papers || []).map(p =>
+      _f(p + ' — copies', `<input value="${esc((DM.extra.comp || {})[p] || '')}" type="number" inputmode="numeric"
+        oninput="dmComp('${_Q(p)}',this.value)" placeholder="0" style="${IN}">`)).join('') : '') +
     _sec('Growth target') +
-    _fld('Target copies to add', _inp('copies_committed', 'e.g. 250', 'number')) +
-    _fld('Expected start date', _inp('growth_start', '', 'date')) +
-    _btn(DM.busy ? 'Submitting…' : '📤 Submit for approval', "dmSubmit('plan_tour')", 'pri', DM.busy ? 'disabled' : ''));
+    _row(_f('Copies to add', _in('copies_committed', '0', 'number')), _f('Start date', _in('growth_start', '', 'date'))) +
+    _btn(DM.busy ? 'Submitting…' : 'Submit for approval', "dmSubmit('plan_tour')", 'pri', DM.busy ? 'disabled' : '');
 }
-window.dmComp = (paper, v) => { DM.extra.comp = DM.extra.comp || {}; DM.extra.comp[paper] = v; };
+window.dmComp = (p, v) => { DM.extra.comp = DM.extra.comp || {}; DM.extra.comp[p] = v; };
 
-// ── FORM: Agency Visit report ───────────────────────────────────────────────
-function _formAgencyVisit() {
-  const sel = DM.form._target || {};
-  return _card(
-    _callBar(sel.mobile) +
-    _sec('Visit details') +
-    _picker('agent', 'Agency') +
-    (DM.callMode ? '' : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
-      ${_fld('Check-in time', _inp('check_in', '', 'time'))}
-      ${_fld('Check-out time', _inp('check_out', '', 'time'))}</div>`) +
-
-    _sec('Collection details') +
-    _fld('Payment mode', _chips('pay_mode', ['Cash', 'Cheque', 'NEFT / RTGS', 'Net Banking', 'Agent App'])) +
-    _fld('Payment type', _chips('pay_type', ['Full Payment', 'Partial Payment'])) +
-    _fld('Amount collected (₹)', _inp('amount_collected', '0', 'number')) +
-    _fld('Receipt number', _inp('receipt_no', 'If a receipt was issued')) +
-
+function _fAgencyVisit() {
+  const fromPlan = DM.form._fromPlan;
+  return (fromPlan ? `<div style="font-size:11.5px;color:#0369a1;background:#e6f2fb;border-radius:8px;padding:8px 10px;margin-bottom:11px">
+      From your approved plan${DM.form.purpose ? ' · ' + esc(DM.form.purpose) : ''}</div>` : '') +
+    _sec('Visit') +
+    _pickField('agent', 'Agency') +
+    _row(_f('Check-in', _in('check_in', '', 'time')), _f('Check-out', _in('check_out', '', 'time'))) +
+    _f('Purpose', _sel('purpose', PURPOSES, '-- Select purpose --')) +
+    _sec('Collection') +
+    _row(_f('Mode', _sel('pay_mode', ['Cash', 'Cheque', 'NEFT / RTGS', 'Net Banking', 'Agent App'], 'Mode', true)),
+         _f('Type', _sel('pay_type', ['Full Payment', 'Partial Payment'], 'Type', true))) +
+    _row(_f('Amount (₹)', _in('amount_collected', '0', 'number')), _f('Receipt no.', _in('receipt_no', ''))) +
     _sec('Growth commitment') +
-    _fld('New copies committed', _inp('copies_committed', '0', 'number')) +
-    _fld('Growth start date', _inp('growth_start', '', 'date')) +
-    _fld('Agent will clear dues by', _inp('dues_clear_by', '', 'date')) +
-
-    _sec('Meeting remarks') +
-    _fld('Notes / remarks', _txt('remarks', 'Type in English or Hindi — both accepted', 4)) +
-    _fld('Outcome', _sel('outcome', ['Payment collected', 'Promise to pay', 'No payment',
-      'Copies increased', 'Complaint resolved', 'Complaint pending', 'Growth opportunity identified',
-      'Customer unavailable', 'Shop closed', 'Other'], '-- What happened --'), true) +
-
-    (DM.callMode ? '' : _sec('Selfie with agent') + _photoBlock('Tap to take a selfie with the agent', 'Required before submitting a field report')) +
-    _geoNote() +
-    _btn(DM.busy ? 'Submitting…' : (DM.callMode ? '📞 Submit call report' : 'Submit report 📤'),
-      "dmSubmit('agency_visit')", DM.callMode ? 'pri' : 'ok', DM.busy ? 'disabled' : ''));
+    _f('New copies committed', _in('copies_committed', '0', 'number')) +
+    _row(_f('Growth start', _in('growth_start', '', 'date')), _f('Dues clear by', _in('dues_clear_by', '', 'date'))) +
+    _sec('Outcome') +
+    _f('What happened', _sel('outcome', ['Payment collected', 'Promise to pay', 'No payment', 'Copies increased',
+      'Complaint resolved', 'Complaint pending', 'Growth opportunity identified', 'Customer unavailable',
+      'Shop closed', 'Other'], '-- Select --'), true) +
+    _f('Remarks', _txt('remarks', 'English or Hindi', 3)) +
+    _sec('Selfie with agent') + _photo('Take selfie', 'Required for a field visit') + _geoLine() +
+    _btn(DM.busy ? 'Submitting…' : 'Submit report', "dmSubmit('agency_visit')", 'ok', DM.busy ? 'disabled' : '');
 }
 
-function _photoBlock(label, sub) {
-  if (DM.photo) return `<div style="position:relative;margin-bottom:13px">
-    <img src="${DM.photo.dataUrl}" style="width:100%;border-radius:12px;display:block">
-    <button onclick="dmClearPhoto()" style="position:absolute;top:8px;right:8px;border:none;background:rgba(15,23,42,.75);color:#fff;border-radius:8px;padding:6px 11px;font-size:12px;cursor:pointer">Retake</button></div>`;
-  return `<label style="display:block;border:1.5px dashed #cbd5e1;border-radius:12px;padding:20px;text-align:center;cursor:pointer;margin-bottom:13px">
-    <div style="font-size:26px;margin-bottom:5px">📷</div>
-    <div style="font-size:13.5px;font-weight:700;color:${C.ink}">${label}</div>
-    <div style="font-size:11.5px;color:${C.mut};margin-top:3px">${sub}</div>
+/* ── Calling — its own form, deliberately not a mode inside a visit ──────────
+   Mixing the two invited a field report to be filed from a desk. Here the record
+   is a call from the first field: no geofence, no selfie, counted separately. */
+function _fCalling() {
+  const s = DM.form._target || {};
+  const tel = String(s.mobile || DM.extra.mobile || '').replace(/\D/g, '').slice(-10);
+  return _sec('Who did you call?') +
+    _f('Contact type', _sel('call_type', [['agent', 'Agency'], ['hawker', 'Hawker'], ['reader', 'Reader / other']], 'Select', true)) +
+    (DM.extra.call_type === 'reader'
+      ? _f('Name', _in('target_name', 'Reader / contact name'), true) +
+        _f('Mobile', _xin('mobile', '10-digit mobile', 'tel'))
+      : DM.extra.call_type ? _pickField(DM.extra.call_type, DM.extra.call_type === 'hawker' ? 'Hawker' : 'Agency') : '') +
+    (tel.length === 10 ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:2px 0 12px">
+        <a href="tel:+91${tel}" style="text-decoration:none;text-align:center;background:#15803d;color:#fff;border-radius:9px;padding:10px;font-size:13.5px">Dial ${tel}</a>
+        <a href="https://wa.me/91${tel}" target="_blank" rel="noopener" style="text-decoration:none;text-align:center;background:#fff;border:1px solid #d7dde5;color:#334155;border-radius:9px;padding:10px;font-size:13.5px">WhatsApp</a>
+      </div>` : (DM.extra.call_type && DM.extra.call_type !== 'reader' && DM.form._target
+        ? `<div style="font-size:11.5px;color:#b45309;margin-bottom:11px">No mobile on record — dial from your own list.</div>` : '')) +
+    _sec('Call report') +
+    _row(_f('Date', _in('visit_date', '', 'date')), _f('Time', _in('check_in', '', 'time'))) +
+    _f('Purpose', _sel('purpose', PURPOSES, '-- Select purpose --'), true) +
+    _f('Outcome', _sel('outcome', ['Payment collected', 'Promise to pay', 'No payment', 'Copies increased',
+      'Complaint resolved', 'Complaint pending', 'Not reachable', 'Will call back', 'Other'], '-- Select --'), true) +
+    _row(_f('Amount promised (₹)', _in('amount_collected', '0', 'number')), _f('Follow-up date', _in('next_followup_date', '', 'date'))) +
+    _f('Discussion notes', _txt('remarks', 'What was said and agreed', 3), true) +
+    `<div style="font-size:11px;color:${K.mut};margin-bottom:11px">Recorded as a phone call — no location or selfie is captured, and it is counted separately from field visits.</div>` +
+    _btn(DM.busy ? 'Submitting…' : 'Submit call report', "dmSubmit('calling')", 'pri', DM.busy ? 'disabled' : '');
+}
+
+// ── Agent Feedback — 23 questions, asked by visit type ───────────────────────
+/* The team's own note: not all 23 every visit, or nobody fills it. Each set is the
+   subset that matters for that kind of visit, so a basic call takes 2-3 minutes. */
+const FB_SETS = { basic: 'Basic visit', recovery: 'Recovery visit', growth: 'Growth visit',
+                  problem: 'Problem / service', full: 'Quarterly — all 23' };
+const FB = [
+  { id: 'q1',  s: 'Agent status',  q: 'आज एजेंट से मुलाकात हुई?', t: 'sel', o: ['हाँ', 'नहीं'], sets: ['basic', 'recovery', 'growth', 'problem', 'full'] },
+  { id: 'q2',  s: 'Agent status',  q: 'एजेंट हमारी सेवा से कितना संतुष्ट है?', t: 'star', sets: ['basic', 'problem', 'full'] },
+  { id: 'q3',  s: 'Agent status',  q: 'पिछले महीने की तुलना में व्यवसाय', t: 'sel', o: ['बढ़ा', 'समान', 'घटा'], sets: ['basic', 'growth', 'full'] },
+  { id: 'q4',  s: 'Agent status',  q: 'सबसे बड़ी समस्या', t: 'multi', o: ['Supply', 'Payment', 'Competition', 'Reader loss', 'Margin', 'Service', 'अन्य'], sets: ['basic', 'problem', 'full'] },
+  { id: 'q5',  s: 'Supply',        q: 'क्या रोज़ाना समय पर पर्याप्त कॉपियाँ मिल रही हैं?', t: 'sel', o: ['हाँ, हमेशा', 'कभी-कभी समस्या', 'अक्सर समस्या', 'बहुत अधिक समस्या'], sets: ['basic', 'problem', 'full'] },
+  { id: 'q6',  s: 'Supply',        q: 'Supply में किस प्रकार की समस्या?', t: 'multi', o: ['Late supply', 'कम copies', 'Extra copies', 'Damaged copies', 'गलत edition', 'कोई समस्या नहीं', 'अन्य'], sets: ['basic', 'problem', 'full'] },
+  { id: 'q6b', s: 'Supply',        q: 'सप्लाई टैक्सी कितने बजे पहुँचती है?', t: 'time', sets: ['basic', 'problem', 'full'] },
+  { id: 'q7',  s: 'Supply',        q: 'वर्तमान supply quantity', t: 'sel', o: ['पर्याप्त', 'कम', 'अधिक'], sets: ['basic', 'growth', 'full'] },
+  { id: 'q8',  s: 'Supply',        q: 'अगले महीने copies बढ़ाने की संभावना?', t: 'sel', o: ['हाँ', 'नहीं', 'संभव है'], sets: ['growth', 'full'] },
+  { id: 'q8a', s: 'Supply',        q: 'संभावित अतिरिक्त copies', t: 'num', sets: ['growth', 'full'], when: r => r.q8 === 'हाँ' || r.q8 === 'संभव है' },
+  { id: 'q9',  s: 'Recovery',      q: 'Outstanding पर एजेंट की स्थिति', t: 'sel', o: ['आज भुगतान किया', 'आंशिक भुगतान किया', 'निर्धारित तारीख को करेगा', 'Payment pending है', 'भुगतान में समस्या है', 'कोई commitment नहीं'], sets: ['recovery', 'full'] },
+  { id: 'q10', s: 'Recovery',      q: 'अगली payment की तारीख', t: 'date', sets: ['recovery', 'full'] },
+  { id: 'q11', s: 'Recovery',      q: 'संभावित collection amount (₹)', t: 'num', sets: ['recovery', 'full'] },
+  { id: 'q12', s: 'Recovery',      q: 'Payment delay का मुख्य कारण', t: 'sel', o: ['Cash flow problem', 'Market recovery pending', 'Customer payment pending', 'Business down', 'Dispute', 'अन्य'], sets: ['recovery', 'full'] },
+  { id: 'q13', s: 'Competition',   q: 'क्या competitor की copies भी बाँटता है?', t: 'sel', o: ['हाँ', 'नहीं'], sets: ['basic', 'growth', 'full'] },
+  { id: 'q14', s: 'Competition',   q: 'कौन-कौन से competitor?', t: 'multi', o: PAPERS.concat(['अन्य']), sets: ['basic', 'growth', 'full'], when: r => r.q13 === 'हाँ' },
+  { id: 'q15', s: 'Competition',   q: 'Competitor की कौन-सी बात बेहतर लगती है?', t: 'multi', o: ['Price', 'Commission/Margin', 'Supply', 'Scheme', 'Content', 'Service', 'Promotional support', 'अन्य'], sets: ['growth', 'full'], when: r => r.q13 === 'हाँ' },
+  { id: 'q16', s: 'Growth',        q: 'नए readers जोड़ने की संभावना', t: 'sel', o: ['बहुत अधिक', 'अधिक', 'सामान्य', 'कम', 'नहीं'], sets: ['growth', 'full'] },
+  { id: 'q17', s: 'Growth',        q: 'कोई नया area जहाँ reach बढ़ सके?', t: 'sel', o: ['हाँ', 'नहीं'], sets: ['growth', 'full'] },
+  { id: 'q17a', s: 'Growth',       q: 'Area का नाम', t: 'text', sets: ['growth', 'full'], when: r => r.q17 === 'हाँ' },
+  { id: 'q17b', s: 'Growth',       q: 'अनुमानित households', t: 'num', sets: ['growth', 'full'], when: r => r.q17 === 'हाँ' },
+  { id: 'q18', s: 'Growth',        q: 'क्या agent additional copies बढ़ा सकता है?', t: 'sel', o: ['हाँ', 'नहीं', 'Discussion required'], sets: ['growth', 'full'] },
+  { id: 'q19', s: 'Growth',        q: 'संभावित copy growth', t: 'num', sets: ['growth', 'full'] },
+  { id: 'q20', s: 'Service',       q: 'हमारी field service कैसी लगती है?', t: 'star', sets: ['basic', 'problem', 'full'] },
+  { id: 'q21', s: 'Service',       q: 'Visit frequency पर्याप्त है?', t: 'sel', o: ['बहुत अच्छी', 'पर्याप्त', 'कम', 'बहुत कम'], sets: ['problem', 'full'] },
+  { id: 'q22', s: 'Service',       q: 'किस प्रकार की support चाहिए?', t: 'multi', o: ['Promotional material', 'Scheme', 'Supply improvement', 'Recovery support', 'Reader acquisition', 'Area development', 'कोई support नहीं', 'अन्य'], sets: ['problem', 'growth', 'full'] },
+  { id: 'q23', s: 'Open feedback', q: 'एजेंट की मुख्य समस्या / सुझाव', t: 'long', sets: ['basic', 'recovery', 'growth', 'problem', 'full'] },
+];
+
+/* Health score, as the team specified: 25 payment, 25 growth, 20 supply, 20
+   relationship, 10 competition risk. Only answered parameters count, and the score
+   says how much of it was answered — a 3-question visit must not read as a verdict. */
+function _health(r) {
+  const P = [];
+  const pay = { 'आज भुगतान किया': 25, 'आंशिक भुगतान किया': 18, 'निर्धारित तारीख को करेगा': 14,
+                'Payment pending है': 8, 'भुगतान में समस्या है': 4, 'कोई commitment नहीं': 0 }[r.q9];
+  if (pay != null) P.push(['Payment / recovery', pay, 25]);
+  const gro = { 'बहुत अधिक': 25, 'अधिक': 20, 'सामान्य': 13, 'कम': 6, 'नहीं': 0 }[r.q16];
+  if (gro != null) P.push(['Copy growth', gro, 25]);
+  const sup = { 'हाँ, हमेशा': 20, 'कभी-कभी समस्या': 14, 'अक्सर समस्या': 7, 'बहुत अधिक समस्या': 0 }[r.q5];
+  if (sup != null) P.push(['Supply satisfaction', sup, 20]);
+  if (r.q20) P.push(['Relationship', Math.round((Number(r.q20) / 5) * 20), 20]);
+  if (r.q13) P.push(['Competition risk', r.q13 === 'नहीं' ? 10 : Math.max(0, 10 - ((r.q14 || []).length * 2)), 10]);
+  if (!P.length) return null;
+  const got = P.reduce((s, x) => s + x[1], 0), max = P.reduce((s, x) => s + x[2], 0);
+  const pct = Math.round(got / max * 100);
+  return { pct, got, max, params: P, covered: Math.round(max / 100 * 100),
+           band: pct >= 75 ? ['Healthy', 'good'] : pct >= 55 ? ['Attention required', 'warn']
+                 : pct >= 35 ? ['At risk', 'warn'] : ['Critical', 'bad'] };
+}
+
+function _fFeedback() {
+  const set = DM.fbSet, r = DM.extra;
+  const qs = FB.filter(q => q.sets.includes(set)).filter(q => !q.when || q.when(r));
+  let lastSec = '';
+  const body = qs.map(q => {
+    const head = q.s !== lastSec ? (lastSec = q.s, _sec(q.s)) : '';
+    const v = r[q.id];
+    let ctl;
+    if (q.t === 'sel')       ctl = _sel(q.id, q.o, '-- चुनें --', true);
+    else if (q.t === 'multi')ctl = _multi(q.id, q.o, 'जोड़ें…');
+    else if (q.t === 'star') ctl = `<div style="display:flex;gap:5px">${[1, 2, 3, 4, 5].map(n =>
+        `<button type="button" onclick="dmSetX('${q.id}',${n});render()" style="border:none;background:none;font-size:23px;cursor:pointer;padding:2px;line-height:1;filter:${Number(v) >= n ? 'none' : 'grayscale(1) opacity(.35)'}">⭐</button>`).join('')}</div>`;
+    else if (q.t === 'long') ctl = `<textarea rows="3" placeholder="बोलकर या लिखकर भरें" oninput="dmSetX('${q.id}',this.value)" style="${IN}">${esc(v || '')}</textarea>`;
+    else ctl = `<input value="${esc(v || '')}" type="${q.t === 'num' ? 'number' : q.t === 'date' ? 'date' : q.t === 'time' ? 'time' : 'text'}"
+        ${q.t === 'num' ? 'inputmode="numeric"' : ''} oninput="dmSetX('${q.id}',this.value)" style="${IN}">`;
+    return head + _f(q.q, ctl);
+  }).join('');
+
+  const h = _health(r);
+  return _f('Visit type', _sel('fb_set', Object.entries(FB_SETS).map(([k, v]) => [k, v]), null, true).replace(
+      `onchange="dmSetX('fb_set',this.value);render()"`, `onchange="DM.fbSet=this.value;render()"`)
+      .replace('<option value="">null</option>', '')
+      .replace(/selected/g, '') .replace(`value="${set}"`, `value="${set}" selected`),
+    false, `${qs.length} questions · about ${Math.max(2, Math.round(qs.length / 4))} minutes`) +
+    _pickField('agent', 'Agency') + body +
+    (h ? `<div style="margin:14px 0;padding:11px;background:${K.s2};border-radius:9px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px">
+        <span style="font-size:12px;color:${K.mut}">Agent health score</span>
+        <span style="font-size:17px;color:${K.ink}">${h.pct}<span style="font-size:12px;color:${K.mut}">/100</span> ${_tag(h.band[0], h.band[1])}</span></div>
+      ${h.params.map(([n, g, m]) => `<div style="display:flex;justify-content:space-between;font-size:11.5px;color:${K.mut};padding:2px 0">
+        <span>${n}</span><span>${g}/${m}</span></div>`).join('')}
+      <div style="font-size:10.5px;color:#9aa5b4;margin-top:6px">Scored on the ${h.params.length} parameters answered in this set.</div>
+    </div>` : '') +
+    _btn(DM.busy ? 'Saving…' : 'Submit feedback', "dmSubmit('agent_feedback')", 'ok', DM.busy ? 'disabled' : '');
+}
+
+// ── remaining forms ─────────────────────────────────────────────────────────
+async function _loadCentres() { if (DM.centres) return;
+  try { const r = await _api('/centres'); DM.centres = r.rows || []; } catch (_) { DM.centres = []; }
+  if (_dmOn()) render(); }
+
+function _fCentreAttn() {
+  _loadCentres(); const g = DM.geo;
+  return _sec('Cash sale centre') +
+    _f('Centre', DM.centres ? _sel('centre', (DM.centres || []).map(c => [c.depot_code, c.depot_name || c.depot_code]), '-- Select centre --')
+      : `<div style="font-size:12.5px;color:${K.mut};padding:8px 0">Loading…</div>`, true,
+      'GPS is checked against the registered centre — you must be within 50 m.') +
+    `<div style="font-size:12.5px;color:${g ? (g.accuracy <= 30 ? '#15803d' : '#b45309') : K.mut};margin-bottom:10px">
+      ${g ? `GPS locked · ±${g.accuracy} m` : 'Location not read yet'}
+      <a onclick="dmRefreshGeo()" style="cursor:pointer;color:#1e3a8a;margin-left:7px;text-decoration:underline">read</a></div>` +
+    _f('Remarks', _txt('remarks', '', 2)) +
+    _btn(DM.busy ? 'Marking…' : 'Mark attendance', "dmSubmit('center_attn')", 'ok', DM.busy ? 'disabled' : '');
+}
+
+function _fHawkerVisit() {
+  return _sec('Hawker visit') + _pickField('hawker', 'Hawker') +
+    _row(_f('Date', _in('visit_date', '', 'date')), _f('Time', _in('check_in', '', 'time'))) +
+    _sec('Outstanding & collection') +
+    _row(_f('Outstanding (₹)', _in('outstanding_amount', '0', 'number')), _f('Collected (₹)', _in('amount_collected', '0', 'number'))) +
+    _f('Mode', _sel('pay_mode', ['Cash', 'UPI', 'Cheque'], 'Mode', true)) +
+    _f('Outcome', _sel('outcome', ['Payment collected', 'Promise to pay', 'No payment', 'Copies increased',
+      'Copies decreased', 'Complaint pending', 'Hawker unavailable', 'Other'], '-- Select --'), true) +
+    _f('Remarks', _txt('remarks', '', 2)) + _photo('Photo with hawker', 'Optional') + _geoLine() +
+    _btn(DM.busy ? 'Submitting…' : 'Submit visit', "dmSubmit('hawker_visit')", 'ok', DM.busy ? 'disabled' : '');
+}
+
+function _fReaderVisit() {
+  return _sec('Reader / lead') +
+    _row(_f('Name', _in('target_name', ''), true), _f('Mobile', _xin('mobile', '10-digit', 'tel'))) +
+    _row(_f('Area / colony', _in('target_extra', ''), true), _f('Gender', _sel('gender', ['Male', 'Female', 'Other'], 'Gender', true))) +
+    _f('Address', _txt('location', '', 2)) +
+    _sec('Newspaper') +
+    _f('Currently reads', _multi('current_paper', PAPERS.concat(['Rajasthan Patrika', 'None / New Reader']), 'Add…')) +
+    _row(_f('Current copies', _xin('current_copies', '0', 'number')), _f('Potential copies', _xin('potential_copies', '0', 'number'))) +
+    _sec('Outcome') +
+    _f('Result', _sel('outcome', [['already', 'Already Patrika reader'], ['converted', 'Converted to Patrika'],
+      ['not_interested', 'Not interested'], ['no_reply', 'No reply'], ['later', 'Will reply later']], '-- Select --', true), true) +
+    _row(_f('Follow-up date', _in('next_followup_date', '', 'date')), _f('', '')) +
+    _f('Notes', _txt('remarks', '', 2)) + _geoLine() +
+    _btn(DM.busy ? 'Submitting…' : 'Submit', "dmSubmit('reader_visit')", 'ok', DM.busy ? 'disabled' : '');
+}
+
+function _fNewArea() {
+  return _sec('New area') +
+    _f('Area / locality', _in('target_name', ''), true) +
+    _row(_f('City', _in('target_extra', '')), _f('District', _xin('district', ''))) +
+    _row(_f('Households', _xin('households', '0', 'number')), _f('Potential copies/day', _xin('potential_copies', '0', 'number'))) +
+    _f('Current penetration', _multi('current_paper', PAPERS.concat(['None']), 'Add…')) +
+    _f('Nearest hawker / centre', _xin('nearest', '')) +
+    _f('Field observations', _txt('remarks', '', 3)) + _photo('Photo of area', 'Optional') + _geoLine() +
+    _btn(DM.busy ? 'Submitting…' : 'Submit', "dmSubmit('new_area')", 'ok', DM.busy ? 'disabled' : '');
+}
+
+function _fOffice() {
+  return _sec('Work') +
+    _f('Work type', _sel('work_type', ['In-Office Meeting with Incharge', 'Team Meeting / Review', 'Report Preparation',
+      'Legal Work / Court Visit', 'Office Visit (Other Branch)', 'Training / Workshop', 'Other Incharge-Assigned Work'], '-- Select --'), true) +
+    _row(_f('Date', _in('visit_date', '', 'date')), _f('Location', _in('location', ''))) +
+    _row(_f('Start', _in('check_in', '', 'time')), _f('End', _in('check_out', '', 'time'))) +
+    _sec('People') +
+    _row(_f('Assigned by', _in('assigned_by', '')), _f('Attendees', _in('attendees', ''))) +
+    _sec('Description') +
+    _f('Subject', _in('subject', ''), true) + _f('Details', _txt('remarks', '', 3), true) +
+    _f('Where', _sel('work_mode', ['In Office', 'At Branch', 'Field', 'Court', 'Home'], 'Where', true)) +
+    _btn(DM.busy ? 'Submitting…' : 'Submit', "dmSubmit('office_work')", 'ok', DM.busy ? 'disabled' : '');
+}
+
+function _photo(l, sub) {
+  if (DM.photo) return `<div style="position:relative;margin-bottom:11px"><img src="${DM.photo.dataUrl}" style="width:100%;border-radius:9px;display:block">
+    <button onclick="dmClearPhoto()" style="position:absolute;top:7px;right:7px;border:none;background:rgba(15,23,42,.7);color:#fff;border-radius:7px;padding:5px 9px;font-size:11.5px;cursor:pointer">Retake</button></div>`;
+  return `<label style="display:flex;gap:10px;align-items:center;border:1px dashed #d7dde5;border-radius:9px;padding:12px;cursor:pointer;margin-bottom:11px">
+    <span style="font-size:20px">📷</span><span style="min-width:0"><span style="display:block;font-size:13px;color:${K.ink}">${l}</span>
+    <span style="display:block;font-size:11px;color:${K.mut}">${sub}</span></span>
     <input type="file" accept="image/*" capture="environment" onchange="dmPhoto(this)" style="display:none"></label>`;
 }
-function _geoNote() {
-  if (DM.callMode) return '';
-  const g = DM.geo;
-  return `<div style="display:flex;gap:10px;align-items:center;background:${C.s2};border-radius:11px;padding:11px;margin-bottom:13px">
-    <span style="font-size:19px">📍</span>
-    <div style="min-width:0"><div style="font-size:12.5px;font-weight:700;color:${C.ink}">${g ? `Location ready · ±${g.accuracy} m` : 'Location will be captured on submit'}</div>
-      <div style="font-size:11px;color:${C.mut}">Lat/long and timestamp are recorded automatically</div></div></div>`;
-}
+function _geoLine() { const g = DM.geo;
+  return `<div style="font-size:11px;color:${K.mut};margin-bottom:11px">📍 ${g ? `Location ready · ±${g.accuracy} m` : 'Location captured on submit'}</div>`; }
 
-// ── FORM: Centre attendance ─────────────────────────────────────────────────
-async function _loadCentres() {
-  if (DM.centres) return;
-  try { const r = await _dmApi('/centres'); DM.centres = r.rows || []; }
-  catch (_) { DM.centres = []; }
+// ── Approvals: approved plans only, opening a pre-filled visit ──────────────
+async function _loadApproved() {
+  if (DM.approved) return;
+  try { const r = await _api(`/tour?date=${DM.planDate || _DAY()}`);
+        DM.approved = (r.rows || []).filter(x => x.status === 'approved' || x.status === 'done'); }
+  catch (_) { DM.approved = []; }
   if (_dmOn()) render();
 }
-function _formCentreAttn() {
-  _loadCentres();
-  const g = DM.geo;
-  return _card(_sec('Cash sale centre') +
-    _fld('Select your centre', DM.centres
-      ? _sel('centre', (DM.centres || []).map(c => [c.depot_code, `${c.depot_name || c.depot_code}${c.has_geo ? '' : ' (location not registered)'}`]), '-- Select centre --')
-      : `<div style="color:#94a3b8;font-size:13px;padding:10px">Loading centres…</div>`, true,
-      'Your GPS is verified against the registered centre location — you must be within 50 m.') +
-    `<div style="background:${C.s2};border-radius:11px;padding:13px;margin-bottom:13px;text-align:center">
-      <div style="font-size:13px;font-weight:700;color:${g ? (g.accuracy <= 30 ? '#15803d' : '#b45309') : C.mut}">
-        ${g ? `📍 GPS locked · ±${g.accuracy} m` : '📍 Tap below to read your location'}</div>
-      <div style="margin-top:9px">${_btn('Read my location', 'dmRefreshGeo()', 'ghost')}</div></div>` +
-    _fld('Remarks', _txt('remarks', 'Anything to note about today', 2)) +
-    _btn(DM.busy ? 'Marking…' : '✓ Mark attendance', "dmSubmit('center_attn')", 'ok', DM.busy ? 'disabled' : ''));
+function _approvals() {
+  _loadApproved();
+  const rows = DM.approved || [];
+  return _f('Date', `<input type="date" value="${DM.planDate || _DAY()}" onchange="DM.planDate=this.value;DM.approved=null;render()" style="${IN}">`) +
+    (!DM.approved ? `<div style="font-size:12.5px;color:${K.mut};padding:10px 0">Loading…</div>`
+     : rows.length ? rows.map(r => `<div style="padding:11px 0;border-bottom:1px solid ${K.line};display:flex;justify-content:space-between;gap:9px;align-items:center">
+        <div style="min-width:0"><div style="font-size:13.5px;color:${K.ink}">${esc(r.target_name || r.target_code)}</div>
+          <div style="font-size:11px;color:${K.mut}">${esc(r.purpose || '')}${r.visit_time ? ' · ' + esc(r.visit_time) : ''}</div></div>
+        ${r.status === 'done' ? _tag('Visited', 'mute')
+          : `<button onclick="dmStartFromPlan(${r.id})" style="flex:none;background:#1e3a8a;color:#fff;border:none;border-radius:8px;padding:8px 13px;font-size:12.5px;cursor:pointer">Start visit</button>`}
+      </div>`).join('')
+     : `<div style="font-size:12.5px;color:${K.mut};padding:14px 0">No approved plans for this date. A plan appears here once your incharge approves it.</div>`);
+}
+/* Opening from an approved plan carries the agency, purpose and time across, so the
+   executive never picks the same agency twice. */
+window.dmStartFromPlan = async id => {
+  const p = (DM.approved || []).find(x => Number(x.id) === Number(id));
+  if (!p) return;
+  DM.form = {}; DM.extra = {}; DM.photo = null; DM.err = null;
+  DM.form._target = { unit_code: p.unit_code, target_code: p.target_code, target_name: p.target_name,
+                      outstanding: p.outstanding_snap, city: p.target_extra };
+  DM.form._fromPlan = true; DM.form.plan_id = p.id;
+  DM.form.purpose = p.purpose || ''; DM.form.visit_date = _DAY();
+  DM.form.check_in = p.visit_time || _NOW();
+  DM.mode = 'agency_visit'; render();
+};
+
+// ── DCR dashboard (not the management one) ──────────────────────────────────
+async function _loadDay() { try { DM.day = await _api('/day-close'); } catch (e) { DM.err = e.message; } }
+function _dash() {
+  const d = DM.day;
+  if (!d) { _loadDay().then(() => _dmOn() && render()); return `<div style="font-size:12.5px;color:${K.mut};padding:12px 0">Loading…</div>`; }
+  const calls = (d.visits || []).filter(v => v.visit_mode === 'call').length;
+  const line = (k, v) => `<div style="display:flex;justify-content:space-between;font-size:13px;padding:7px 0;border-bottom:1px solid ${K.line}">
+    <span style="color:${K.mut}">${k}</span><span style="color:${K.ink}">${v}</span></div>`;
+  return _sec('Today') + line('Entries', d.total_visits) + line('Field visits', d.total_visits - calls) +
+    line('Phone calls', calls) + line('At location', d.valid_visits) + line('Outside geofence', d.invalid_visits) +
+    line('Distance', d.total_km + ' km') + line('Collected', _INR(d.collection)) +
+    `<div style="font-size:10.5px;color:#9aa5b4;margin-top:7px">${esc(d.km_method || '')}</div>` +
+    ((d.visits || []).length ? _sec('Entries') + d.visits.map(v =>
+      `<div style="display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid ${K.line}">
+        <div style="min-width:0"><div style="font-size:13px;color:${K.ink}">${esc(v.target_name || v.target_type)}</div>
+          <div style="font-size:11px;color:${K.mut}">${esc(v.purpose || '')}${v.outcome ? ' · ' + esc(v.outcome) : ''}</div></div>
+        <div style="flex:none;display:flex;gap:5px;align-items:center">
+          ${v.visit_mode === 'call' ? _tag('call', 'info') : ''}
+          ${Number(v.amount_collected) > 0 ? _tag(_INR(v.amount_collected), 'good') : ''}</div></div>`).join('') : '');
 }
 
-// ── FORM: Hawker visit ──────────────────────────────────────────────────────
-function _formHawkerVisit() {
-  const sel = DM.form._target || {};
-  return _card(
-    _callBar(sel.mobile) +
-    _sec('Hawker visit details') +
-    _picker('hawker', 'Select hawker') +
-    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
-      ${_fld('Visit date', _inp('visit_date', '', 'date'))}
-      ${_fld('Visit time', _inp('check_in', '', 'time'))}</div>` +
-    _sec('Outstanding & collection') +
-    _fld('Outstanding amount (₹)', _inp('outstanding_amount', '0', 'number')) +
-    _fld('Collected amount (₹)', _inp('amount_collected', '0', 'number')) +
-    _fld('Payment mode', _chips('pay_mode', ['Cash', 'UPI', 'Cheque'])) +
-    _fld('Outcome', _sel('outcome', ['Payment collected', 'Promise to pay', 'No payment',
-      'Copies increased', 'Copies decreased', 'Complaint pending', 'Hawker unavailable', 'Other'], '-- What happened --'), true) +
-    _fld('Remarks / notes', _txt('remarks', 'What was discussed')) +
-    (DM.callMode ? '' : _photoBlock('Photo with the hawker', 'Optional but recommended')) +
-    _geoNote() +
-    _btn(DM.busy ? 'Submitting…' : (DM.callMode ? '📞 Submit call report' : 'Submit visit 📤'),
-      "dmSubmit('hawker_visit')", DM.callMode ? 'pri' : 'ok', DM.busy ? 'disabled' : ''));
-}
-
-// ── FORM: Reader visit ──────────────────────────────────────────────────────
-function _formReaderVisit() {
-  return _card(
-    _callBar(DM.extra.mobile) +
-    _sec('Reader / lead information') +
-    _fld('Area / colony / locality', _inp('target_extra', 'e.g. Vaishali Nagar'), true) +
-    _fld('Full name', _inp('target_name', 'Reader’s name'), true) +
-    _fld('Gender', _chips('gender', ['Male', 'Female', 'Other'])) +
-    _fld('Address', _txt('location', 'House / street / landmark', 2)) +
-    _fld('Mobile number', `<input value="${esc(DM.extra.mobile || '')}" oninput="dmSetX('mobile',this.value)" type="tel" inputmode="numeric" placeholder="10-digit mobile" style="${_IN}">`) +
-    _fld('Email (optional)', `<input value="${esc(DM.extra.email || '')}" oninput="dmSetX('email',this.value)" type="email" placeholder="name@example.com" style="${_IN}">`) +
-
-    _sec('Current newspaper') +
-    _fld('Which paper do they read now?', _chips('current_paper', PAPERS.concat(['Rajasthan Patrika', 'None / New Reader']), true)) +
-    _fld('Copies per day', `<input value="${esc(DM.extra.current_copies || '')}" oninput="dmSetX('current_copies',this.value)" type="number" inputmode="numeric" placeholder="0" style="${_IN}">`) +
-
-    _sec('Outcome') +
-    _fld('Visit outcome', _chips('outcome', [['already', '✅ Already Patrika reader'], ['converted', '🔄 Converted to Patrika'],
-      ['not_interested', '❌ Not interested'], ['no_reply', '📵 No reply'], ['later', '⏰ Will reply later']]), true) +
-    _fld('Potential copies', `<input value="${esc(DM.extra.potential_copies || '')}" oninput="dmSetX('potential_copies',this.value)" type="number" inputmode="numeric" placeholder="0" style="${_IN}">`) +
-    _fld('Additional notes', _txt('remarks', 'Anything worth following up')) +
-    _fld('Follow-up date', _inp('next_followup_date', '', 'date')) +
-    _geoNote() +
-    _btn(DM.busy ? 'Submitting…' : (DM.callMode ? '📞 Submit call report' : 'Submit & mark location 📍'),
-      "dmSubmit('reader_visit')", DM.callMode ? 'pri' : 'ok', DM.busy ? 'disabled' : ''));
-}
-
-// ── FORM: New area ──────────────────────────────────────────────────────────
-function _formNewArea() {
-  return _card(_sec('New area development') +
-    _fld('Area / locality name', _inp('target_name', 'e.g. Mansarovar Extension'), true) +
-    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
-      ${_fld('City / town', _inp('target_extra', 'City'))}
-      ${_fld('District', `<input value="${esc(DM.extra.district || '')}" oninput="dmSetX('district',this.value)" placeholder="District" style="${_IN}">`)}</div>` +
-    _fld('Estimated households', `<input value="${esc(DM.extra.households || '')}" oninput="dmSetX('households',this.value)" type="number" inputmode="numeric" placeholder="e.g. 1200" style="${_IN}">`) +
-    _fld('Current newspaper penetration', _chips('current_paper', PAPERS.concat(['None']), true)) +
-
-    _sec('Growth potential') +
-    _fld('Estimated Patrika potential (copies/day)', `<input value="${esc(DM.extra.potential_copies || '')}" oninput="dmSetX('potential_copies',this.value)" type="number" inputmode="numeric" placeholder="0" style="${_IN}">`) +
-    _fld('Nearest existing hawker / centre', `<input value="${esc(DM.extra.nearest || '')}" oninput="dmSetX('nearest',this.value)" placeholder="Name or code" style="${_IN}">`) +
-    _fld('Working notes / field observations', _txt('remarks', 'What did you see on the ground?', 4)) +
-    (DM.callMode ? '' : _photoBlock('Photo of the area', 'Optional')) +
-    _geoNote() +
-    _btn(DM.busy ? 'Submitting…' : 'Submit report 📍', "dmSubmit('new_area')", 'ok', DM.busy ? 'disabled' : ''));
-}
-
-// ── FORM: Office / other work ───────────────────────────────────────────────
-function _formOffice() {
-  return _card(_sec('Work details') +
-    _fld('Work type', _sel('work_type', ['In-Office Meeting with Incharge', 'Team Meeting / Review',
-      'Report Preparation', 'Legal Work / Court Visit', 'Office Visit (Other Branch)',
-      'Training / Workshop', 'Other Incharge-Assigned Work'], '-- Select work type --'), true) +
-    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
-      ${_fld('Date', _inp('visit_date', '', 'date'))}
-      ${_fld('Location', _inp('location', 'Where'))}</div>
-     <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
-      ${_fld('Start time', _inp('check_in', '', 'time'))}
-      ${_fld('End time', _inp('check_out', '', 'time'))}</div>` +
-    _sec('People involved') +
-    _fld('Permitted / assigned by', _inp('assigned_by', 'Name of the incharge')) +
-    _fld('Attendees / others involved', _inp('attendees', 'Comma separated')) +
-    _sec('Work description') +
-    _fld('Subject / topic', _inp('subject', 'One line'), true) +
-    _fld('Detailed description', _txt('remarks', 'What was done, decided or produced', 4), true) +
-    _fld('Where was this work done?', _chips('work_mode', ['In Office', 'At Branch', 'Field', 'Court', 'Home'])) +
-    _btn(DM.busy ? 'Submitting…' : 'Submit 📤', "dmSubmit('office_work')", 'ok', DM.busy ? 'disabled' : ''));
-}
-
-// ── submit ──────────────────────────────────────────────────────────────────
+// ── submit / actions ────────────────────────────────────────────────────────
 window.dmClearPhoto = () => { DM.photo = null; render(); };
-window.dmRefreshGeo = async () => { try { await _dmGeo(true); } catch (_) {} render(); };
-
+window.dmRefreshGeo = async () => { try { await _geo(true); } catch (_) {} render(); };
 window.dmPhoto = async input => {
   const f = input.files && input.files[0]; if (!f) return;
   try {
-    const dataUrl = await new Promise((res, rej) => {
-      const img = new Image(), fr = new FileReader();
-      fr.onload = () => { img.onload = () => {
-        const max = 1280, sc = Math.min(1, max / Math.max(img.width, img.height));
-        const cv = document.createElement('canvas');
-        cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc);
-        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-        res(cv.toDataURL('image/jpeg', 0.72)); }; img.onerror = rej; img.src = fr.result; };
-      fr.onerror = rej; fr.readAsDataURL(f);
-    });
+    const dataUrl = await new Promise((res, rej) => { const img = new Image(), fr = new FileReader();
+      fr.onload = () => { img.onload = () => { const max = 1280, sc = Math.min(1, max / Math.max(img.width, img.height));
+          const cv = document.createElement('canvas'); cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc);
+          cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height); res(cv.toDataURL('image/jpeg', 0.72)); };
+        img.onerror = rej; img.src = fr.result; }; fr.onerror = rej; fr.readAsDataURL(f); });
     DM.photo = { dataUrl }; render();
-    const blob = await (await fetch(dataUrl)).blob();
-    const g = DM.geo || {};
+    const blob = await (await fetch(dataUrl)).blob(); const g = DM.geo || {};
     const r = await fetch(`${api.base}/api/dcr-m/photo?kind=selfie&lat=${g.lat || ''}&lng=${g.lng || ''}`,
       { method: 'POST', headers: { ...api.h(), 'Content-Type': 'image/jpeg' }, body: blob });
     const j = await r.json(); if (!r.ok) throw new Error(j.detail || 'Upload failed');
     DM.photo = { dataUrl, id: j.photo_id };
-    if (j.duplicate_of) toast('⚠ This photo was uploaded before — it has been flagged.');
+    if (j.duplicate_of) toast('This photo was uploaded before — flagged.');
     render();
   } catch (e) { DM.photo = null; DM.err = e.message; render(); }
 };
@@ -515,187 +543,131 @@ window.dmPhoto = async input => {
 window.dmSubmit = async form => {
   DM.err = null;
   const t = DM.form._target || {};
-  // Field visits need a fix; a call does not.
-  let geo = null;
-  if (!DM.callMode) { try { geo = await _dmGeo(true); } catch (_) {} }
+  const isCall = form === 'calling';
+  let geo = null; if (!isCall) { try { geo = await _geo(true); } catch (_) {} }
 
-  if (form === 'agency_visit' && !DM.callMode && !DM.photo) {
-    DM.err = 'A selfie with the agent is required for a field visit. Switch to “Call” if you are not on site.'; render(); return;
-  }
-  if (['agency_visit', 'hawker_visit'].includes(form) && !t.target_code) {
-    DM.err = 'Choose the ' + (form === 'hawker_visit' ? 'hawker' : 'agency') + ' first.'; render(); return;
-  }
+  if (form === 'agency_visit' && !DM.photo) { DM.err = 'A selfie with the agent is required. Use the Calling form if you were not on site.'; render(); return; }
+  if (['agency_visit', 'hawker_visit', 'agent_feedback'].includes(form) && !t.target_code) {
+    DM.err = 'Choose the ' + (form === 'hawker_visit' ? 'hawker' : 'agency') + ' first.'; render(); return; }
+  if (isCall && !DM.extra.call_type) { DM.err = 'Who did you call?'; render(); return; }
 
   DM.busy = '1'; render();
   try {
-    const body = {
-      form, visit_mode: DM.callMode ? 'call' : 'field',
-      ...(geo || {}),
-      unit_code: t.unit_code || (DM.ctx.staff && DM.ctx.staff.unit_code),
-      target_code: t.target_code || DM.form.centre || null,
-      target_name: DM.form.target_name || t.target_name || null,
-      target_extra: DM.form.target_extra || t.city || t.centre || null,
-      purpose: DM.form.purpose, outcome: DM.form.outcome || DM.extra.outcome,
-      remarks: DM.form.remarks,
-      amount_collected: DM.form.amount_collected, outstanding_amount: DM.form.outstanding_amount,
-      payment_mode: DM.extra.pay_mode, payment_type: DM.extra.pay_type,
-      receipt_no: DM.form.receipt_no, copies_committed: DM.form.copies_committed,
-      growth_start: DM.form.growth_start, dues_clear_by: DM.form.dues_clear_by,
-      next_followup_date: DM.form.next_followup_date,
-      check_in: DM.form.check_in, check_out: DM.form.check_out,
-      work_type: DM.form.work_type, location: DM.form.location,
-      assigned_by: DM.form.assigned_by, attendees: DM.form.attendees, subject: DM.form.subject,
-      selfie_id: DM.photo && DM.photo.id ? DM.photo.id : null,
-      extra: DM.extra,
-    };
     if (form === 'plan_tour') {
-      await _dmApi('/tour', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tour_date: DM.form.visit_date || _dmDay(),
-          stops: [{ target_type: 'agent', unit_code: t.unit_code, target_code: t.target_code,
-            target_name: t.target_name, visit_time: DM.form.check_in, purpose: DM.form.purpose,
-            description: DM.form.remarks, outstanding: t.outstanding }] }) });
-      toast('Tour plan sent for approval');
+      await _api('/tour', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tour_date: DM.form.visit_date || _DAY(),
+          stops: [{ target_type: 'agent', unit_code: t.unit_code, target_code: t.target_code, target_name: t.target_name,
+            visit_time: DM.form.check_in, purpose: DM.form.purpose, description: DM.form.remarks, outstanding: t.outstanding }] }) });
+      toast('Sent for approval');
     } else {
-      const r = await _dmApi('/form', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body) });
-      toast(r.visit_mode === 'call' ? '📞 Call report saved' : 'Report submitted'
-        + (r.geofence && r.geofence.within === 0 ? ` · ${_dmN(r.geofence.distance_m)} m from the registered location` : ''));
+      const body = { form: isCall ? 'calling' : form, visit_mode: isCall ? 'call' : 'field', ...(geo || {}),
+        unit_code: t.unit_code || (DM.ctx.staff && DM.ctx.staff.unit_code),
+        target_code: t.target_code || DM.form.centre || null,
+        target_name: DM.form.target_name || t.target_name || null,
+        target_extra: DM.form.target_extra || t.city || t.centre || null,
+        purpose: DM.form.purpose, outcome: DM.form.outcome, remarks: DM.form.remarks,
+        amount_collected: DM.form.amount_collected, outstanding_amount: DM.form.outstanding_amount,
+        payment_mode: DM.extra.pay_mode, payment_type: DM.extra.pay_type,
+        receipt_no: DM.form.receipt_no, copies_committed: DM.form.copies_committed,
+        growth_start: DM.form.growth_start, dues_clear_by: DM.form.dues_clear_by,
+        next_followup_date: DM.form.next_followup_date,
+        check_in: DM.form.check_in, check_out: DM.form.check_out,
+        work_type: DM.form.work_type, location: DM.form.location, assigned_by: DM.form.assigned_by,
+        attendees: DM.form.attendees, subject: DM.form.subject, plan_id: DM.form.plan_id || null,
+        selfie_id: DM.photo && DM.photo.id ? DM.photo.id : null,
+        extra: form === 'agent_feedback' ? { ...DM.extra, fb_set: DM.fbSet, health: _health(DM.extra) } : DM.extra };
+      const r = await _api('/form', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      toast(r.visit_mode === 'call' ? 'Call report saved' : 'Submitted'
+        + (r.geofence && r.geofence.within === 0 ? ` · ${_NN(r.geofence.distance_m)} m away` : ''));
     }
-    DM.busy = ''; DM.form = {}; DM.extra = {}; DM.photo = null; DM.callMode = false;
-    DM.mode = null; DM.targets = null; DM.targetsKey = '';
-    await _dmLoad(true);
+    DM.busy = ''; DM.form = {}; DM.extra = {}; DM.photo = null; DM.mode = null;
+    DM.targets = null; DM.targetsKey = ''; DM.approved = null; DM.day = null;
+    await _load(true);
   } catch (e) { DM.busy = ''; DM.err = e.message; render(); }
 };
 
-window.dmStartTrip = async () => {
-  DM.busy = 'trip'; render();
-  try { const g = await _dmGeo(true);
-    await _dmApi('/trip/start', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...g, place: 'other' }) });
-    DM.busy = ''; toast('Duty started'); await _dmLoad(true);
-  } catch (e) { DM.busy = ''; DM.err = e.message; render(); }
+window.dmStartTrip = async () => { DM.busy = 'trip'; render();
+  try { const g = await _geo(true);
+    await _api('/trip/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...g, place: 'other' }) });
+    DM.busy = ''; toast('Duty started'); await _load(true);
+  } catch (e) { DM.busy = ''; DM.err = e.message; render(); } };
+window.dmEndTrip = async () => { if (!confirm('End duty and close the day?')) return;
+  try { let g = null; try { g = await _geo(true); } catch (_) {}
+    const r = await _api('/trip/end', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(g || {}) });
+    DM.day = r.summary; DM.mode = 'dash'; toast(`Day closed · ${r.summary.total_km} km`); await _load(true);
+  } catch (e) { DM.err = e.message; render(); } };
+
+// ── app-owned bottom bar ────────────────────────────────────────────────────
+window.appBottomNav = screen => {
+  if (screen !== 'app_dcr' && !String(screen || '').startsWith('dcrm')) return null;
+  const items = [['', 'Home', '🏠'], ['dash', 'Dashboard', '📊'], ['approvals', 'Approvals', '✅']];
+  if (DM.ctx && DM.ctx.trip && DM.ctx.trip.status === 'active') items.push(['end', 'End duty', '🏁']);
+  else items.push(['apps', 'Apps', '⋯']);
+  return items.map(([k, l, i]) => `<button class="${(DM.mode || '') === k ? 'on' : ''}"
+    onclick="${k === 'apps' ? "go('home')" : k === 'end' ? 'dmEndTrip()' : `dmNav('${k}')`}">
+    <span class="bico">${i}</span>${l}</button>`).join('');
 };
-window.dmEndTrip = async () => {
-  if (!confirm('End duty and close the day?')) return;
-  DM.busy = 'end'; render();
-  try { let g = null; try { g = await _dmGeo(true); } catch (_) {}
-    const r = await _dmApi('/trip/end', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(g || {}) });
-    DM.busy = ''; DM.day = r.summary; DM.mode = 'day';
-    toast(`Day closed · ${r.summary.total_visits} entries · ${r.summary.total_km} km`);
-    await _dmLoad(true);
-  } catch (e) { DM.busy = ''; DM.err = e.message; render(); }
+window.dmNav = k => { DM.mode = k || null; DM.err = null; DM.flyout = null;
+  if (k === 'dash') DM.day = null; if (k === 'approvals') DM.approved = null;
+  if (S.sideOpen) toggleSide();
+  render(); };
+
+/* The sidebar while inside DCR: this app's forms, nothing from the management
+   dashboard. Only the forms the user is entitled to appear, same source as the home
+   grid, so the two can never disagree. */
+window.appSideNav = screen => {
+  if (screen !== 'app_dcr' && !String(screen || '').startsWith('dcrm')) return null;
+  if (!DM.rights) return `<div class="sb-lbl"><span>DCR</span></div>`;
+  const item = (k, label, icon) => `<button class="nav-item ${DM.mode === k ? 'on' : ''}"
+    onclick="dmNav('${k}')"><span class="nico">${icon}</span><span>${label}</span></button>`;
+  let h = `<div class="sb-lbl"><span>DCR</span></div>`
+    + item('', 'DCR Home', '📋') + item('dash', 'DCR Dashboard', '📊') + item('approvals', 'Approved Plans', '✅');
+  const allowed = FORMS.filter(f => DM.rights[f.key]);
+  if (allowed.length) {
+    h += `<div class="sb-lbl"><span>Forms</span></div>`;
+    h += allowed.map(f => `<button class="nav-item ${DM.mode === f.key ? 'on' : ''}"
+      onclick="dmOpen('${f.key}');if(S.sideOpen)toggleSide()"><span class="nico">${f.icon}</span><span>${f.name}</span></button>`).join('');
+  }
+  return h;
 };
-
-// ── day / team / tours ──────────────────────────────────────────────────────
-function _dayView() {
-  const d = DM.day;
-  if (!d) return _card('<div style="color:#94a3b8">Loading…</div>');
-  return _card(_sec('Today') +
-    [['Entries', d.total_visits], ['At location', d.valid_visits], ['Outside geofence', d.invalid_visits],
-     ['Distance', d.total_km + ' km'], ['Collected', _dmINR(d.collection)]]
-      .map(([k, v]) => `<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:9px 0;border-top:1px solid ${C.line}">
-        <span style="color:${C.mut}">${k}</span><b style="color:${C.ink}">${v}</b></div>`).join('') +
-    `<div style="font-size:10.5px;color:#94a3b8;margin-top:9px">${esc(d.km_method || '')}</div>`) +
-    ((d.visits || []).length ? _card(_sec('Entries') + d.visits.map(v => `
-      <div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid ${C.line}">
-        <div style="min-width:0"><div style="font-weight:700;font-size:13.5px;color:${C.ink}">${esc(v.target_name || v.target_type)}</div>
-          <div style="font-size:11px;color:${C.mut}">${esc(v.purpose || '')}${v.outcome ? ' · ' + esc(v.outcome) : ''}</div></div>
-        <div style="flex:none;text-align:right">${Number(v.amount_collected) > 0 ? _chip(_dmINR(v.amount_collected), 'good') : ''}
-          ${v.within_fence === 0 ? _chip('outside', 'warn') : ''}</div></div>`).join('')) : '');
-}
-
-function _teamView() {
-  const pend = (DM.pending && DM.pending.rows) || [], live = (DM.live && DM.live.rows) || [];
-  const st = s => ({ on_visit: ['🟢 on visit', 'good'], travelling: ['🟡 travelling', 'warn'],
-    started: ['🔵 started', 'info'], ended: ['⚫ closed', 'mute'], offline: ['⚪ not started', 'mute'] }[s] || [s, 'mute']);
-  return (pend.length ? _card(_sec('Tour plans awaiting you') + pend.map(p => `
-      <div style="border:1px solid ${C.line};border-radius:11px;padding:12px;margin-bottom:9px">
-        <div style="font-weight:700;font-size:13.5px;color:${C.ink}">${esc(p.staff_name)}</div>
-        <div style="font-size:11.5px;color:${C.mut}">${String(p.tour_date).slice(0, 10)} · ${p.stops} stops${Number(p.outstanding) > 0 ? ' · ' + _dmINR(p.outstanding) + ' dues' : ''}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
-          ${_btn('Approve', `dmDecide('${_dmQ(p.staff_person_code)}','${String(p.tour_date).slice(0, 10)}','approve')`, 'ok')}
-          ${_btn('Reject', `dmDecide('${_dmQ(p.staff_person_code)}','${String(p.tour_date).slice(0, 10)}','reject')`, 'ghost')}
-        </div></div>`).join('')) : '') +
-    _card(_sec(`My team today · ${live.length}`) + (live.length ? live.map(m => {
-      const [l, tone] = st(m.state);
-      return `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:9px 0;border-top:1px solid ${C.line}">
-        <div style="min-width:0"><div style="font-weight:700;font-size:13.5px;color:${C.ink}">${esc(m.name)}</div>
-          <div style="font-size:11px;color:${C.mut}">${m.last_target ? esc(m.last_target) : 'no entry yet'}</div></div>
-        ${_chip(l, tone)}</div>`; }).join('')
-      : `<div style="color:#94a3b8;font-size:13px">Nobody reports to you in the DCR hierarchy.</div>`));
-}
-
-window.dmDecide = async (person, date, action) => {
-  let reason = null;
-  if (action === 'reject') { reason = prompt('Why is this being rejected? The executive will see this.'); if (!reason) return; }
-  try { await _dmApi('/tour/decide', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ person_code: person, tour_date: date, action, reason }) });
-    toast(action === 'approve' ? 'Approved' : 'Rejected'); dmOpenTeam();
-  } catch (e) { DM.err = e.message; render(); }
-};
-
-async function _planList() {
-  if (DM.plan) return;
-  try { DM.plan = await _dmApi(`/tour?date=${DM.planDate || _dmDay()}`); } catch (e) { DM.plan = { rows: [] }; }
-  if (_dmOn()) render();
-}
-function _planView() {
-  _planList();
-  const rows = (DM.plan && DM.plan.rows) || [];
-  const st = s => ({ submitted: ['awaiting approval', 'warn'], approved: ['approved', 'good'],
-    rejected: ['rejected', 'bad'], done: ['visited', 'info'] }[s] || [s, 'mute']);
-  return _card(_fld('Date', `<input type="date" value="${DM.planDate || _dmDay()}" onchange="DM.planDate=this.value;DM.plan=null;render()" style="${_IN}">`)) +
-    (rows.length ? rows.map(r => { const [l, tone] = st(r.status);
-      return _card(`<div style="display:flex;justify-content:space-between;gap:8px"><div style="min-width:0">
-        <div style="font-weight:700;font-size:14px;color:${C.ink}">${esc(r.target_name || r.target_code)}</div>
-        <div style="font-size:11.5px;color:${C.mut};margin-top:2px">${esc(r.purpose || '')}${r.visit_time ? ' · ' + esc(r.visit_time) : ''}</div>
-        ${r.reject_reason ? `<div style="font-size:11.5px;color:#b91c1c;background:#fef2f2;border-radius:8px;padding:7px;margin-top:7px">${esc(r.reject_reason)}</div>` : ''}
-      </div>${_chip(l, tone)}</div>`); }).join('')
-    : _card(`<div style="text-align:center;color:${C.mut};padding:16px">No tour planned for this date.</div>`));
-}
 
 // ── shell ───────────────────────────────────────────────────────────────────
-const _TITLES = { plan_tour: 'Plan Tour', agency_visit: 'Agency Visit', center_attn: 'Centre Attendance',
-  hawker_visit: 'Hawker Visit', reader_visit: 'Reader Visit', new_area: 'New Area',
-  office_work: 'Office / Other Work', day: 'My Day', team: 'My Team', plan_list: 'My Tours' };
+const TITLES = { plan_tour: 'Plan Tour', agency_visit: 'Agency Visit', agent_feedback: 'Agent Feedback',
+  calling: 'Calling', center_attn: 'Attendance', hawker_visit: 'Hawker Visit', reader_visit: 'Reader Visit',
+  new_area: 'New Area', office_work: 'Office / Other', dash: 'DCR Dashboard', approvals: 'Approved Plans' };
 
 VIEWS.dcrm = () => {
-  _dmLoad();
-  if (DM.loading && !DM.ctx) return `<div style="padding:34px;text-align:center;color:${C.mut}">Loading…</div>`;
-  if (!DM.ctx) return `<div style="max-width:560px;margin:0 auto;padding:16px">${_card(
-    `<div style="color:#b91c1c;font-weight:700;margin-bottom:5px">Could not open DCR</div>
-     <div style="font-size:12.5px;color:${C.mut};margin-bottom:12px">${esc(DM.err || 'Unknown error')}</div>
-     ${_btn('Try again', 'dmReload()', 'pri')}`)}</div>`;
+  _load();
+  if (DM.loading && !DM.ctx) return `<div style="padding:30px;text-align:center;color:${K.mut};font-size:13px">Loading…</div>`;
+  if (!DM.ctx) return `<div style="max-width:640px;margin:0 auto;padding:16px">
+    <div style="color:#b91c1c;font-size:13.5px;margin-bottom:6px">Could not open DCR</div>
+    <div style="font-size:12.5px;color:${K.mut};margin-bottom:12px">${esc(DM.err || 'Unknown error')}</div>
+    ${_btn('Try again', 'dmReload()', 'pri')}</div>`;
 
   const body =
-    DM.mode === null            ? _dmHome()
-    : DM.mode === 'plan_tour'   ? _formPlanTour()
-    : DM.mode === 'agency_visit'? _formAgencyVisit()
-    : DM.mode === 'center_attn' ? _formCentreAttn()
-    : DM.mode === 'hawker_visit'? _formHawkerVisit()
-    : DM.mode === 'reader_visit'? _formReaderVisit()
-    : DM.mode === 'new_area'    ? _formNewArea()
-    : DM.mode === 'office_work' ? _formOffice()
-    : DM.mode === 'day'         ? _dayView()
-    : DM.mode === 'team'        ? _teamView()
-    : DM.mode === 'plan_list'   ? _planView()
-    : _dmHome();
+      DM.mode === null            ? _home()
+    : DM.mode === 'dash'          ? _dash()
+    : DM.mode === 'approvals'     ? _approvals()
+    : DM.mode === 'plan_tour'     ? _fPlanTour()
+    : DM.mode === 'agency_visit'  ? _fAgencyVisit()
+    : DM.mode === 'agent_feedback'? _fFeedback()
+    : DM.mode === 'calling'       ? _fCalling()
+    : DM.mode === 'center_attn'   ? _fCentreAttn()
+    : DM.mode === 'hawker_visit'  ? _fHawkerVisit()
+    : DM.mode === 'reader_visit'  ? _fReaderVisit()
+    : DM.mode === 'new_area'      ? _fNewArea()
+    : DM.mode === 'office_work'   ? _fOffice()
+    : _home();
 
-  const err = DM.err ? `<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:11px;padding:12px;font-size:13px;margin-bottom:12px">
-    ${esc(DM.err)} <a onclick="DM.err=null;render()" style="cursor:pointer;text-decoration:underline;margin-left:6px">dismiss</a></div>` : '';
+  const err = DM.err ? `<div style="background:#fdeceb;color:#b91c1c;border-radius:8px;padding:9px 11px;font-size:12.5px;margin-bottom:11px">
+    ${esc(DM.err)} <a onclick="DM.err=null;render()" style="cursor:pointer;text-decoration:underline;margin-left:5px">dismiss</a></div>` : '';
 
-  /* Responsive, not phone-locked: a field executive is on a handset, an incharge
-     reviewing the same forms is often on a laptop. */
-  return `<div style="max-width:720px;margin:0 auto;padding:14px">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px">
-      <div style="display:flex;align-items:center;gap:10px;min-width:0">
-        ${DM.mode !== null ? `<button onclick="dmHome()" style="flex:none;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:10px;padding:9px 12px;font-size:13px;cursor:pointer">←</button>` : ''}
-        <div style="min-width:0"><div style="font-size:19px;font-weight:800;color:${C.ink}">${DM.mode === null ? 'DCR Entry' : esc(_TITLES[DM.mode] || 'DCR')}</div>
-          <div style="font-size:11.5px;color:${C.mut}">${DM.mode === null ? 'Choose a form to begin' : esc(DM.ctx.staff.name)}</div></div>
-      </div>
-      <button onclick="go('home')" style="flex:none;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:10px;padding:9px 12px;font-size:12.5px;cursor:pointer">Apps</button>
+  return `<div style="max-width:640px;margin:0 auto;padding:12px 14px 16px">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:11px">
+      ${DM.mode !== null ? `<button onclick="dmHome()" style="flex:none;border:1px solid #d7dde5;background:#fff;color:#334155;border-radius:8px;padding:6px 10px;font-size:13px;cursor:pointer">←</button>` : ''}
+      <span style="font-size:16px;color:${K.ink}">${DM.mode === null ? 'DCR' : esc(TITLES[DM.mode] || 'DCR')}</span>
     </div>
-    ${err}${body}
+    ${err}${body}${_flyout()}
   </div>`;
 };
-window.dmReload = () => { DM.ctx = null; DM.rights = null; DM.targets = null; _dmLoad(true); };
+window.dmReload = () => { DM.ctx = null; DM.rights = null; DM.targets = null; _load(true); };

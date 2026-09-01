@@ -17519,6 +17519,15 @@ function navGroups() {
 }
 
 function sideHTML() {
+  /* Inside an app the sidebar is that app's, not the management dashboard's. A field
+     executive in a visit form has no use for Supply, Collections or Outstanding, and
+     offering them is how someone loses the form they were half-way through filling.
+     Home stays, and still returns to the main dashboard. */
+  if (typeof window.appSideNav === "function") {
+    const own = window.appSideNav(S.screen);
+    if (own) return `<button class="nav-item" onclick="go('home')" style="margin-top:10px">
+      <span class="nico">🏠</span><span>Home — My Modules</span></button>` + own;
+  }
   const groups = navGroups();
   let html = `<button class="nav-item ${S.screen === "home" ? "on" : ""}" onclick="go('home')" style="margin-top:10px"><span class="nico">🏠</span><span>Home — My Modules</span></button>`;
   const collapsed = navCollapsedMap();
@@ -17558,6 +17567,13 @@ function sideHTML() {
 
 function bottomHTML() {
   const u = S.user, hl = u.hierarchyLevel || 99;
+  /* Inside an app, the bottom bar belongs to that app. Showing the management
+     dashboard and approvals under a field form sends a field executive out of the
+     screen they are working in — apps declare their own bar and it wins here. */
+  if (typeof window.appBottomNav === "function") {
+    const own = window.appBottomNav(S.screen);
+    if (own) return own;
+  }
   const items = [["home", "Home", "🏠"]];
   if (u.dashboard) {
     if (hl <= 4) items.push(["command", "Dashboard", "📊"], ["approvals", "Approvals", "✅"]);

@@ -953,6 +953,10 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
     reader_visit:   { target: 'reader', perm: 'dcr_reader_visit' },
     new_area:       { target: 'area',   perm: 'dcr_new_area' },
     office_work:    { target: 'office', perm: 'dcr_office_work' },
+    // Calling is its own form rather than a mode inside a visit — mixing the two let a
+    // field report be filed from a desk. It always records visit_mode='call'.
+    calling:        { target: 'agent',  perm: 'dcr_calling' },
+    agent_feedback: { target: 'agent',  perm: 'dcr_agent_feedback' },
   };
 
   app.post('/api/dcr-m/form', async (req, res) => {
@@ -963,7 +967,8 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       const form = FORM_TYPES[b.form] ? b.form : null;
       if (!form) return res.status(400).json({ detail: 'Unknown form' });
 
-      const mode = b.visit_mode === 'call' ? 'call' : 'field';
+      // The calling form is a call by definition, whatever the client sends.
+      const mode = (form === 'calling' || b.visit_mode === 'call') ? 'call' : 'field';
       const lat = b.lat == null ? null : Number(b.lat), lng = b.lng == null ? null : Number(b.lng);
       const hasGeo = inIndia(lat, lng);
       // A field visit without a location cannot be verified, so it is refused; a call
