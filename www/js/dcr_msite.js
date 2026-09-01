@@ -59,49 +59,42 @@ async function _load(force) {
 /* ── atoms ──────────────────────────────────────────────────────────────────
    Sections are a label and a hairline, not a card in a card. Labels are normal
    weight; only values that carry meaning are emphasised. */
-const K = { ink: 'var(--ink,#0f172a)', mut: '#64748b', line: 'var(--brd2,#e6eaf0)', s2: 'var(--surface-2,#f8fafc)' };
-const IN = 'width:100%;padding:9px 10px;border:1px solid #d7dde5;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;color:#0f172a;font-family:inherit';
+const K = { ink: 'var(--d-ink)', mut: 'var(--d-mut)', line: 'var(--d-line)', s2: 'var(--d-soft)' };
+const IN = '';   // styling now lives in css/dcr.css
 
-const _sec = t => `<div style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#9aa5b4;margin:15px 0 7px;padding-bottom:5px;border-bottom:1px solid ${K.line}">${t}</div>`;
-const _f = (label, ctl, req, hint) => `<div style="margin-bottom:10px">
-  <label style="display:block;font-size:12px;color:${K.mut};margin-bottom:4px">${label}${req ? ' <span style="color:#dc2626">*</span>' : ''}</label>
-  ${ctl}${hint ? `<div style="font-size:10.5px;color:#9aa5b4;margin-top:3px">${hint}</div>` : ''}</div>`;
-const _row = (a, b) => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">${a}${b}</div>`;
+const _sec = t => `<div class="dcr-sec">${t}</div>`;
+const _f = (label, ctl, req, hint) => `<div class="dcr-f">
+  ${label ? `<label>${label}${req ? ' <span class="req">*</span>' : ''}</label>` : ''}
+  ${ctl}${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
+const _row = (a, b) => `<div class="dcr-2col">${a}${b}</div>`;
 
-const _in = (k, ph, type, extra) => `<input id="f_${k}" value="${esc(DM.form[k] || '')}" type="${type || 'text'}"
-  placeholder="${esc(ph || '')}" oninput="dmSet('${k}',this.value)" ${extra || ''} style="${IN}">`;
-const _sel = (k, opts, ph, onX) => `<select onchange="${onX ? `dmSetX('${k}',this.value)` : `dmSet('${k}',this.value)`};render()" style="${IN}">
+const _in = (k, ph, type, extra) => `<input class="dcr-in" id="f_${k}" value="${esc(DM.form[k] || '')}" type="${type || 'text'}"
+  placeholder="${esc(ph || '')}" oninput="dmSet('${k}',this.value)" ${extra || ''}>`;
+const _sel = (k, opts, ph, onX) => `<select onchange="${onX ? `dmSetX('${k}',this.value)` : `dmSet('${k}',this.value)`};render()">
   <option value="">${esc(ph || '-- Select --')}</option>
   ${opts.map(o => { const [v, l] = Array.isArray(o) ? o : [o, o];
     const cur = onX ? DM.extra[k] : DM.form[k];
     return `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`;
 const _txt = (k, ph, rows) => `<textarea id="f_${k}" rows="${rows || 2}" placeholder="${esc(ph || '')}"
-  oninput="dmSet('${k}',this.value)" style="${IN}">${esc(DM.form[k] || '')}</textarea>`;
+  oninput="dmSet('${k}',this.value)">${esc(DM.form[k] || '')}</textarea>`;
 const _xin = (k, ph, type) => `<input value="${esc(DM.extra[k] || '')}" type="${type || 'text'}" placeholder="${esc(ph || '')}"
-  oninput="dmSetX('${k}',this.value)" style="${IN}">`;
+  oninput="dmSetX('${k}',this.value)">`;
 
-/* Multi-select as a compact dropdown-plus-tags: a chip row for eight publications
+/* Multi-select as a dropdown plus removable tags: a chip row for eight publications
    costs three rows of scroll, this costs one. */
 const _multi = (k, opts, ph) => {
   const cur = DM.extra[k] || [];
-  return `<select onchange="dmMulti('${k}',this.value);this.value=''" style="${IN}">
+  return `<select onchange="dmMulti('${k}',this.value);this.value=''">
       <option value="">${esc(ph || 'Add…')}</option>
       ${opts.filter(o => !cur.includes(Array.isArray(o) ? o[0] : o))
         .map(o => { const [v, l] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(v)}">${esc(l)}</option>`; }).join('')}
     </select>
-    ${cur.length ? `<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">${cur.map(v =>
-      `<span style="font-size:11.5px;background:#eef2f7;border-radius:12px;padding:3px 8px;color:#334155">${esc(v)}
-        <a onclick="dmMulti('${k}','${_Q(v)}')" style="cursor:pointer;color:#94a3b8;margin-left:3px">×</a></span>`).join('')}</div>` : ''}`;
+    ${cur.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${cur.map(v =>
+      `<span class="dcr-pill">${esc(v)}<a onclick="dmMulti('${k}','${_Q(v)}')">×</a></span>`).join('')}</div>` : ''}`;
 };
 
-const _btn = (l, on, kind, ex) => {
-  const s = { pri: 'background:#1e3a8a;color:#fff;border:none', ok: 'background:#15803d;color:#fff;border:none',
-              ghost: 'background:#fff;color:#334155;border:1px solid #d7dde5' }[kind || 'ghost'];
-  return `<button onclick="${on}" ${ex || ''} style="${s};border-radius:9px;padding:11px 14px;font-size:14px;font-weight:600;cursor:pointer;width:100%;min-height:44px">${l}</button>`;
-};
-const _tag = (t, tone) => { const c = { good: '#15803d,#e8f6ee', warn: '#b45309,#fdf3e3', bad: '#b91c1c,#fdeceb',
-  info: '#0369a1,#e6f2fb', mute: '#64748b,#f1f5f9' }[tone || 'mute'].split(',');
-  return `<span style="font-size:10.5px;color:${c[0]};background:${c[1]};border-radius:9px;padding:2px 7px;white-space:nowrap">${t}</span>`; };
+const _btn = (l, on, kind, ex) => `<button class="dcr-btn ${kind || 'ghost'}" onclick="${on}" ${ex || ''}>${l}</button>`;
+const _tag = (t, tone) => `<span class="dcr-tag ${tone || 'mute'}">${t}</span>`;
 
 window.dmSet  = (k, v) => { DM.form[k] = v; };
 window.dmSetX = (k, v) => { DM.extra[k] = v; };
@@ -114,14 +107,12 @@ window.dmMulti = (k, v) => { const a = DM.extra[k] || [];
 function _flyout() {
   if (!DM.flyout) return '';
   const f = DM.flyout;
-  return `<div onclick="dmFly(null)" style="position:fixed;inset:0;background:rgba(15,23,42,.4);z-index:400"></div>
-  <div style="position:fixed;left:0;right:0;bottom:0;max-height:86vh;background:#fff;z-index:401;
-      border-radius:16px 16px 0 0;box-shadow:0 -8px 30px rgba(15,23,42,.2);display:flex;flex-direction:column">
-    <div style="padding:12px 15px;border-bottom:1px solid ${K.line};display:flex;justify-content:space-between;align-items:center">
-      <span style="font-size:14px;font-weight:600;color:${K.ink}">${esc(f.title)}</span>
-      <button onclick="dmFly(null)" style="border:none;background:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1">×</button>
-    </div>
-    <div style="flex:1;overflow:auto;padding:13px 15px">${f.body()}</div>
+  return `<div class="dcr-fly-bg" onclick="dmFly(null)"></div>
+  <div class="dcr-fly">
+    <div class="grab"></div>
+    <div class="hd"><h3>${esc(f.title)}</h3>
+      <button onclick="dmFly(null)" style="border:none;background:none;font-size:22px;color:var(--d-faint);cursor:pointer;line-height:1">&times;</button></div>
+    <div class="bd">${f.body()}</div>
   </div>`;
 }
 window.dmFly = k => { DM.flyout = k; render(); };
@@ -171,7 +162,7 @@ function _home() {
   const done = day.total_visits || 0;
   const pct = target ? Math.min(100, Math.round(done / target * 100)) : null;
 
-  // Working time runs from the trip start, so it is real elapsed duty, not a guess.
+  // Working time is real elapsed duty from the trip start, not an estimate.
   let worked = '—';
   if (t && t.start_at) {
     const end = t.end_at ? new Date(t.end_at) : new Date();
@@ -180,91 +171,86 @@ function _home() {
   }
 
   const g = DM.geo;
-  const gpsTone = !g ? '#94a3b8' : g.accuracy <= 30 ? '#15803d' : g.accuracy <= 80 ? '#b45309' : '#b91c1c';
+  const gpsCol = !g ? '#fbbf24' : g.accuracy <= 30 ? '#4ade80' : g.accuracy <= 80 ? '#fbbf24' : '#f87171';
 
-  const header = `<div style="margin-bottom:14px">
-    <div style="font-size:19px;color:${K.ink};margin-bottom:2px">${_greet()}, ${esc(String(c.staff.name || '').split(' ')[0])} 👋</div>
-    <div style="font-size:12px;color:${K.mut}">${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}${c.staff.unit_code ? ' · ' + esc(c.staff.unit_code) : ''}</div>
-    <div style="display:flex;gap:12px;align-items:center;margin-top:7px;font-size:11.5px">
-      <span style="color:${gpsTone}">● ${!g ? 'GPS not read' : `GPS active · ±${g.accuracy} m`}</span>
-      <a onclick="dmRefreshGeo()" style="cursor:pointer;color:#1e3a8a;text-decoration:underline">refresh</a>
-      <span style="color:${K.mut};margin-left:auto">${DM.busy ? 'Syncing…' : 'Synced'}</span>
-    </div></div>`;
+  const hero = `<div class="dcr-hero">
+    <h2>${_greet()}, ${esc(String(c.staff.name || '').split(' ')[0])} 👋</h2>
+    <div class="sub">${new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}${c.staff.unit_code ? ' · ' + esc(c.staff.unit_code) : ''}</div>
+    <div class="meta">
+      <span><i class="dcr-dot" style="background:${gpsCol}"></i>${!g ? 'GPS not read' : `GPS ±${g.accuracy} m`}</span>
+      <a onclick="dmRefreshGeo()">refresh</a>
+      <span style="margin-left:auto">${DM.busy ? 'Syncing…' : '✓ Synced'}</span>
+    </div>
+  </div>`;
 
-  /* Achievement leads the KPI block: a bar says "you are 60% through the day" at a
-     glance, where five numbers need reading. It appears only when a plan exists — a
-     progress bar against a target of nothing is noise. */
-  const ach = target ? `<div style="margin-bottom:12px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
-        <span style="font-size:12px;color:${K.mut}">Visit achievement</span>
-        <span style="font-size:15px;color:${K.ink}">${pct}% <span style="font-size:11.5px;color:${K.mut}">· ${done} of ${target}</span></span></div>
-      <div style="height:8px;background:#eef2f7;border-radius:5px;overflow:hidden">
-        <div style="height:100%;width:${pct}%;background:${pct >= 80 ? '#15803d' : pct >= 50 ? '#d97706' : '#b91c1c'};border-radius:5px"></div></div>
+  /* Achievement leads: a bar says "60% through the day" at a glance where six numbers
+     need reading. Shown only when a plan exists — a bar against no target is noise. */
+  const ach = target ? `<div class="dcr-card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <span style="font-size:12.5px;color:var(--d-mut)">Visit achievement</span>
+        <span style="font-size:18px;font-weight:650">${pct}%<span style="font-size:12px;color:var(--d-mut);font-weight:400"> · ${done} of ${target}</span></span></div>
+      <div class="dcr-prog"><i style="width:${pct}%;background:${pct >= 80 ? 'linear-gradient(90deg,#12a15c,#067647)' : pct >= 50 ? 'linear-gradient(90deg,#f0a338,#b54708)' : 'linear-gradient(90deg,#e8564b,#b42318)'}"></i></div>
     </div>` : '';
 
-  const kpi = (icon, label, val) => `<div style="background:${K.s2};border-radius:11px;padding:11px 9px">
-    <div style="font-size:10.5px;color:${K.mut};margin-bottom:3px">${icon} ${label}</div>
-    <div style="font-size:16px;color:${K.ink}">${val}</div></div>`;
-  const kpis = `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px">
+  const kpi = (ic, l, v) => `<div class="dcr-kpi"><div class="l">${ic} ${l}</div><div class="v">${v}</div></div>`;
+  const kpis = `<div class="dcr-kpis">
     ${kpi('🎯', 'Target', target || '—')}
-    ${kpi('✅', 'Visits done', target ? `${done} / ${target}` : done)}
+    ${kpi('✅', 'Done', target ? `${done}/${target}` : done)}
     ${kpi('💰', 'Collection', _INR(day.collection || 0))}
     ${kpi('📍', 'Distance', (day.total_km || 0) + ' km')}
-    ${kpi('⏱', 'Working time', worked)}
+    ${kpi('⏱', 'Duty', worked)}
     ${kpi('📞', 'Calls', (day.visits || []).filter(v => v.visit_mode === 'call').length)}
   </div>`;
 
   /* Trip control sits on the dashboard, not behind a menu — starting and closing the
-     day are the two things an executive does most and should never hunt for. */
+     day are the two things done most and should never be hunted for. */
   const trip = running
-    ? `<div style="background:#e8f6ee;border-radius:12px;padding:13px;margin-bottom:14px">
-        <div style="font-size:12.5px;color:#15803d;margin-bottom:2px">Trip started — ${t.start_at ? new Date(t.start_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
-        <div style="font-size:12px;color:${K.mut};margin-bottom:11px">${day.total_km || 0} km · ${done} ${done === 1 ? 'visit' : 'visits'}</div>
-        <button onclick="dmEndTrip()" style="width:100%;background:#b91c1c;color:#fff;border:none;border-radius:10px;padding:13px;font-size:15px;font-weight:600;cursor:pointer;min-height:48px">🔴 Check out</button>
+    ? `<div class="dcr-card" style="background:var(--d-ok-bg)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px">
+          <div><div style="font-size:13px;color:var(--d-ok);font-weight:600">Trip running</div>
+            <div style="font-size:11.5px;color:var(--d-mut);margin-top:2px">Since ${t.start_at ? new Date(t.start_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'} · ${day.total_km || 0} km · ${done} ${done === 1 ? 'visit' : 'visits'}</div></div>
+          <span class="dcr-tag good">LIVE</span></div>
+        <button class="dcr-btn stop" onclick="dmEndTrip()">Check out &amp; close day</button>
       </div>`
     : t
-      ? `<div style="background:${K.s2};border-radius:12px;padding:13px;margin-bottom:14px;font-size:12.5px;color:${K.mut}">
-          Day closed · ${t.total_visits || 0} visits · ${t.total_km || 0} km · ${_INR(t.collection_amt)}</div>`
-      : `<button onclick="dmStartTrip()" ${DM.busy === 'trip' ? 'disabled' : ''}
-          style="width:100%;background:#15803d;color:#fff;border:none;border-radius:12px;padding:15px;font-size:16px;font-weight:600;cursor:pointer;margin-bottom:14px;min-height:52px">
-          ${DM.busy === 'trip' ? 'Starting…' : '🟢 Start trip'}</button>`;
+      ? `<div class="dcr-card" style="text-align:center">
+          <div style="font-size:12.5px;color:var(--d-mut)">Day closed · ${t.total_visits || 0} visits · ${t.total_km || 0} km · ${_INR(t.collection_amt)}</div></div>`
+      : `<div style="margin-bottom:12px">${_btn(DM.busy === 'trip' ? 'Starting…' : '▶  Start trip', 'dmStartTrip()', 'ok', DM.busy === 'trip' ? 'disabled' : '')}</div>`;
 
-  /* Today's plan in visit order, next stop called out. Tapping it opens the visit
-     already filled in — the point of having planned it. Each row also carries
-     reschedule and cancel, because a plan that cannot change gets ignored instead. */
+  /* Today's plan in visit order, next stop called out. Tapping opens the visit already
+     filled in; the ⋮ menu reschedules or cancels, because a plan that cannot change
+     gets worked around instead of followed. */
   const doneCodes = new Set((day.visits || []).map(v => String(v.target_code)));
   let nextMarked = false;
-  const list = stops.length ? `<div style="margin-bottom:14px">
-      ${_sec(`Today's visits — ${stops.length}`)}
+  const list = stops.length ? `<div class="dcr-card">
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px">Today's visits · ${stops.length}</div>
       ${stops.map(r => {
         const isDone = r.status === 'done' || doneCodes.has(String(r.target_code));
         const isNext = !isDone && !nextMarked && (nextMarked = true);
-        return `<div style="display:flex;gap:10px;align-items:center;padding:11px 0;border-bottom:1px solid ${K.line};${isNext ? 'background:#f0f7ff;margin:0 -8px;padding-left:8px;padding-right:8px;border-radius:8px' : ''}">
-          <span style="font-size:15px;flex:none">${isDone ? '✅' : isNext ? '🔵' : '⚪'}</span>
-          <div ${isDone ? '' : `onclick="dmStartFromPlan(${r.id})" style="cursor:pointer"`} style="min-width:0;flex:1">
-            <div style="font-size:13.5px;color:${isDone ? K.mut : K.ink};${isDone ? 'text-decoration:line-through' : ''};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.target_name || r.target_code)}</div>
-            <div style="font-size:11px;color:${K.mut}">${isDone ? 'Visited' : isNext ? 'Next visit' : 'Pending'}${r.visit_time ? ' · ' + esc(r.visit_time) : ''}</div>
-          </div>
+        return `<div class="dcr-row ${isDone ? 'done' : ''} ${isNext ? 'next' : ''}">
+          <span style="font-size:16px;flex:none">${isDone ? '✅' : isNext ? '🔵' : '⚪'}</span>
+          <div style="min-width:0;flex:1" ${isDone ? '' : `onclick="dmStartFromPlan(${r.id})" style="cursor:pointer;min-width:0;flex:1"`}>
+            <div class="t">${esc(r.target_name || r.target_code)}</div>
+            <div class="s">${isDone ? 'Visited' : isNext ? 'Next visit' : 'Pending'}${r.visit_time ? ' · ' + esc(r.visit_time) : ''}</div></div>
           ${Number(r.outstanding_snap) > 0 ? _tag(_INR(r.outstanding_snap), 'warn') : ''}
-          ${isDone ? '' : `<button onclick="dmPlanMenu(${r.id})" style="flex:none;border:none;background:none;color:#94a3b8;font-size:19px;cursor:pointer;padding:4px 6px;line-height:1">⋮</button>`}
+          ${isDone ? '' : `<button onclick="dmPlanMenu(${r.id})" style="flex:none;border:none;background:none;color:var(--d-faint);font-size:19px;cursor:pointer;padding:4px 2px;line-height:1">⋮</button>`}
         </div>`;
       }).join('')}
-    </div>` : (running ? `<div style="font-size:12.5px;color:${K.mut};padding:10px 0;margin-bottom:8px">No approved plan for today — use the forms below to record any visit.</div>` : '');
+    </div>` : (running ? `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut);text-align:center">No approved plan today — use a form below to record any visit.</div>` : '');
 
   const allowed = FORMS.filter(f => DM.rights && DM.rights[f.key]);
-  if (!allowed.length) return header + kpis + trip + `<div style="font-size:12.5px;color:${K.mut};padding:14px 0">No forms have been assigned to you.</div>`;
+  if (!allowed.length) return hero + kpis + trip + `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">No forms have been assigned to you.</div>`;
 
-  /* Bigger icons, three across — small enough to fit them all, large enough to hit
-     without looking: a 30px glyph in a 56px tile. */
-  const grid = `${_sec('Forms')}<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
-    ${allowed.map(f => `<button onclick="dmOpen('${f.key}')" style="background:none;border:none;cursor:pointer;
-        padding:10px 4px;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:7px;min-height:96px">
-      <span style="width:56px;height:56px;border-radius:16px;background:${K.s2};display:flex;align-items:center;justify-content:center;font-size:30px;line-height:1">${f.icon}</span>
-      <span style="font-size:11.5px;color:${K.ink};text-align:center;line-height:1.25">${f.name}</span>
-    </button>`).join('')}
+  const TINT = { plan_tour: '#fff4e6', agency_visit: '#fff4e6', calling: '#eff8ff',
+                 center_attn: '#ecfdf3', hawker_visit: '#ecfdf3', reader_visit: '#ecfdf3',
+                 new_area: '#ecfdf3', office_work: '#eff8ff' };
+  const grid = `${_sec('Forms')}<div class="dcr-grid">
+    ${allowed.map(f => `<button class="dcr-tile" onclick="dmOpen('${f.key}')">
+      <span class="ico" style="background:${TINT[f.key] || 'var(--d-soft)'}">${f.icon}</span>
+      <span class="nm">${f.name}</span></button>`).join('')}
   </div>`;
 
-  return header + ach + kpis + trip + list + grid;
+  return hero + ach + kpis + trip + list + grid;
 }
 
 /* Reschedule / cancel. A plan an executive cannot change is a plan they work around
@@ -342,24 +328,65 @@ window.dmSearch = (() => { let t; return v => { DM.search = v; clearTimeout(t);
 
 function _pickerBody(type) {
   _loadTargets(type);
-  const rows = (DM.targets || []).slice(0, 40).map(r => `<div onclick='dmPick(${JSON.stringify(r).replace(/'/g, "&#39;")})'
-    style="padding:9px 2px;border-bottom:1px solid ${K.line};cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:center">
-    <div style="min-width:0"><div style="font-size:13.5px;color:${K.ink};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.target_name || r.target_code)}</div>
-      <div style="font-size:11px;color:${K.mut}">${esc(r.city || r.centre || '')}</div></div>
+  const rows = (DM.targets || []).slice(0, 40).map(r => `<div class="dcr-row" onclick='dmPick(${JSON.stringify(r).replace(/'/g, "&#39;")})' style="cursor:pointer">
+    <div style="min-width:0;flex:1"><div class="t">${esc(r.target_name || r.target_code)}</div>
+      <div class="s">${esc(r.city || r.centre || '')}</div></div>
     ${Number(r.outstanding) > 0 ? _tag(_INR(r.outstanding), Number(r.outstanding) > 100000 ? 'bad' : 'warn') : ''}</div>`).join('');
-  return `<input value="${esc(DM.search)}" oninput="dmSearch(this.value)" placeholder="Type 3 letters…" style="${IN};margin-bottom:9px" autofocus>
-    ${DM.targets ? (rows || `<div style="font-size:12.5px;color:${K.mut};padding:10px 0">No match.</div>`) : `<div style="font-size:12.5px;color:${K.mut};padding:10px 0">Loading…</div>`}`;
+  return `<input class="dcr-in" value="${esc(DM.search)}" oninput="dmSearch(this.value)" placeholder="Type 3 letters…" style="margin-bottom:10px" autofocus>
+    ${DM.targets ? (rows || `<div style="font-size:13px;color:var(--d-mut);padding:12px 0">No match.</div>`) : `<div style="font-size:13px;color:var(--d-mut);padding:12px 0">Loading…</div>`}`;
 }
-window.dmPick = r => { DM.form._target = r; DM.search = ''; DM.flyout = null; render(); };
+window.dmPick = async r => {
+  DM.form._target = r; DM.search = ''; DM.flyout = null; DM.agency = null;
+  if (r && r.target_code && r.unit_code && DM.targetType !== 'hawker') {
+    DM.agencyLoading = true; render();
+    try { DM.agency = await _api(`/agency/${encodeURIComponent(r.unit_code)}/${encodeURIComponent(r.target_code)}`); }
+    catch (_) { DM.agency = null; }
+    DM.agencyLoading = false;
+  }
+  render();
+};
 
 function _pickField(type, label) {
   const s = DM.form._target;
   const title = type === 'hawker' ? 'Select hawker' : 'Select agency';
+  DM.targetType = type;
+  const open = `dmFly({title:'${title}',body:()=>_pickerBody('${type}')})`;
   return _f(label, s
-    ? `<div onclick="dmFly({title:'${title}',body:()=>_pickerBody('${type}')})" style="${IN};cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:center">
+    ? `<div class="dcr-in" onclick="${open}" style="cursor:pointer;display:flex;justify-content:space-between;gap:9px;align-items:center">
         <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.target_name || s.target_code)}</span>
-        ${Number(s.outstanding) > 0 ? _tag(_INR(s.outstanding), 'warn') : ''}</div>`
-    : `<div onclick="dmFly({title:'${title}',body:()=>_pickerBody('${type}')})" style="${IN};cursor:pointer;color:#9aa5b4">Tap to choose…</div>`, true);
+        <span style="color:var(--d-info);font-size:12px;flex:none">change</span></div>`
+    : `<div class="dcr-in" onclick="${open}" style="cursor:pointer;color:var(--d-faint)">Tap to choose…</div>`, true)
+    + (type === 'agent' && s ? _autoPanel() : '');
+}
+
+/* What the ERP already knows, shown the moment an agency is picked. The executive
+   should never key in a mobile number or an outstanding that the system holds — and
+   seeing dues and last collection before the visit is what makes the call useful. */
+function _autoPanel() {
+  const a = DM.agency;
+  if (DM.agencyLoading) return `<div class="dcr-auto" style="font-size:12.5px;color:var(--d-mut)">Loading agency details…</div>`;
+  if (!a) return '';
+  const cell = (k, v) => v == null || v === '' || v === 0
+    ? '' : `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  const tel = String(a.mobile || '').replace(/\D/g, '').slice(-10);
+  return `<div class="dcr-auto">
+    <div style="display:flex;justify-content:space-between;gap:9px;align-items:flex-start">
+      <div style="min-width:0">
+        <div style="font-size:14.5px;font-weight:650;color:var(--d-ink)">${esc(a.ag_name || '')}</div>
+        <div style="font-size:11.5px;color:var(--d-mut);margin-top:2px">${esc([a.city, a.station].filter(Boolean).join(' · '))}</div>
+      </div>
+      ${tel.length === 10 ? `<a href="tel:+91${tel}" class="dcr-tag info" style="text-decoration:none;padding:6px 11px;font-size:12px;flex:none">📞 Call</a>` : ''}
+    </div>
+    <div class="g">
+      ${cell('Contact person', esc(a.contact_person || ''))}
+      ${cell('Mobile', tel ? esc(a.mobile) : '')}
+      ${cell('Email', esc(a.email || ''))}
+      ${cell('Daily copies', _NN(a.daily_copies))}
+      ${cell('Outstanding', `<span style="color:${a.outstanding > 100000 ? 'var(--d-bad)' : 'var(--d-ink)'}">${_INR(a.outstanding)}</span>`)}
+      ${cell(`Last bill${a.last_bill_month ? ' · ' + a.last_bill_month : ''}`, _INR(a.last_bill))}
+      ${cell('Collection this FY', _INR(a.collection_fy))}
+      ${cell('Last collection', a.last_collection_date ? esc(a.last_collection_date) : '')}
+    </div></div>`;
 }
 
 // ── forms ───────────────────────────────────────────────────────────────────
@@ -634,11 +661,12 @@ function _fOffice() {
 }
 
 function _photo(l, sub) {
-  if (DM.photo) return `<div style="position:relative;margin-bottom:11px"><img src="${DM.photo.dataUrl}" style="width:100%;border-radius:9px;display:block">
-    <button onclick="dmClearPhoto()" style="position:absolute;top:7px;right:7px;border:none;background:rgba(15,23,42,.7);color:#fff;border-radius:7px;padding:5px 9px;font-size:11.5px;cursor:pointer">Retake</button></div>`;
-  return `<label style="display:flex;gap:10px;align-items:center;border:1px dashed #d7dde5;border-radius:9px;padding:12px;cursor:pointer;margin-bottom:11px">
-    <span style="font-size:20px">📷</span><span style="min-width:0"><span style="display:block;font-size:13px;color:${K.ink}">${l}</span>
-    <span style="display:block;font-size:11px;color:${K.mut}">${sub}</span></span>
+  if (DM.photo) return `<div style="position:relative;margin-bottom:12px">
+    <img src="${DM.photo.dataUrl}" style="width:100%;border-radius:12px;display:block">
+    <button onclick="dmClearPhoto()" style="position:absolute;top:8px;right:8px;border:none;background:rgba(16,24,40,.72);color:#fff;border-radius:8px;padding:6px 11px;font-size:12px;cursor:pointer">Retake</button></div>`;
+  return `<label class="dcr-photo"><span style="font-size:22px">📷</span>
+    <span style="min-width:0"><span style="display:block;font-size:13.5px;color:var(--d-ink)">${l}</span>
+    <span style="display:block;font-size:11.5px;color:var(--d-mut);margin-top:1px">${sub}</span></span>
     <input type="file" accept="image/*" capture="environment" onchange="dmPhoto(this)" style="display:none"></label>`;
 }
 function _geoLine() { const g = DM.geo;
@@ -860,14 +888,12 @@ VIEWS.dcrm = () => {
     : DM.mode === 'office_work'   ? _fOffice()
     : _home();
 
-  const err = DM.err ? `<div style="background:#fdeceb;color:#b91c1c;border-radius:8px;padding:9px 11px;font-size:12.5px;margin-bottom:11px">
-    ${esc(DM.err)} <a onclick="DM.err=null;render()" style="cursor:pointer;text-decoration:underline;margin-left:5px">dismiss</a></div>` : '';
+  const err = DM.err ? `<div class="dcr-err">${esc(DM.err)}<a onclick="DM.err=null;render()">dismiss</a></div>` : '';
 
-  return `<div style="max-width:640px;margin:0 auto;padding:12px 14px 16px">
-    <div style="display:flex;align-items:center;gap:9px;margin-bottom:11px">
-      ${DM.mode !== null ? `<button onclick="dmHome()" style="flex:none;border:1px solid #d7dde5;background:#fff;color:#334155;border-radius:8px;padding:6px 10px;font-size:13px;cursor:pointer">←</button>` : ''}
-      <span style="font-size:16px;color:${K.ink}">${DM.mode === null ? 'DCR' : esc(TITLES[DM.mode] || 'DCR')}</span>
-    </div>
+  return `<div class="dcr">
+    ${DM.mode !== null ? `<div class="dcr-top">
+      <button class="dcr-back" onclick="dmHome()">&larr;</button>
+      <span class="dcr-title">${esc(TITLES[DM.mode] || 'DCR')}</span></div>` : ''}
     ${err}${body}${_flyout()}
   </div>`;
 };

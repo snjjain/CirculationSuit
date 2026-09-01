@@ -536,6 +536,89 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
+  /* Everything the forms auto-fill once an agency is chosen. One call, because the
+     executive has already tapped the name and should not then wait through four.
+
+     Last bill needs care: agency_outstanding.bill_amt is CUMULATIVE for the financial
+     year, not that month's billing, so one month is the difference between consecutive
+     snapshots — the same telescoping the collections reports use. Taking the raw column
+     would overstate a month's bill several times over by mid-year. */
+  app.get('/api/dcr-m/agency/:unit/:code', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const unit = S(req.params.unit, 10), code = S(req.params.code, 40);
+      const units = await scopeUnits(req);
+      if (units && !units.includes(unit)) return res.status(403).json({ detail: 'Outside your branch scope' });
+
+      const d = new Date();
+      // Financial year starts in April.
+      const fyStart = (d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1) + '-04-01';
+
+      const [master, cur, bills, coll, sup] = await Promise.all([
+        q(`SELECT ag_name, agent_name, mobile_no1, email_id, city_name, station_name,
+                  dist_name, address, ag_class_name, executive_name
+           FROM agency_master WHERE unit = ? AND agcd = ? AND CAST(dpcd AS UNSIGNED) = 1 LIMIT 1`, [unit, code]),
+        q(`SELECT SUM(CASE WHEN cl_amt > 0 THEN cl_amt ELSE 0 END) outstanding,
+                  MAX(last_supply_date) last_supply, SUM(rec_amt) rec_fy, SUM(bill_amt) bill_fy
+           FROM agency_outstanding WHERE unit_code = ? AND ag_code = ? AND period_label = 'CURRENT'`, [unit, code]),
+        /* All this agency's snapshots, newest first. The month to report is whichever
+           actually exists — asking for "last calendar month" returns nothing for the
+           first weeks of a month, since that snapshot is only written at month end. */
+        q(`SELECT period_label, SUM(bill_amt) amt FROM agency_outstanding
+           WHERE unit_code = ? AND ag_code = ? AND period_label <> 'CURRENT'
+           GROUP BY period_label ORDER BY period_label DESC LIMIT 14`, [unit, code]),
+        q(`SELECT -COALESCE(SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END), 0) collected,
+                  COUNT(*) txns, MAX(coll_date) last_date
+           FROM agency_collection WHERE unit_code = ? AND ag_code = ? AND is_valid = 1
+             AND coll_date >= ?`, [unit, code, fyStart]),
+        q(`SELECT ROUND(SUM(sup_copy) / NULLIF(COUNT(DISTINCT supply_date), 0)) daily_copies
+           FROM supply_data WHERE unit_code = ? AND agcd = ? AND sup_type_code = 'S01'
+             AND COALESCE(publ,'') NOT IN ('P14')
+             AND supply_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)`, [unit, code]),
+      ]);
+
+      const m = master.rows[0] || {};
+      /* A BILL-YYYY-MM snapshot is that month's billing as the ERP itself reports it,
+         and is preferred wherever present. Failing that, a month is the difference
+         between consecutive cumulative snapshots. */
+      let lastBill = 0, lastBillMonth = null, billBasis = null;
+      const billRows = bills.rows.filter(r => /^BILL-\d{4}-\d{2}$/.test(r.period_label));
+      if (billRows.length) {
+        const top = billRows.sort((a, b) => b.period_label.localeCompare(a.period_label))[0];
+        lastBill = N(top.amt); lastBillMonth = top.period_label.slice(5); billBasis = 'ERP monthly bill';
+      } else {
+        const months = bills.rows.filter(r => /^\d{4}-\d{2}$/.test(r.period_label))
+          .sort((a, b) => b.period_label.localeCompare(a.period_label));
+        if (months.length >= 2) {
+          lastBill = Math.max(0, N(months[0].amt) - N(months[1].amt));
+          lastBillMonth = months[0].period_label; billBasis = 'difference of cumulative snapshots';
+        } else if (months.length === 1) {
+          lastBill = N(months[0].amt); lastBillMonth = months[0].period_label; billBasis = 'first snapshot';
+        }
+      }
+
+      res.json({
+        unit_code: unit, target_code: code,
+        ag_name: m.ag_name || null,
+        contact_person: m.agent_name || null,
+        mobile: m.mobile_no1 || null,
+        email: m.email_id || null,
+        address: m.address || null,
+        city: m.city_name || null, station: m.station_name || null, district: m.dist_name || null,
+        ag_class: m.ag_class_name || null, executive: m.executive_name || null,
+        daily_copies: N(sup.rows[0] && sup.rows[0].daily_copies),
+        outstanding: N(cur.rows[0] && cur.rows[0].outstanding),
+        last_supply: iso(cur.rows[0] && cur.rows[0].last_supply),
+        last_bill: lastBill, last_bill_month: lastBillMonth, last_bill_basis: billBasis,
+        collection_fy: N(coll.rows[0] && coll.rows[0].collected),
+        collection_txns: N(coll.rows[0] && coll.rows[0].txns),
+        last_collection_date: iso(coll.rows[0] && coll.rows[0].last_date),
+        fy_from: fyStart,
+      });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
   // ══ CHECK-IN / CHECK-OUT ═══════════════════════════════════════════════════
   app.post('/api/dcr-m/visit/check-in', async (req, res) => {
     try {
