@@ -4526,6 +4526,9 @@ require('./agent_app')({ app, q });
 // ── DCR web app — circulation-staff agent/hawker visits (branch-scoped, writes to MySQL) ──
 require('./dcr_app')({ app, q, getScopeUnitCodes });
 
+// ── DCR M-Site — field executive's day: trip, geofenced check-in, tour approval ──
+require('./dcr_msite')({ app, q, getScopeUnitCodes });
+
 // ── DCR Analytics — manager/admin field visit intelligence & agency GPS map ──
 require('./dcr_analytics')({ app, q, getScopeUnitCodes });
 
