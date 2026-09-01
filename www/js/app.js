@@ -4214,8 +4214,13 @@ function _msUnit(unitCode) {
   return (cache[unitCode] = tot > 0 ? Math.round(our / tot * 100) : null);
 }
 
+/* Early in a month "this month" is a handful of days and every comparison against it
+   is noise, so the dashboard opens on last month until the 10th and on this month from
+   the 11th. Only the default moves — the picker still switches freely. */
+function _ccDefaultRange() { return new Date().getDate() <= 10 ? 'last_month' : 'mtd'; }
+
 function _ccState() {
-  return S.live.cc || (S.live.cc = { asOn: '', compare: 'prev_year', range: 'mtd', rangeFrom: '', rangeTo: '', state: '', unit: '', district: '', data: null, _loading: false, drill: null });
+  return S.live.cc || (S.live.cc = { asOn: '', compare: 'prev_year', range: _ccDefaultRange(), rangeFrom: '', rangeTo: '', state: '', unit: '', district: '', data: null, _loading: false, drill: null });
 }
 window.ccSet = (k, v) => {
   const st = _ccState();
@@ -5686,7 +5691,9 @@ function _ccStateCard(s, d) {
       null, null, `ccOpenState('${q(s.key)}')`)}
 
     ${_ccKpiRow('COLLECTION', _ccINR(s.collection.current),
-      `of ${_ccINR(s.collection.prev_month_billing)} billed ${esc(s.collection.prev_month_label || '')}`,
+      s.collection.prev_month_billing == null
+        ? `${esc(s.collection.prev_month_label || '')} billing not loaded yet`
+        : `of ${_ccINR(s.collection.prev_month_billing)} billed ${esc(s.collection.prev_month_label || '')}`,
       `<span style="font-size:11.5px;font-weight:800;color:${s.collection.collection_pct >= 85 ? '#15803d' : s.collection.collection_pct >= 60 ? '#b45309' : '#b91c1c'}">${s.collection.collection_pct == null ? '—' : s.collection.collection_pct + '%'}</span>`,
       s.collection.collection_pct, s.collection.collection_pct >= 85 ? '#22c55e' : s.collection.collection_pct >= 60 ? '#f59e0b' : '#ef4444',
       `ccOpenState('${q(s.key)}')`)}
@@ -5829,10 +5836,20 @@ function _cmdViewNew() {
       trend: cmpTrend(t.collection.value, t.collection.prev, t.collection.growth_pct),
       sub: `${_ccN(t.collection.txn)} receipts · ${esc(t.collection.window)}${wasLine(t.collection.prev, _ccINR)}`,
       onClick: `ccDrill('collections','${q(anyState)}')` })}
-    ${_ccTopCard({ label: 'Collection vs Billing', color: '#10b981',
-      value: (t.collection_pct.value == null ? '—' : t.collection_pct.value + '%'),
-      sub: `${esc(d.prev_month_label)} billing ${_ccINR(t.collection_pct.billed)} · collected ${_ccINR(t.collection_pct.collected)}`,
-      barPct: t.collection_pct.value, onClick: `ccDrill('collections','${q(anyState)}')` })}
+    ${(()=>{ const cp = t.collection_pct;
+      /* Collections in the selected range settle the bill raised the month before it,
+         so the card names both months. Until that bill is snapshotted the ratio has no
+         denominator — say which month is missing rather than divide by a zero that
+         reads as "collected nothing". */
+      // A range whose later months have no snapshot yet is measured on the months it
+      // does have; saying so keeps a partial denominator from reading as a whole one.
+      const gap = (cp.bill_missing || []).length ? ` · ${esc(cp.bill_missing.join(', '))} not in yet` : '';
+      const sub = cp.billed == null
+        ? `${esc((cp.bill_missing || []).join(', '))} billing not loaded yet · collected ${_ccINR(cp.collected)}`
+        : `${esc((cp.bill_months || []).join(', '))} billing ${_ccINR(cp.billed)} · ${esc(cp.coll_label || '')} collected ${_ccINR(cp.collected)}${gap}`;
+      return _ccTopCard({ label: 'Collection vs Billing', color: '#10b981',
+        value: (cp.value == null ? '—' : cp.value + '%'),
+        sub, barPct: cp.value, onClick: `ccDrill('collections','${q(anyState)}')` }); })()}
     ${_ccTopCard({ label: 'Outstanding', color: '#ef4444',
       value: _ccINR(t.outstanding.value), trend: _ccTrend(t.outstanding.growth_pct, true),
       // Outstanding is a balance as on today, so it is always measured against the
@@ -6058,7 +6075,7 @@ VIEWS.command = () => (cmdDesign() === 'new' ? _cmdViewNew() : _cmdViewLegacy())
    ══════════════════════════════════════════════════════════════════════════════ */
 function _csState() {
   S.ccStateDash = S.ccStateDash || {
-    state: 'RAJASTHAN', unit: '', range: 'mtd', rangeFrom: '', rangeTo: '',
+    state: 'RAJASTHAN', unit: '', range: _ccDefaultRange(), rangeFrom: '', rangeTo: '',
     data: null, _loading: false,
     movers: null, _movLoading: false, movTab: 'declining', movAll: false,
     sp: null, _spLoading: false, spPage: 1, spStatus: '',

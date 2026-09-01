@@ -431,18 +431,40 @@ module.exports = function installCommandCentre({ app, q }) {
 
   // ── Collection: this month vs LAST MONTH'S BILLING (the business question the
   //    doc asks for), plus previous-day receipts and YTD-vs-last-YTD ───────────
-  async function collectionByState(asOn, prev, unitScope) {
-    const mStart = asOn.slice(0, 8) + '01';
+  /* Which bill a collection settles: an ERP monthly bill is raised at month end and
+     paid over the month that follows, so collections made in month M are answering
+     the bill raised for M-1. Every month the selected range touches is therefore
+     shifted back one, and those months' bills are what the range is measured against.
+
+     Each month resolves independently: BILL-YYYY-MM is the ERP's own monthly figure
+     and is preferred wherever present; failing that a month is the difference between
+     consecutive cumulative snapshots, because agency_outstanding.bill_amt is
+     cumulative for the FY and taking it raw overstates billing several-fold. A month
+     with neither is skipped and counted, so a partial answer is never passed off as
+     a whole one. */
+  const _billMonthsFor = win => {
+    const pad = n => String(n).padStart(2, '0');
+    const lbl = dt => `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}`;
+    const f = new Date(win.from + 'T00:00:00'), t = new Date(win.to + 'T00:00:00');
+    const out = [];
+    let cur = new Date(f.getFullYear(), f.getMonth(), 1);
+    const end = new Date(t.getFullYear(), t.getMonth(), 1);
+    while (cur <= end && out.length < 36) {
+      const b = new Date(cur.getFullYear(), cur.getMonth() - 1, 1);
+      out.push({ label: lbl(b), prev: lbl(new Date(b.getFullYear(), b.getMonth() - 1, 1)) });
+      cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+    }
+    return out;
+  };
+
+  async function collectionByState(win, asOn, prev, unitScope) {
+    const mStart = win.from, mEnd = win.to;
     const d = new Date(asOn + 'T00:00:00');
-    const pm = new Date(d.getFullYear(), d.getMonth() - 1, 1);
-    const prevMonthLabel = `${pm.getFullYear()}-${String(pm.getMonth() + 1).padStart(2, '0')}`;
-    // agency_outstanding.bill_amt on a monthly snapshot is CUMULATIVE for the financial
-    // year, not that month's billing (RJ: Jun 33.55 Cr -> Jul 38.89 Cr). One month's
-    // billing is therefore the difference between consecutive snapshots — the same
-    // telescoping the Short Payment report uses. Taking the raw value would overstate
-    // billing ~7x by July and make every state look like it collected almost nothing.
-    const pm2 = new Date(d.getFullYear(), d.getMonth() - 2, 1);
-    const prevPrevLabel = `${pm2.getFullYear()}-${String(pm2.getMonth() + 1).padStart(2, '0')}`;
+    const billMonths = _billMonthsFor(win);
+    const prevMonthLabel = billMonths.length
+      ? (billMonths.length === 1 ? billMonths[0].label
+         : `${billMonths[0].label}…${billMonths[billMonths.length - 1].label}`)
+      : null;
     const yStart = asOn.slice(0, 4) + '-01-01';
     const lyStart = (Number(asOn.slice(0, 4)) - 1) + '-01-01';
     const lyAsOn  = (Number(asOn.slice(0, 4)) - 1) + asOn.slice(4);
@@ -451,18 +473,24 @@ module.exports = function installCommandCentre({ app, q }) {
 
     const [mtd, prevDay, ytd, lyYtd, billing] = await Promise.all([
       q(`SELECT state_name st, -COALESCE(SUM(amount),0) amt, COUNT(*) txn, COUNT(DISTINCT ag_code) agencies
-         FROM agency_collection WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY state_name`, [mStart, asOn, ...uP]),
+         FROM agency_collection WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY state_name`, [mStart, mEnd, ...uP]),
       q(`SELECT state_name st, -COALESCE(SUM(amount),0) amt FROM agency_collection
          WHERE is_valid=1 AND coll_date = ?${uCl} GROUP BY state_name`, [prev, ...uP]),
       q(`SELECT state_name st, -COALESCE(SUM(amount),0) amt FROM agency_collection
          WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY state_name`, [yStart, asOn, ...uP]),
       q(`SELECT state_name st, -COALESCE(SUM(amount),0) amt FROM agency_collection
          WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY state_name`, [lyStart, lyAsOn, ...uP]),
-      // Two consecutive snapshots — differenced below to isolate last month's billing.
-      q(`SELECT period_label, group_unit_name st, SUM(bill_amt) amt FROM agency_outstanding
-         WHERE period_label IN (?, ?)${unitScope ? ' AND unit_code = ?' : ''}
-         GROUP BY period_label, group_unit_name`,
-        [prevMonthLabel, prevPrevLabel, ...uP]),
+      /* Every label the shifted months could need: the ERP monthly bill, the month's
+         own cumulative snapshot, and the one before it to difference against. */
+      (() => {
+        const need = new Set();
+        billMonths.forEach(m => { need.add('BILL-' + m.label); need.add(m.label); need.add(m.prev); });
+        const labels = [...need];
+        if (!labels.length) return { rows: [] };
+        return q(`SELECT period_label, group_unit_name st, SUM(bill_amt) amt FROM agency_outstanding
+           WHERE period_label IN (${labels.map(() => '?').join(',')})${unitScope ? ' AND unit_code = ?' : ''}
+           GROUP BY period_label, group_unit_name`, [...labels, ...uP]);
+      })(),
     ]);
     const mk = () => blank();
     const out = { mtd: mk(), prevDay: mk(), ytd: mk(), lyYtd: mk(), billing: mk(), txn: mk(), agencies: mk() };
@@ -470,17 +498,36 @@ module.exports = function installCommandCentre({ app, q }) {
     prevDay.rows.forEach(r => { out.prevDay[bucketOf(r.st)] += N(r.amt); });
     ytd.rows.forEach(r => { out.ytd[bucketOf(r.st)] += N(r.amt); });
     lyYtd.rows.forEach(r => { out.lyYtd[bucketOf(r.st)] += N(r.amt); });
-    const cumThis = blank(), cumPrev = blank();
+    /* Fold the snapshots into per-label, per-state sums, then resolve each shifted
+       month on its own and add up what resolved. */
+    const byLabel = new Map();                       // label -> {stateKey: amount}
     billing.rows.forEach(r => {
       const b = bucketOfOs(r.st);
-      if (r.period_label === prevMonthLabel) cumThis[b] += N(r.amt);
-      else cumPrev[b] += N(r.amt);
+      if (!byLabel.has(r.period_label)) byLabel.set(r.period_label, blank());
+      byLabel.get(r.period_label)[b] += N(r.amt);
     });
-    // Difference the cumulative snapshots. If the earlier one is missing (e.g. the
-    // month is April, the FY's first), the cumulative figure IS that month's billing.
-    const havePrev = billing.rows.some(r => r.period_label === prevPrevLabel);
-    STATES.forEach(s => { out.billing[s.key] = havePrev ? Math.max(0, cumThis[s.key] - cumPrev[s.key]) : cumThis[s.key]; });
-    out.prev_month_label = prevMonthLabel;
+    const resolved = [], missing = [];
+    let basis = null;
+    billMonths.forEach(m => {
+      const bill = byLabel.get('BILL-' + m.label), cum = byLabel.get(m.label), cumPrev = byLabel.get(m.prev);
+      let pick = null, how = null;
+      if (bill) { pick = s => bill[s]; how = 'ERP monthly bill'; }
+      else if (cum && cumPrev) { pick = s => Math.max(0, cum[s] - cumPrev[s]); how = 'difference of cumulative snapshots'; }
+      else if (cum) { pick = s => cum[s]; how = 'first snapshot of the year'; }
+      if (!pick) { missing.push(m.label); return; }
+      STATES.forEach(s => { out.billing[s.key] += pick(s.key); });
+      resolved.push(m.label); basis = basis || how;
+    });
+    /* A month whose bill has not been snapshotted yet must not read as zero billing --
+       that made a fully-collected month look like a total collection failure. The card
+       shows "--" instead, and says which month is not in yet. */
+    out.billing_months  = resolved;
+    out.billing_missing = missing;
+    out.billing_basis   = basis;
+    out.has_billing     = resolved.length > 0;
+    out.prev_month_label = resolved.length
+      ? (resolved.length === 1 ? resolved[0] : `${resolved[0]}…${resolved[resolved.length - 1]}`)
+      : prevMonthLabel;
     return out;
   }
 
@@ -626,7 +673,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const winLabel = win.from === win.to ? `on ${win.to}` : `${win.label} · ${win.from} → ${win.to}`;
       const [sup, col, os, dcr, heads, rng, rngPrev] = await Promise.all([
         supplyByState(win, prevWin, unitScope),
-        collectionByState(asOn, prev, unitScope),
+        collectionByState(win, asOn, prev, unitScope),
         osByState(unitScope),
         dcrByState(asOn, prev, unitScope),
         stateHeads(),
@@ -642,7 +689,7 @@ module.exports = function installCommandCentre({ app, q }) {
         const supPct = pct(supCur, supPrev);
         const osCur = os.cur[k], osPrev = os.prev[k];
         const osPct = pct(osCur, osPrev);
-        const billing = col.billing[k], mtd = col.mtd[k];
+        const billing = col.has_billing ? col.billing[k] : null, mtd = col.mtd[k];
         const collPct = billing > 0 ? (mtd / billing) * 100 : null;
         const dcrCur = dcr.cur[k], dcrPrev = dcr.prev[k];
         const coverage = dcr.book[k] > 0 ? (dcr.visited[k] / dcr.book[k]) * 100 : null;
@@ -660,7 +707,7 @@ module.exports = function installCommandCentre({ app, q }) {
           },
           collection: {
             current: mtd, prev_month_billing: billing, collection_pct: r1(collPct),
-            gap: billing - mtd, previous_day: col.prevDay[k],
+            gap: billing == null ? null : billing - mtd, previous_day: col.prevDay[k],
             ytd: col.ytd[k], last_year_ytd: col.lyYtd[k], ytd_growth_pct: r1(pct(col.ytd[k], col.lyYtd[k])),
             txn: col.txn[k], agencies_paid: col.agencies[k], prev_month_label: col.prev_month_label,
             // Collection is judged against how much of last month's bill has come in,
@@ -688,7 +735,7 @@ module.exports = function installCommandCentre({ app, q }) {
       // collection and field visits sum over the selected range.
       const sum = f => states.reduce((a, s) => a + f(s), 0);
       const supTot = sum(s => s.supply.current), supPrevTot = sum(s => s.supply.previous);
-      const billTot = sum(s => s.collection.prev_month_billing);
+      const billTot = col.has_billing ? sum(s => s.collection.prev_month_billing) : null;
       const mtdTot = sum(s => s.collection.current);
       const osTot = sum(s => s.os.current), osPrevTot = sum(s => s.os.previous);
       const bookTot = sum(s => s.dcr.agencies_total);
@@ -707,7 +754,11 @@ module.exports = function installCommandCentre({ app, q }) {
                          growth_pct: r1(pct(rng.collection, rngPrev.collection)),
                          txn: rng.txn, agencies_paid: rng.agencies_paid, window: win.label },
         collection_pct:{ value: billTot > 0 ? r1(mtdTot / billTot * 100) : null, billed: billTot, collected: mtdTot,
-                         window: `this month vs ${col.prev_month_label} billing` },
+                         bill_months: col.billing_months, bill_missing: col.billing_missing,
+                         bill_basis: col.billing_basis, coll_label: win.label,
+                         window: col.has_billing
+                           ? `${win.label} collection vs ${col.prev_month_label} billing`
+                           : `${col.billing_missing.join(', ')} billing not snapshotted yet` },
         outstanding:   { value: osTot, prev: osPrevTot, growth_pct: r1(pct(osTot, osPrevTot)), window: `as on today` },
         critical:      { value: sum(s => s.os.critical_agencies), of: sum(s => s.os.agencies), window: 'agencies above ₹1 L' },
         coverage:      { value: rng.agencies_visited, prev: rngPrev.agencies_visited,
