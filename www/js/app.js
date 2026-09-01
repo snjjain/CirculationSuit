@@ -71,6 +71,19 @@ const APP_META = {
   taxi:   { name: "Taxi",       audience: "Taxi Drivers" },
 };
 
+/* Which apps are actually finished. The launcher builds cards from the user's assigned
+   modules, so an app that is still being built would otherwise appear the moment its
+   module is granted — and a half-finished app on the home screen of a live SSO reads
+   as a broken app, not an upcoming one. Set true to release; assignment and rights
+   still apply on top, so releasing an app does not grant it to anyone. */
+const APP_RELEASED = {
+  dcr:    true,
+  agent:  false,
+  hawker: false,
+  survey: false,
+  taxi:   false,
+};
+
 /* ---------- state & persistence ---------- */
 let S = { user: null, screen: "home", openGroups: {}, sideOpen: false, drill: {}, live: {}, range: null };
 const $ = s => document.querySelector(s);
@@ -462,6 +475,7 @@ VIEWS.home = () => {
   // Field applications from the user's assigned modules (respecting per-app view rights)
   (u.modules || []).forEach(k => {
     const a = APP_MENU[k]; if (!a) return;
+    if (!APP_RELEASED[k]) return;                       // still being built — not on the launcher
     if (typeof permAllows === "function" && permAllows(k, "view") === false) return;
     const m = APP_META[k] || {};
     cards.push({ screen:"app_" + k, name:m.name || a.label, audience:m.audience || "",
@@ -832,7 +846,12 @@ function dcrScreen(inner) {
 }
 
 /* ── DCR icon dashboard ── */
-VIEWS.app_dcr = () => {
+/* The DCR card on the launcher opens the M-Site — the trip / geofenced check-in /
+   tour-approval flow in dcr_msite.js. The older form-based screens below are kept and
+   still reachable by their own routes, so nothing that exists breaks. */
+VIEWS.app_dcr = () => (typeof VIEWS.dcrm === 'function' ? VIEWS.dcrm() : VIEWS.app_dcr_forms());
+
+VIEWS.app_dcr_forms = () => {
   if (!S.live.dcr) { if (!S.live._dcrLoading) fetchDcr(); return dcrBackBar() + `<div class="card pad">Loading…</div>`; }
   const rep = liveGet("dcrRep_" + todayISO(), "/api/dcr/day-report");
   const kpis = `<div class="grid kpis">
