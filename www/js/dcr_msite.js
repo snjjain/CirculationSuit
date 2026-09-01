@@ -212,10 +212,19 @@ function _home() {
           <span class="dcr-tag good">LIVE</span></div>
         <button class="dcr-btn stop" onclick="dmEndTrip()">Check out &amp; close day</button>
       </div>`
-    : t
-      ? `<div class="dcr-card" style="text-align:center">
-          <div style="font-size:12.5px;color:var(--d-mut)">Day closed · ${t.total_visits || 0} visits · ${t.total_km || 0} km · ${_INR(t.collection_amt)}</div></div>`
-      : `<div style="margin-bottom:12px">${_btn(DM.busy === 'trip' ? 'Starting…' : '▶  Start trip', 'dmStartTrip()', 'ok', DM.busy === 'trip' ? 'disabled' : '')}</div>`;
+    /* Not running: the start button shows whether or not a closed trip already exists.
+       Gating it behind "no trip today" stranded anyone who closed the day and then had
+       another call to make, with no way back on duty. Any earlier trip is summarised
+       under the button rather than replacing it. */
+    : `<div class="dcr-card dcr-start">
+        <div class="hd"><div>
+          <div class="ttl">Start your tour</div>
+          <div class="sub">Captures your starting point — the day's travel km is measured from here.</div>
+        </div><span style="font-size:26px;flex:none">🛣️</span></div>
+        <button class="dcr-btn ok" onclick="dmStartTrip()" ${DM.busy === 'trip' ? 'disabled' : ''}>
+          ${DM.busy === 'trip' ? 'Reading your location…' : '▶  Start your tour'}</button>
+        ${t ? `<div class="ftr">Earlier today · ${t.total_visits || 0} visits · ${t.total_km || 0} km · ${_INR(t.collection_amt)}</div>` : ''}
+      </div>`;
 
   /* Today's plan in visit order, next stop called out. Tapping opens the visit already
      filled in; the ⋮ menu reschedules or cancels, because a plan that cannot change
@@ -291,9 +300,53 @@ window.dmOpen = key => {
   DM.form.visit_date = _DAY(); DM.form.check_in = _NOW();
   DM.mode = key; DM.targets = null; DM.targetsKey = ''; DM.search = '';
   if (key === 'calling') DM.targetType = 'agent';
+  /* An agency visit almost always answers a plan, so the plan list comes first and
+     the agency, purpose and time carry across from it. Searching for an agency the
+     executive already planned to see is re-keying what the app knows. */
+  if (key === 'agency_visit') { DM.pickPlan = true; DM.pickRows = null; }
   render();
 };
+
+/* Today's plans, both approved and awaiting approval. Pending ones are offered
+   because approval often lags the visit, and an executive standing at the counter
+   should not be blocked by an incharge who has not tapped approve yet. */
+async function _loadPickPlans() {
+  if (DM.pickRows) return;
+  try { const r = await _api(`/tour?date=${_DAY()}`);
+        DM.pickRows = (r.rows || []).filter(x => ['approved', 'submitted', 'done'].includes(x.status)); }
+  catch (_) { DM.pickRows = []; }
+  if (_dmOn()) render();
+}
+function _planPick() {
+  _loadPickPlans();
+  const rows = DM.pickRows;
+  const skip = `<button class="dcr-btn ghost" onclick="dmVisitAdhoc()" style="margin-top:12px">Visit an agency not in the plan</button>`;
+  if (!rows) return `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">Loading your plan…</div>`;
+  if (!rows.length) return `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut);text-align:center">
+      No agency planned for today.</div>` + skip;
+  return _sec('Today\'s plan') + `<div class="dcr-card">${rows.map(r => {
+    const done = r.status === 'done';
+    return `<div class="dcr-row ${done ? 'done' : ''}" ${done ? '' : `onclick="dmStartFromPlan(${r.id})" style="cursor:pointer"`}>
+      <span style="font-size:16px;flex:none">${done ? '✅' : '🏪'}</span>
+      <div style="min-width:0;flex:1">
+        <div class="t">${esc(r.target_name || r.target_code)}</div>
+        <div class="s">${esc(r.purpose || 'Agency visit')}${r.visit_time ? ' · ' + esc(r.visit_time) : ''}</div></div>
+      ${done ? _tag('Visited', 'mute')
+             : r.status === 'submitted' ? _tag('Awaiting approval', 'warn') : _tag('Approved', 'good')}
+    </div>`;
+  }).join('')}</div>` + skip;
+}
+// Ad-hoc visits stay possible; the picker is the default path, not a gate.
+window.dmVisitAdhoc = () => { DM.pickPlan = false; DM.err = null; render(); };
 window.dmHome = () => { DM.mode = null; DM.err = null; DM.flyout = null; DM.dashLoaded = false; render(); };
+/* Back out of a plan-opened visit to the plan list, not all the way home — a mis-tapped
+   row otherwise costs the executive the whole list and a return trip through the tile. */
+window.dmBack = () => {
+  if (DM.mode === 'agency_visit' && !DM.pickPlan && DM.form && DM.form._fromPlan) {
+    DM.pickPlan = true; DM.err = null; DM.flyout = null; render(); return;
+  }
+  dmHome();
+};
 
 /* Feedback opened from a visit keeps that visit's form intact underneath — the
    executive fills the questionnaire and comes back to the half-written report, rather
@@ -418,7 +471,7 @@ window.dmComp = (p, v) => { DM.extra.comp = DM.extra.comp || {}; DM.extra.comp[p
 function _fAgencyVisit() {
   const fromPlan = DM.form._fromPlan;
   return (fromPlan ? `<div style="font-size:11.5px;color:#0369a1;background:#e6f2fb;border-radius:8px;padding:8px 10px;margin-bottom:11px">
-      From your approved plan${DM.form.purpose ? ' · ' + esc(DM.form.purpose) : ''}</div>` : '') +
+      ${DM.form._planStatus === 'submitted' ? 'From your plan · awaiting approval' : 'From your approved plan'}${DM.form.purpose ? ' · ' + esc(DM.form.purpose) : ''}</div>` : '') +
     _sec('Visit') +
     _pickField('agent', 'Agency') +
     _row(_f('Check-in', _in('check_in', '', 'time')), _f('Check-out', _in('check_out', '', 'time'))) +
@@ -699,15 +752,29 @@ function _approvals() {
 /* Opening from an approved plan carries the agency, purpose and time across, so the
    executive never picks the same agency twice. */
 window.dmStartFromPlan = async id => {
-  const p = (DM.approved || []).find(x => Number(x.id) === Number(id));
+  /* The same row is reachable from three lists — the dashboard's today list, the
+     Approvals tab and the Agency Visit picker — each of which loads into its own
+     state. Looking in only one of them silently did nothing from the other two. */
+  const pools = [DM.pickRows, DM.approved, DM.plan && DM.plan.rows];
+  let p = null;
+  for (const pool of pools) { p = (pool || []).find(x => Number(x.id) === Number(id)); if (p) break; }
   if (!p) return;
+  DM.pickPlan = false;
   DM.form = {}; DM.extra = {}; DM.photo = null; DM.err = null;
   DM.form._target = { unit_code: p.unit_code, target_code: p.target_code, target_name: p.target_name,
                       outstanding: p.outstanding_snap, city: p.target_extra };
-  DM.form._fromPlan = true; DM.form.plan_id = p.id;
+  DM.form._fromPlan = true; DM.form.plan_id = p.id; DM.form._planStatus = p.status;
   DM.form.purpose = p.purpose || ''; DM.form.visit_date = _DAY();
   DM.form.check_in = p.visit_time || _NOW();
-  DM.mode = 'agency_visit'; render();
+  DM.mode = 'agency_visit';
+
+  /* The plan row carries only a name and a stale outstanding snapshot. Pull the same
+     live ERP details a manual pick gets, so a visit opened from the plan is not the
+     one place the executive sees less than the app knows. */
+  DM.agency = null; DM.agencyLoading = true; render();
+  try { DM.agency = await _api(`/agency/${encodeURIComponent(p.unit_code)}/${encodeURIComponent(p.target_code)}`); }
+  catch (_) { DM.agency = null; }
+  DM.agencyLoading = false; render();
 };
 
 // ── DCR dashboard (not the management one) ──────────────────────────────────
@@ -881,7 +948,7 @@ VIEWS.dcrm = () => {
     : DM.mode === 'dash'          ? _dash()
     : DM.mode === 'approvals'     ? _approvals()
     : DM.mode === 'plan_tour'     ? _fPlanTour()
-    : DM.mode === 'agency_visit'  ? _fAgencyVisit()
+    : DM.mode === 'agency_visit'  ? (DM.pickPlan ? _planPick() : _fAgencyVisit())
     : DM.mode === 'agent_feedback'? _fFeedback()
     : DM.mode === 'calling'       ? _fCalling()
     : DM.mode === 'center_attn'   ? _fCentreAttn()
@@ -895,7 +962,7 @@ VIEWS.dcrm = () => {
 
   return `<div class="dcr">
     ${DM.mode !== null ? `<div class="dcr-top">
-      <button class="dcr-back" onclick="dmHome()">&larr;</button>
+      <button class="dcr-back" onclick="dmBack()">&larr;</button>
       <span class="dcr-title">${esc(TITLES[DM.mode] || 'DCR')}</span></div>` : ''}
     ${err}${body}${_flyout()}
   </div>`;

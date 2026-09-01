@@ -73,6 +73,13 @@
 
 /* ── cards & sections ─────────────────────────────────────────────────────── */
 .dcr-card { background: var(--d-card); border-radius: var(--d-r); padding: 14px; margin-bottom: 12px; box-shadow: var(--d-shadow); }
+
+/* Start-of-day card. The one action the whole day hangs off, so it is given a
+   card of its own rather than sitting as a bare button in the flow. */
+.dcr-start .hd { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+.dcr-start .ttl { font-size: 15px; font-weight: 650; color: var(--d-ink); }
+.dcr-start .sub { font-size: 11.5px; color: var(--d-mut); margin-top: 3px; line-height: 1.45; }
+.dcr-start .ftr { font-size: 11.5px; color: var(--d-mut); text-align: center; margin-top: 10px; }
 .dcr-sec { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--d-faint);
            margin: 18px 0 9px; display: flex; align-items: center; gap: 9px; }
 .dcr-sec::after { content: ''; flex: 1; height: 1px; background: var(--d-line); }
