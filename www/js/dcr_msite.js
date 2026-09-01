@@ -20,6 +20,8 @@ const DM = {
   pending: null, team: null, live: null, day: null,
   geo: null, geoAt: 0, geoErr: null, photo: null,
   fbSet: 'basic', busy: '', flyout: null, msOpen: '',
+  dictLang: (() => { try { return localStorage.getItem('dcr_dict_lang') || 'hi-IN'; } catch (_) { return 'hi-IN'; } })(),
+  lang: (() => { try { return localStorage.getItem('dcr_lang') || 'en'; } catch (_) { return 'en'; } })(),
 };
 
 function _dmOn() { return S.screen === 'app_dcr' || String(S.screen || '').startsWith('dcrm'); }
@@ -62,21 +64,150 @@ async function _load(force) {
 const K = { ink: 'var(--d-ink)', mut: 'var(--d-mut)', line: 'var(--d-line)', s2: 'var(--d-soft)' };
 const IN = '';   // styling now lives in css/dcr.css
 
-const _sec = t => `<div class="dcr-sec">${t}</div>`;
+/* ── language ────────────────────────────────────────────────────────────────
+   Pairs, not a one-way map, so the same table serves both directions: the visit
+   forms are written in English and the feedback questionnaire in Hindi, and each
+   needs translating towards whichever language is on.
+
+   Translation happens inside the atoms below, so every label in the app is covered
+   without a T() at 150 call sites — and a string with no entry passes through
+   unchanged, which is what keeps proper nouns and agency names alone. Only display
+   text is ever translated; option *values* are stored in MySQL and must not move. */
+const DICT = [
+  // chrome, dashboard, navigation
+  ['Home', 'होम'], ['Dashboard', 'डैशबोर्ड'], ['Approvals', 'स्वीकृति'], ['Apps', 'ऐप्स'],
+  ['Forms', 'फ़ॉर्म'], ['Today', 'आज'], ['Entries', 'प्रविष्टियाँ'], ['End duty', 'ड्यूटी समाप्त'],
+  ['Start your tour', 'अपना दौरा शुरू करें'], ['Trip running', 'दौरा जारी'],
+  ['Check out & close day', 'चेक-आउट कर दिन बंद करें'], ['Visit achievement', 'विज़िट उपलब्धि'],
+  ['Target', 'लक्ष्य'], ['Done', 'पूर्ण'], ['Collection', 'वसूली'], ['Distance', 'दूरी'],
+  ['Duty', 'ड्यूटी'], ['Calls', 'कॉल'], ["Today's plan", 'आज का प्लान'], ["Today's visits", 'आज की विज़िट'],
+  ['Next visit', 'अगली विज़िट'], ['Pending', 'लंबित'], ['Visited', 'विज़िट हो गई'],
+  ['Approved', 'स्वीकृत'], ['Awaiting approval', 'स्वीकृति प्रतीक्षित'],
+  ['Waiting for your incharge to approve', 'इंचार्ज की स्वीकृति का इंतज़ार'],
+  ['Visit an agency not in the plan', 'प्लान से बाहर की एजेंसी विज़िट करें'],
+  ['Field visits', 'फ़ील्ड विज़िट'], ['Phone calls', 'फ़ोन कॉल'], ['At location', 'स्थान पर'],
+  ['Outside geofence', 'जियोफ़ेंस के बाहर'], ['Collected (₹)', 'वसूली (₹)'],
+  // form tiles
+  ['Plan Tour', 'टूर प्लान'], ['Agency Visit', 'एजेंसी विज़िट'], ['Calling', 'कॉलिंग'],
+  ['Attendance', 'उपस्थिति'], ['Hawker Visit', 'हॉकर विज़िट'], ['Reader Visit', 'रीडर विज़िट'],
+  ['New Area', 'नया क्षेत्र'], ['Office / Other', 'कार्यालय / अन्य'],
+  // section heads
+  ['Tour planning', 'टूर प्लानिंग'], ['Visit', 'विज़िट'], ['Growth commitment', 'ग्रोथ प्रतिबद्धता'],
+  ['Outcome', 'परिणाम'], ['Agent feedback', 'एजेंट फ़ीडबैक'], ['Call report', 'कॉल रिपोर्ट'],
+  ['Cash sale centre', 'कैश सेल सेंटर'], ['Hawker visit', 'हॉकर विज़िट'],
+  ['Outstanding & collection', 'बकाया व वसूली'], ['Reader / lead', 'रीडर / लीड'],
+  ['Newspaper', 'समाचार पत्र'], ['New area', 'नया क्षेत्र'], ['Work', 'कार्य'],
+  ['People', 'व्यक्ति'], ['Description', 'विवरण'], ['Growth target', 'ग्रोथ लक्ष्य'],
+  ['Competitor supply in area', 'क्षेत्र में प्रतिस्पर्धी सप्लाई'],
+  // field labels
+  ['Date', 'दिनांक'], ['Time', 'समय'], ['Purpose', 'उद्देश्य'], ['Agency', 'एजेंसी'],
+  ['What do you intend to achieve?', 'क्या हासिल करना चाहते हैं?'],
+  ['Publications carried', 'रखे जाने वाले समाचार पत्र'], ['Copies to add', 'बढ़ाई जाने वाली प्रतियाँ'],
+  ['Start date', 'प्रारंभ तिथि'], ['Check-in', 'चेक-इन'], ['Check-out', 'चेक-आउट'],
+  ['Mode', 'माध्यम'], ['Type', 'प्रकार'], ['Amount (₹)', 'राशि (₹)'], ['Receipt no.', 'रसीद नं.'],
+  ['New copies committed', 'नई प्रतियों की प्रतिबद्धता'], ['Growth start', 'ग्रोथ प्रारंभ'],
+  ['Dues clear by', 'बकाया चुकाने की तिथि'], ['What happened', 'क्या हुआ'], ['Remarks', 'टिप्पणी'],
+  ['Contact type', 'संपर्क प्रकार'], ['Name', 'नाम'], ['Mobile', 'मोबाइल'],
+  ['Amount promised (₹)', 'वादा की गई राशि (₹)'], ['Follow-up date', 'फ़ॉलो-अप तिथि'],
+  ['Discussion notes', 'चर्चा के बिंदु'], ['Visit type', 'विज़िट प्रकार'], ['Centre', 'सेंटर'],
+  ['Outstanding (₹)', 'बकाया (₹)'], ['Area / colony', 'क्षेत्र / कॉलोनी'], ['Gender', 'लिंग'],
+  ['Address', 'पता'], ['Currently reads', 'वर्तमान में पढ़ते हैं'], ['Current copies', 'वर्तमान प्रतियाँ'],
+  ['Potential copies', 'संभावित प्रतियाँ'], ['Result', 'परिणाम'], ['Notes', 'टिप्पणी'],
+  ['Area / locality', 'क्षेत्र / मोहल्ला'], ['City', 'शहर'], ['District', 'ज़िला'],
+  ['Households', 'घरों की संख्या'], ['Potential copies/day', 'संभावित प्रतियाँ/दिन'],
+  ['Current penetration', 'वर्तमान पहुँच'], ['Nearest hawker / centre', 'निकटतम हॉकर / सेंटर'],
+  ['Field observations', 'फ़ील्ड अवलोकन'], ['Work type', 'कार्य प्रकार'], ['Location', 'स्थान'],
+  ['Start', 'प्रारंभ'], ['End', 'समाप्त'], ['Assigned by', 'द्वारा सौंपा गया'],
+  ['Attendees', 'उपस्थित व्यक्ति'], ['Subject', 'विषय'], ['Details', 'विवरण'], ['Where', 'कहाँ'],
+  ['Who did you call?', 'किसे कॉल किया?'], ['Selfie with agent', 'एजेंट के साथ सेल्फ़ी'],
+  ['Attach to visit', 'विज़िट से जोड़ें'], ['Back', 'वापस'], ['Try again', 'पुनः प्रयास करें'],
+  // option labels
+  ['Recovery – Outstanding Amount', 'वसूली – बकाया राशि'], ['Growth Discussion', 'ग्रोथ चर्चा'],
+  ['New Agreement / Contract', 'नया अनुबंध'], ['Agency Change', 'एजेंसी परिवर्तन'],
+  ['Reader Feedback Collection', 'पाठक प्रतिक्रिया'], ['Scheme & Offer Promotion', 'योजना व ऑफ़र प्रचार'],
+  ['Supply Complaint Redressal', 'सप्लाई शिकायत निवारण'], ['Relationship Visit', 'संबंध विज़िट'],
+  ['Competitor Analysis Visit', 'प्रतिस्पर्धी विश्लेषण'], ['Other', 'अन्य'],
+  ['Supply', 'सप्लाई'], ['Payment', 'भुगतान'], ['Competition', 'प्रतिस्पर्धा'],
+  ['Reader loss', 'पाठक हानि'], ['Margin', 'मार्जिन'], ['Service', 'सेवा'],
+  ['Late supply', 'देर से सप्लाई'], ['Extra copies', 'अतिरिक्त प्रतियाँ'],
+  ['Damaged copies', 'ख़राब प्रतियाँ'], ['Price', 'मूल्य'], ['Commission/Margin', 'कमीशन/मार्जिन'],
+  ['Scheme', 'योजना'], ['Content', 'सामग्री'], ['Promotional support', 'प्रचार सहयोग'],
+  ['Promotional material', 'प्रचार सामग्री'], ['Supply improvement', 'सप्लाई सुधार'],
+  ['Recovery support', 'वसूली सहयोग'], ['Reader acquisition', 'नए पाठक'],
+  ['Area development', 'क्षेत्र विकास'], ['Cash flow problem', 'नकदी की समस्या'],
+  ['Market recovery pending', 'बाज़ार वसूली लंबित'], ['Customer payment pending', 'ग्राहक भुगतान लंबित'],
+  ['Business down', 'व्यवसाय में गिरावट'], ['Dispute', 'विवाद'],
+  ['Discussion required', 'चर्चा आवश्यक'], ['more', 'और'],
+  ['Loading your plan…', 'आपका प्लान लोड हो रहा है…'],
+  ['No agency planned for today.', 'आज के लिए कोई एजेंसी प्लान नहीं है।'],
+  ['Day closed', 'दिन बंद'], ['visits', 'विज़िट'], ['Earlier today', 'आज पहले'],
+  ['Reading your location…', 'आपका स्थान पढ़ा जा रहा है…'],
+  ['Captures your starting point — the day’s travel km is measured from here.', 'आपका प्रारंभिक स्थान दर्ज करता है — दिन की यात्रा किमी यहीं से मापी जाती है।'],
+  ['Loading…', 'लोड हो रहा है…'], ['Done', 'पूर्ण'], ['selected', 'चयनित'],
+  ['of', 'में से'], ['refresh', 'रिफ़्रेश'], ['GPS not read', 'GPS नहीं मिला'],
+  ['Syncing…', 'सिंक हो रहा है…'], ['Synced', 'सिंक हो गया'],
+  ['Good morning', 'सुप्रभात'], ['Good afternoon', 'नमस्कार'], ['Good evening', 'शुभ संध्या'],
+  ['Visit achievement', 'विज़िट उपलब्धि'],
+  ['Tap to choose…', 'चुनने के लिए टैप करें…'], ['-- Select purpose --', '-- उद्देश्य चुनें --'],
+  ['-- Select --', '-- चुनें --'], ['Select…', 'चुनें…'], ['Select publications…', 'समाचार पत्र चुनें…'],
+  ['Cash', 'नकद'], ['Cheque', 'चेक'], ['Net Banking', 'नेट बैंकिंग'], ['Agent App', 'एजेंट ऐप'],
+  ['Full Payment', 'पूर्ण भुगतान'], ['Partial Payment', 'आंशिक भुगतान'],
+  ['Agent Feedback', 'एजेंट फ़ीडबैक'], ['DCR Dashboard', 'DCR डैशबोर्ड'], ['Approved Plans', 'स्वीकृत प्लान'],
+  ['Change language', 'भाषा बदलें'], ['English or Hindi', 'हिंदी या अंग्रेज़ी'],
+  ['Speak', 'बोलें'], ['Stop', 'रोकें'], ['Listening…', 'सुन रहा है…'],
+  ['No forms have been assigned to you.', 'आपको कोई फ़ॉर्म नहीं सौंपा गया है।'],
+  ['No approved plan today — use a form below to record any visit.',
+   'आज कोई स्वीकृत प्लान नहीं — विज़िट दर्ज करने के लिए नीचे का फ़ॉर्म उपयोग करें।'],
+];
+const _HI = new Map(), _EN = new Map();
+DICT.forEach(([e, h]) => { _HI.set(e, h); _EN.set(h, e); });
+const T = s => {
+  if (s == null || s === '') return s;
+  const k = String(s);
+  return DM.lang === 'hi' ? (_HI.get(k) || k) : (_EN.get(k) || k);
+};
+window.dmLang = () => {
+  DM.lang = DM.lang === 'hi' ? 'en' : 'hi';
+  try { localStorage.setItem('dcr_lang', DM.lang); } catch (_) {}
+  render();
+};
+
+const _sec = t => `<div class="dcr-sec">${T(t)}</div>`;
 const _f = (label, ctl, req, hint) => `<div class="dcr-f">
-  ${label ? `<label>${label}${req ? ' <span class="req">*</span>' : ''}</label>` : ''}
-  ${ctl}${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
+  ${label ? `<label>${T(label)}${req ? ' <span class="req">*</span>' : ''}</label>` : ''}
+  ${ctl}${hint ? `<div class="hint">${T(hint)}</div>` : ''}</div>`;
 const _row = (a, b) => `<div class="dcr-2col">${a}${b}</div>`;
 
 const _in = (k, ph, type, extra) => `<input class="dcr-in" id="f_${k}" value="${esc(DM.form[k] || '')}" type="${type || 'text'}"
-  placeholder="${esc(ph || '')}" oninput="dmSet('${k}',this.value)" ${extra || ''}>`;
+  placeholder="${esc(T(ph) || '')}" oninput="dmSet('${k}',this.value)" ${extra || ''}>`;
 const _sel = (k, opts, ph, onX) => `<select onchange="${onX ? `dmSetX('${k}',this.value)` : `dmSet('${k}',this.value)`};render()">
-  <option value="">${esc(ph || '-- Select --')}</option>
+  <option value="">${esc(T(ph) || '-- Select --')}</option>
   ${opts.map(o => { const [v, l] = Array.isArray(o) ? o : [o, o];
     const cur = onX ? DM.extra[k] : DM.form[k];
-    return `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`;
-const _txt = (k, ph, rows) => `<textarea id="f_${k}" rows="${rows || 2}" placeholder="${esc(ph || '')}"
-  oninput="dmSet('${k}',this.value)">${esc(DM.form[k] || '')}</textarea>`;
+    return `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(T(l))}</option>`; }).join('')}</select>`;
+const _SR = () => window.SpeechRecognition || window.webkitSpeechRecognition;
+
+/* Every remarks box takes dictation. The mic sits inside the box rather than under it
+   so nine of these do not add nine rows of scroll, and the language pill next to it
+   switches Hindi/English per field: the recogniser cannot detect the language itself,
+   and these notes are written in both, often by the same person on the same day. */
+const _mic = (k, store) => {
+  if (!_SR()) return '';                       // no silent no-op button
+  const id = store + ':' + k, on = DM.listening === id;
+  return `<div class="dcr-mic-wrap">
+    <button type="button" class="dcr-mic ${on ? 'on' : ''}" onclick="dmVoice('${k}','${store}')"
+      title="${on ? 'Stop' : 'Speak'}" aria-label="${on ? 'Stop dictation' : 'Dictate'}">${on ? '■' : '🎤'}</button>
+    <button type="button" class="dcr-mic-lang" onclick="dmDictLang()"
+      title="Dictation language">${DM.dictLang === 'en-IN' ? 'EN' : 'हिं'}</button>
+  </div>`;
+};
+
+const _txt = (k, ph, rows) => `<div class="dcr-dict">
+  <textarea id="f_${k}" rows="${rows || 2}" placeholder="${esc(T(ph) || '')}"
+    oninput="dmSet('${k}',this.value)">${esc(DM.form[k] || '')}</textarea>
+  ${_mic(k, 'form')}
+  ${DM.listening === 'form:' + k ? `<div class="dcr-listening">● ${DM.dictLang === 'en-IN' ? 'Listening…' : 'सुन रहा है…'}</div>` : ''}
+</div>`;
 const _xin = (k, ph, type) => `<input value="${esc(DM.extra[k] || '')}" type="${type || 'text'}" placeholder="${esc(ph || '')}"
   oninput="dmSetX('${k}',this.value)">`;
 
@@ -89,27 +220,27 @@ const _xin = (k, ph, type) => `<input value="${esc(DM.extra[k] || '')}" type="${
 const _multi = (k, opts, ph) => {
   const cur = DM.extra[k] || [];
   const open = DM.msOpen === k;
-  const label = !cur.length ? `<span class="ph">${esc(ph || 'Select…')}</span>`
-    : cur.length <= 2 ? esc(cur.join(', '))
-    : `${esc(cur[0])} <span class="n">+${cur.length - 1} more</span>`;
+  const label = !cur.length ? `<span class="ph">${esc(T(ph) || 'Select…')}</span>`
+    : cur.length <= 2 ? esc(cur.map(T).join(', '))
+    : `${esc(T(cur[0]))} <span class="n">+${cur.length - 1} ${T('more')}</span>`;
   const rows = opts.map(o => {
     const [v, l] = Array.isArray(o) ? o : [o, o];
     const on = cur.includes(v);
     return `<div class="dcr-ms-opt ${on ? 'on' : ''}" onclick="dmMulti('${k}','${_Q(v)}')">
-      <span class="box">${on ? '✓' : ''}</span><span>${esc(l)}</span></div>`;
+      <span class="box">${on ? '✓' : ''}</span><span>${esc(T(l))}</span></div>`;
   }).join('');
   return `<div class="dcr-ms ${open ? 'open' : ''}">
     <button type="button" class="dcr-ms-btn" onclick="dmMsOpen('${open ? '' : k}')">
       <span class="val">${label}</span><span class="car">▾</span></button>
     ${open ? `<div class="dcr-ms-back" onclick="dmMsOpen('')"></div>
       <div class="dcr-ms-pan"><div class="list">${rows}</div>
-        <button type="button" class="dcr-ms-done" onclick="dmMsOpen('')">Done${cur.length ? ` · ${cur.length} selected` : ''}</button>
+        <button type="button" class="dcr-ms-done" onclick="dmMsOpen('')">${T('Done')}${cur.length ? ` · ${cur.length} ${T('selected')}` : ''}</button>
       </div>` : ''}
   </div>`;
 };
 
-const _btn = (l, on, kind, ex) => `<button class="dcr-btn ${kind || 'ghost'}" onclick="${on}" ${ex || ''}>${l}</button>`;
-const _tag = (t, tone) => `<span class="dcr-tag ${tone || 'mute'}">${t}</span>`;
+const _btn = (l, on, kind, ex) => `<button class="dcr-btn ${kind || 'ghost'}" onclick="${on}" ${ex || ''}>${T(l)}</button>`;
+const _tag = (t, tone) => `<span class="dcr-tag ${tone || 'mute'}">${T(t)}</span>`;
 
 window.dmSet  = (k, v) => { DM.form[k] = v; };
 window.dmSetX = (k, v) => { DM.extra[k] = v; };
@@ -166,7 +297,7 @@ async function _loadDash() {
 
 function _greet() {
   const h = new Date().getHours();
-  return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  return T(h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening');
 }
 
 function _home() {
@@ -192,24 +323,25 @@ function _home() {
 
   const hero = `<div class="dcr-hero">
     <h2>${_greet()}, ${esc(String(c.staff.name || '').split(' ')[0])} 👋</h2>
-    <div class="sub">${new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}${c.staff.unit_code ? ' · ' + esc(c.staff.unit_code) : ''}</div>
+    <div class="sub">${new Date().toLocaleDateString(DM.lang === 'hi' ? 'hi-IN' : 'en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}${c.staff.unit_code ? ' · ' + esc(c.staff.unit_code) : ''}</div>
     <div class="meta">
-      <span><i class="dcr-dot" style="background:${gpsCol}"></i>${!g ? 'GPS not read' : `GPS ±${g.accuracy} m`}</span>
-      <a onclick="dmRefreshGeo()">refresh</a>
-      <span style="margin-left:auto">${DM.busy ? 'Syncing…' : '✓ Synced'}</span>
+      <span><i class="dcr-dot" style="background:${gpsCol}"></i>${!g ? T('GPS not read') : `GPS ±${g.accuracy} m`}</span>
+      <a onclick="dmRefreshGeo()">${T('refresh')}</a>
+      <span style="margin-left:auto">${DM.busy ? T('Syncing…') : '✓ ' + T('Synced')}</span>
     </div>
+    <button type="button" class="dcr-lang" onclick="dmLang()" title="Change language">${DM.lang === 'hi' ? 'ENGLISH' : 'हिंदी'}</button>
   </div>`;
 
   /* Achievement leads: a bar says "60% through the day" at a glance where six numbers
      need reading. Shown only when a plan exists — a bar against no target is noise. */
   const ach = target ? `<div class="dcr-card">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
-        <span style="font-size:12.5px;color:var(--d-mut)">Visit achievement</span>
-        <span style="font-size:18px;font-weight:650">${pct}%<span style="font-size:12px;color:var(--d-mut);font-weight:400"> · ${done} of ${target}</span></span></div>
+        <span style="font-size:12.5px;color:var(--d-mut)">${T('Visit achievement')}</span>
+        <span style="font-size:18px;font-weight:650">${pct}%<span style="font-size:12px;color:var(--d-mut);font-weight:400"> · ${done} ${T('of')} ${target}</span></span></div>
       <div class="dcr-prog"><i style="width:${pct}%;background:${pct >= 80 ? 'linear-gradient(90deg,#12a15c,#067647)' : pct >= 50 ? 'linear-gradient(90deg,#f0a338,#b54708)' : 'linear-gradient(90deg,#e8564b,#b42318)'}"></i></div>
     </div>` : '';
 
-  const kpi = (ic, l, v) => `<div class="dcr-kpi"><div class="l">${ic} ${l}</div><div class="v">${v}</div></div>`;
+  const kpi = (ic, l, v) => `<div class="dcr-kpi"><div class="l">${ic} ${T(l)}</div><div class="v">${v}</div></div>`;
   const kpis = `<div class="dcr-kpis">
     ${kpi('🎯', 'Target', target || '—')}
     ${kpi('✅', 'Done', target ? `${done}/${target}` : done)}
@@ -224,10 +356,10 @@ function _home() {
   const trip = running
     ? `<div class="dcr-card" style="background:var(--d-ok-bg)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px">
-          <div><div style="font-size:13px;color:var(--d-ok);font-weight:600">Trip running</div>
+          <div><div style="font-size:13px;color:var(--d-ok);font-weight:600">${T('Trip running')}</div>
             <div style="font-size:11.5px;color:var(--d-mut);margin-top:2px">Since ${t.start_at ? new Date(t.start_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'} · ${day.total_km || 0} km · ${done} ${done === 1 ? 'visit' : 'visits'}</div></div>
           <span class="dcr-tag good">LIVE</span></div>
-        <button class="dcr-btn stop" onclick="dmEndTrip()">Check out &amp; close day</button>
+        <button class="dcr-btn stop" onclick="dmEndTrip()">${T('Check out & close day')}</button>
       </div>`
     /* Not running: the start button shows whether or not a closed trip already exists.
        Gating it behind "no trip today" stranded anyone who closed the day and then had
@@ -235,12 +367,12 @@ function _home() {
        under the button rather than replacing it. */
     : `<div class="dcr-card dcr-start">
         <div class="hd"><div>
-          <div class="ttl">Start your tour</div>
-          <div class="sub">Captures your starting point — the day's travel km is measured from here.</div>
+          <div class="ttl">${T('Start your tour')}</div>
+          <div class="sub">${T('Captures your starting point — the day’s travel km is measured from here.')}</div>
         </div><span style="font-size:26px;flex:none">🛣️</span></div>
         <button class="dcr-btn ok" onclick="dmStartTrip()" ${DM.busy === 'trip' ? 'disabled' : ''}>
-          ${DM.busy === 'trip' ? 'Reading your location…' : '▶  Start your tour'}</button>
-        ${t ? `<div class="ftr">Earlier today · ${t.total_visits || 0} visits · ${t.total_km || 0} km · ${_INR(t.collection_amt)}</div>` : ''}
+          ${DM.busy === 'trip' ? T('Reading your location…') : '▶  ' + T('Start your tour')}</button>
+        ${t ? `<div class="ftr">${T('Earlier today')} · ${t.total_visits || 0} ${T('visits')} · ${t.total_km || 0} km · ${_INR(t.collection_amt)}</div>` : ''}
       </div>`;
 
   /* Today's plan in visit order, next stop called out. Tapping opens the visit already
@@ -262,10 +394,10 @@ function _home() {
           ${isDone ? '' : `<button onclick="dmPlanMenu(${r.id})" style="flex:none;border:none;background:none;color:var(--d-faint);font-size:19px;cursor:pointer;padding:4px 2px;line-height:1">⋮</button>`}
         </div>`;
       }).join('')}
-    </div>` : (running ? `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut);text-align:center">No approved plan today — use a form below to record any visit.</div>` : '');
+    </div>` : (running ? `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut);text-align:center">${T('No approved plan today — use a form below to record any visit.')}</div>` : '');
 
   const allowed = FORMS.filter(f => DM.rights && DM.rights[f.key]);
-  if (!allowed.length) return hero + kpis + trip + `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">No forms have been assigned to you.</div>`;
+  if (!allowed.length) return hero + kpis + trip + `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">${T('No forms have been assigned to you.')}</div>`;
 
   const TINT = { plan_tour: '#fff4e6', agency_visit: '#fff4e6', calling: '#eff8ff',
                  center_attn: '#ecfdf3', hawker_visit: '#ecfdf3', reader_visit: '#ecfdf3',
@@ -273,7 +405,7 @@ function _home() {
   const grid = `${_sec('Forms')}<div class="dcr-grid">
     ${allowed.map(f => `<button class="dcr-tile" onclick="dmOpen('${f.key}')">
       <span class="ico" style="background:${TINT[f.key] || 'var(--d-soft)'}">${f.icon}</span>
-      <span class="nm">${f.name}</span></button>`).join('')}
+      <span class="nm">${T(f.name)}</span></button>`).join('')}
   </div>`;
 
   return hero + ach + kpis + trip + list + grid;
@@ -337,10 +469,10 @@ async function _loadPickPlans() {
 function _planPick() {
   _loadPickPlans();
   const rows = DM.pickRows;
-  const skip = `<button class="dcr-btn ghost" onclick="dmVisitAdhoc()" style="margin-top:12px">Visit an agency not in the plan</button>`;
-  if (!rows) return `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">Loading your plan…</div>`;
+  const skip = `<button class="dcr-btn ghost" onclick="dmVisitAdhoc()" style="margin-top:12px">${T('Visit an agency not in the plan')}</button>`;
+  if (!rows) return `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">${T('Loading your plan…')}</div>`;
   if (!rows.length) return `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut);text-align:center">
-      No agency planned for today.</div>` + skip;
+      ${T('No agency planned for today.')}</div>` + skip;
   return _sec('Today\'s plan') + `<div class="dcr-card">${rows.map(r => {
     const done = r.status === 'done', pending = r.status === 'submitted';
     const open = !done && !pending;
@@ -349,7 +481,7 @@ function _planPick() {
       <span style="font-size:16px;flex:none">${done ? '✅' : pending ? '🔒' : '🏪'}</span>
       <div style="min-width:0;flex:1">
         <div class="t">${esc(r.target_name || r.target_code)}</div>
-        <div class="s">${pending ? 'Waiting for your incharge to approve'
+        <div class="s">${pending ? T('Waiting for your incharge to approve')
           : esc(r.purpose || 'Agency visit') + (r.visit_time ? ' · ' + esc(r.visit_time) : '')}</div></div>
       ${done ? _tag('Visited', 'mute') : pending ? _tag('Awaiting approval', 'warn') : _tag('Approved', 'good')}
     </div>`;
@@ -427,7 +559,7 @@ function _pickField(type, label) {
     ? `<div class="dcr-in" onclick="${open}" style="cursor:pointer;display:flex;justify-content:space-between;gap:9px;align-items:center">
         <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.target_name || s.target_code)}</span>
         <span style="color:var(--d-info);font-size:12px;flex:none">change</span></div>`
-    : `<div class="dcr-in" onclick="${open}" style="cursor:pointer;color:var(--d-faint)">Tap to choose…</div>`, true)
+    : `<div class="dcr-in" onclick="${open}" style="cursor:pointer;color:var(--d-faint)">${T('Tap to choose…')}</div>`, true)
     + (type === 'agent' && s ? _autoPanel() : '');
 }
 
@@ -628,14 +760,12 @@ function _fFeedback() {
     else if (q.t === 'calc') ctl = `<div style="${IN};background:${K.s2};color:${K.ink}">${q.calc(r)}</div>`;
     else if (q.t === 'photo') ctl = _photo('Area photo', 'Captured with GPS');
     else if (q.t === 'long') {
-      /* Voice as the document asks. Web Speech API where the browser has it — Chrome
-         on Android does, which is where this runs — and always a text box, because a
-         dictation button that silently does nothing is worse than none. */
-      const sr = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
-      ctl = `<textarea id="fb_${q.id}" rows="3" placeholder="बोलकर या लिखकर भरें" oninput="dmSetX('${q.id}',this.value)" style="${IN}">${esc(v || '')}</textarea>
-        ${sr ? `<button type="button" onclick="dmVoice('${q.id}')" style="margin-top:6px;border:1px solid #d7dde5;background:${DM.listening === q.id ? '#fdeceb' : '#fff'};
-          color:${DM.listening === q.id ? '#b91c1c' : '#334155'};border-radius:8px;padding:9px 13px;font-size:13px;cursor:pointer;min-height:40px">
-          ${DM.listening === q.id ? '● सुन रहा है… रोकें' : '🎤 बोलकर भरें'}</button>` : ''}`;
+      // Same dictation control as the visit forms, so the mic behaves identically everywhere.
+      ctl = `<div class="dcr-dict">
+        <textarea id="fb_${q.id}" rows="3" placeholder="बोलकर या लिखकर भरें" oninput="dmSetX('${q.id}',this.value)">${esc(v || '')}</textarea>
+        ${_mic(q.id, 'extra')}
+        ${DM.listening === 'extra:' + q.id ? `<div class="dcr-listening">● ${DM.dictLang === 'en-IN' ? 'Listening…' : 'सुन रहा है…'}</div>` : ''}
+      </div>`;
     }
     else ctl = `<input value="${esc(v || '')}" type="${q.t === 'num' ? 'number' : q.t === 'date' ? 'date' : q.t === 'time' ? 'time' : 'text'}"
         ${q.t === 'num' ? 'inputmode="numeric"' : ''} oninput="dmSetX('${q.id}',this.value)" style="${IN}">`;
@@ -820,23 +950,41 @@ function _dash() {
 }
 
 // ── submit / actions ────────────────────────────────────────────────────────
-/* Dictation appends rather than replaces, so a second burst does not wipe the first,
-   and Hindi is the default because that is the language these notes are spoken in. */
-window.dmVoice = qid => {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) return;
-  if (DM.listening === qid && DM._sr) { try { DM._sr.stop(); } catch (_) {} return; }
+/* Dictation appends rather than replaces, so a second burst does not wipe the first
+   and speaking can be mixed with typing. `store` picks the bag the field lives in --
+   'form' for the visit forms, 'extra' for feedback answers. */
+window.dmVoice = (key, store) => {
+  const SR = _SR(); if (!SR) return;
+  const id = (store || 'extra') + ':' + key;
+  const bag = () => (store === 'form' ? DM.form : DM.extra);
+  if (DM.listening === id && DM._sr) { try { DM._sr.stop(); } catch (_) {} return; }
+  if (DM._sr) { try { DM._sr.stop(); } catch (_) {} }   // only one field listens at a time
   const r = new SR();
-  r.lang = 'hi-IN'; r.interimResults = false; r.continuous = false;
+  r.lang = DM.dictLang || 'hi-IN'; r.interimResults = false; r.continuous = false;
   r.onresult = e => {
     const txt = Array.from(e.results).map(x => x[0].transcript).join(' ').trim();
-    DM.extra[qid] = ((DM.extra[qid] || '') + ' ' + txt).trim();
+    if (txt) bag()[key] = ((bag()[key] || '') + ' ' + txt).trim();
     DM.listening = null; DM._sr = null; render();
   };
-  r.onerror = () => { DM.listening = null; DM._sr = null; render(); };
-  r.onend = () => { if (DM.listening === qid) { DM.listening = null; DM._sr = null; render(); } };
-  DM.listening = qid; DM._sr = r; render();
+  /* A denied mic permission is the common failure and looks identical to nothing
+     happening, so it is named rather than swallowed. */
+  r.onerror = ev => {
+    DM.listening = null; DM._sr = null;
+    if (ev && (ev.error === 'not-allowed' || ev.error === 'service-not-allowed')) {
+      DM.err = 'Microphone blocked. Allow mic access for this site, then tap 🎤 again.';
+    }
+    render();
+  };
+  r.onend = () => { if (DM.listening === id) { DM.listening = null; DM._sr = null; render(); } };
+  DM.listening = id; DM._sr = r; render();
   try { r.start(); } catch (_) { DM.listening = null; DM._sr = null; render(); }
+};
+// Dictation language is remembered per device, independent of the app's own language.
+window.dmDictLang = () => {
+  DM.dictLang = DM.dictLang === 'en-IN' ? 'hi-IN' : 'en-IN';
+  try { localStorage.setItem('dcr_dict_lang', DM.dictLang); } catch (_) {}
+  if (DM._sr) { try { DM._sr.stop(); } catch (_) {} }
+  render();
 };
 
 window.dmClearPhoto = () => { DM.photo = null; render(); };
@@ -925,7 +1073,7 @@ window.appBottomNav = screen => {
   else items.push(['apps', 'Apps', '⋯']);
   return items.map(([k, l, i]) => `<button class="${(DM.mode || '') === k ? 'on' : ''}"
     onclick="${k === 'apps' ? "go('home')" : k === 'end' ? 'dmEndTrip()' : `dmNav('${k}')`}">
-    <span class="bico">${i}</span>${l}</button>`).join('');
+    <span class="bico">${i}</span>${T(l)}</button>`).join('');
 };
 window.dmNav = k => { DM.mode = k || null; DM.err = null; DM.flyout = null;
   if (k === 'dash') DM.day = null; if (k === 'approvals') DM.approved = null;
@@ -946,7 +1094,7 @@ window.appSideNav = screen => {
   if (allowed.length) {
     h += `<div class="sb-lbl"><span>Forms</span></div>`;
     h += allowed.map(f => `<button class="nav-item ${DM.mode === f.key ? 'on' : ''}"
-      onclick="dmOpen('${f.key}');if(S.sideOpen)toggleSide()"><span class="nico">${f.icon}</span><span>${f.name}</span></button>`).join('');
+      onclick="dmOpen('${f.key}');if(S.sideOpen)toggleSide()"><span class="nico">${f.icon}</span><span>${T(f.name)}</span></button>`).join('');
   }
   return h;
 };
@@ -984,7 +1132,7 @@ VIEWS.dcrm = () => {
   return `<div class="dcr">
     ${DM.mode !== null ? `<div class="dcr-top">
       <button class="dcr-back" onclick="dmBack()">&larr;</button>
-      <span class="dcr-title">${esc(TITLES[DM.mode] || 'DCR')}</span></div>` : ''}
+      <span class="dcr-title">${esc(T(TITLES[DM.mode] || 'DCR'))}</span></div>` : ''}
     ${err}${body}${_flyout()}
   </div>`;
 };

@@ -70,6 +70,14 @@
 .dcr-hero .meta { display: flex; gap: 14px; align-items: center; margin-top: 12px; font-size: 11.5px; opacity: .92; flex-wrap: wrap; }
 .dcr-hero a { color: #fff; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .dcr-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+/* Language switch. Top-right of the hero, above the decorative highlight, and it
+   names the language it switches TO — a button reading "हिंदी" that turns the app
+   Hindi is unambiguous where a flag or a "हिं/EN" pair is not. */
+.dcr-lang { position: absolute; top: 14px; right: 14px; z-index: 1;
+  background: rgba(255,255,255,.16); color: #fff; border: 1px solid rgba(255,255,255,.3);
+  border-radius: 20px; padding: 5px 12px; min-height: 30px; font-family: inherit;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .02em; text-transform: none; cursor: pointer; }
+.dcr-lang:active { background: rgba(255,255,255,.28); }
 
 /* ── cards & sections ─────────────────────────────────────────────────────── */
 .dcr-card { background: var(--d-card); border-radius: var(--d-r); padding: 14px; margin-bottom: 12px; box-shadow: var(--d-shadow); }
@@ -152,6 +160,24 @@
 .dcr-tile .nm { font-size: 11.5px; color: var(--d-ink); text-align: center; line-height: 1.3; font-weight: 500; }
 
 /* ── list rows ────────────────────────────────────────────────────────────── */
+/* ── dictation ────────────────────────────────────────────────────────────── */
+/* Mic overlays the textarea's bottom-right rather than sitting below it: nine remarks
+   fields would otherwise add nine rows of scroll. Padding keeps typed text clear of it. */
+.dcr-dict { position: relative; }
+.dcr-dict textarea { padding-bottom: 40px; }
+.dcr-mic-wrap { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 5px; align-items: center; }
+.dcr-mic, .dcr-mic-lang { border: 1px solid var(--d-line); background: var(--d-card); color: var(--d-mut);
+  border-radius: 9px; cursor: pointer; font-family: inherit; text-transform: none; letter-spacing: normal;
+  display: flex; align-items: center; justify-content: center; }
+.dcr-mic { width: 34px; height: 32px; font-size: 15px; }
+.dcr-mic-lang { min-width: 34px; height: 32px; padding: 0 7px; font-size: 11.5px; font-weight: 600; }
+.dcr-mic:active, .dcr-mic-lang:active { background: var(--d-soft); }
+.dcr-mic.on { background: var(--d-bad-bg); border-color: var(--d-bad); color: var(--d-bad);
+  animation: dcrPulse 1.1s ease-in-out infinite; }
+@keyframes dcrPulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .dcr-mic.on { animation: none; } }
+.dcr-listening { font-size: 11px; color: var(--d-bad); margin-top: 4px; }
+
 /* Multi-select. The trigger matches .dcr-in so it sits in a form beside real inputs;
    the panel is anchored to it and scrolls internally rather than growing the page. */
 .dcr-ms { position: relative; }
