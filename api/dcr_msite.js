@@ -170,6 +170,10 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       ['next_action', 'VARCHAR(40)'], ['next_followup_date', 'DATE'],
       ['duration_min', 'INT'], ['device_id', 'VARCHAR(80)'],
       ['receipt_no', 'VARCHAR(60)'], ['plan_id', 'BIGINT'],
+      // field | call — a phone call is real work and is recorded as such, not disguised
+      // as a visit. form_type keeps the seven forms apart inside one table.
+      ['visit_mode', "VARCHAR(10) DEFAULT 'field'"], ['form_type', 'VARCHAR(20)'],
+      ['extra', 'JSON'],
     ]) await add('dcr_visit', c, d);
 
     // Tour plan: approval workflow the existing table has no room for.
@@ -506,6 +510,29 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
          ORDER BY hm.hawker_name LIMIT ${lim}`,
         [...uList, ...(term ? [`%${term}%`, `%${term}%`, term] : [])]);
       res.json({ rows, type });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  /* Cash-sale centres for the attendance form. has_geo tells the UI which centres can
+     actually be fence-checked — 375 of 815 carry ERP coordinates, and a centre without
+     one registers itself on first attendance rather than blocking the executive. */
+  app.get('/api/dcr-m/centres', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const units = await scopeUnits(req);
+      const unit = S(req.query.unit, 10) || staff.unit_code;
+      const list = unit ? [unit] : (units || []);
+      const IN = list.length ? `WHERE unit_code IN (${list.map(() => '?').join(',')})` : '';
+      const { rows } = await q(
+        `SELECT depot_code, depot_name, depot_alias, unit_code, depot_addr,
+                latitude, longitude, attn_from_time, attn_till_time,
+                (latitude IS NOT NULL AND longitude IS NOT NULL) has_geo
+         FROM cash_depot_master ${IN}
+         ${IN ? 'AND' : 'WHERE'} COALESCE(freeze_flag,'N') <> 'Y'
+         ORDER BY depot_name LIMIT 400`, list)
+        .catch(() => ({ rows: [] }));
+      res.json({ rows });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
@@ -904,6 +931,154 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         .then(() => q(`SELECT * FROM dcr_attendance WHERE staff_person_code=? AND attn_date=?`,
           [staff.person_code, today()]));
       res.json({ ok: true, rows });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  /* ══ FORMS ═════════════════════════════════════════════════════════════════
+     The seven forms the field team actually fills. They share dcr_visit rather than
+     getting a table each: they are all "a person recorded an interaction on a date",
+     differing only in the fields they carry, which live in `extra` as JSON. One table
+     keeps the day's list, the KM trail and the day-close totals working across every
+     form without seven unions.
+
+     visit_mode separates a real visit from a phone call. An executive who is not in the
+     field can still do the work — ring the agent, agree a payment, log it — and that
+     must be recorded honestly rather than dressed up as a field visit: a call carries no
+     geofence, no selfie requirement, and is counted separately at day close. */
+  const FORM_TYPES = {
+    plan_tour:      { target: 'agent',  perm: 'dcr_plan_tour' },
+    agency_visit:   { target: 'agent',  perm: 'dcr_agency_visit' },
+    center_attn:    { target: 'centre', perm: 'dcr_center_attn' },
+    hawker_visit:   { target: 'hawker', perm: 'dcr_hawker_visit' },
+    reader_visit:   { target: 'reader', perm: 'dcr_reader_visit' },
+    new_area:       { target: 'area',   perm: 'dcr_new_area' },
+    office_work:    { target: 'office', perm: 'dcr_office_work' },
+  };
+
+  app.post('/api/dcr-m/form', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const b = req.body || {};
+      const form = FORM_TYPES[b.form] ? b.form : null;
+      if (!form) return res.status(400).json({ detail: 'Unknown form' });
+
+      const mode = b.visit_mode === 'call' ? 'call' : 'field';
+      const lat = b.lat == null ? null : Number(b.lat), lng = b.lng == null ? null : Number(b.lng);
+      const hasGeo = inIndia(lat, lng);
+      // A field visit without a location cannot be verified, so it is refused; a call
+      // never needs one.
+      if (mode === 'field' && !hasGeo && ['agency_visit', 'hawker_visit', 'center_attn'].includes(form)) {
+        return res.status(400).json({ detail: 'A valid GPS location is required for a field visit. Use “Call instead” if you are not on site.' });
+      }
+
+      const unit = S(b.unit_code, 10) || staff.unit_code;
+      const units = await scopeUnits(req);
+      if (unit && units && !units.includes(unit)) {
+        return res.status(403).json({ detail: 'Outside your branch scope' });
+      }
+
+      const tt = FORM_TYPES[form].target;
+      const code = S(b.target_code, 40) || (tt === 'office' ? 'OFFICE' : tt === 'area' ? 'AREA' : 'ADHOC');
+
+      // Geofence only where there is a real place to be, and only for field mode.
+      let dist = null, within = null, anchorSrc = null;
+      if (mode === 'field' && hasGeo && ['agent', 'hawker', 'centre'].includes(tt)) {
+        const anchor = await anchorFor(tt, unit, code);
+        if (anchor) {
+          dist = distM(lat, lng, anchor.lat, anchor.lng);
+          const radius = tt === 'centre' ? 50 : FENCE_M[anchor.source];
+          within = radius == null ? null : (dist <= radius ? 1 : 0);
+          anchorSrc = anchor.source;
+        }
+      }
+
+      const { rows: tr } = await q(
+        `SELECT id FROM dcr_trip WHERE staff_person_code = ? AND trip_date = ? AND status='active' LIMIT 1`,
+        [staff.person_code, today()]);
+
+      await q(
+        `INSERT INTO dcr_visit (visit_date, staff_person_code, staff_name, staff_emp_code, unit_code,
+           target_type, target_code, target_name, target_extra, trip_id,
+           check_in_at, check_out_at, in_lat, in_lng, in_accuracy, lat, lng,
+           distance_m, within_fence, fence_source, status, visit_mode, form_type,
+           purpose, outcome, remarks, amount_collected, payment_mode, payment_type,
+           receipt_no, copies_committed, outstanding_amount, growth_start, dues_clear_by,
+           next_action, next_followup_date, work_type, location, assigned_by, attendees, subject,
+           selfie_id, duration_min, extra, device_id)
+         VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?, 'completed',?,?,
+           ?,?,?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?, ?,?,?,?)`,
+        [today(), staff.person_code, staff.name, staff.emp_code, unit,
+         tt, code, S(b.target_name, 300), S(b.target_extra, 300), tr[0] ? tr[0].id : null,
+         S(b.check_in, 8) ? `${today()} ${b.check_in}:00` : new Date(),
+         S(b.check_out, 8) ? `${today()} ${b.check_out}:00` : null,
+         hasGeo ? lat : null, hasGeo ? lng : null,
+         b.accuracy == null ? null : Math.round(Number(b.accuracy)),
+         hasGeo ? lat : null, hasGeo ? lng : null,
+         dist, within, anchorSrc, mode, form,
+         S(b.purpose, 60), S(b.outcome, 40), S(b.remarks, 2000),
+         b.amount_collected == null || b.amount_collected === '' ? null : Number(b.amount_collected),
+         S(b.payment_mode, 30), S(b.payment_type, 20),
+         S(b.receipt_no, 60),
+         b.copies_committed == null || b.copies_committed === '' ? null : parseInt(b.copies_committed, 10),
+         b.outstanding_amount == null || b.outstanding_amount === '' ? null : Number(b.outstanding_amount),
+         isDate(b.growth_start) ? b.growth_start : null,
+         isDate(b.dues_clear_by) ? b.dues_clear_by : null,
+         S(b.next_action, 40), isDate(b.next_followup_date) ? b.next_followup_date : null,
+         S(b.work_type, 60), S(b.location, 200), S(b.assigned_by, 200),
+         S(b.attendees, 300), S(b.subject, 200),
+         b.selfie_id ? Number(b.selfie_id) : null,
+         b.duration_min == null || b.duration_min === '' ? null : parseInt(b.duration_min, 10),
+         b.extra ? JSON.stringify(b.extra).slice(0, 60000) : null,
+         S(b.device_id, 80)]);
+      const { rows: idr } = await q(`SELECT LAST_INSERT_ID() id`);
+
+      // A reader visit or a new-area survey is a lead by another name, so it lands in
+      // the lead pipeline too instead of being buried inside a visit row.
+      if (form === 'reader_visit' || form === 'new_area') {
+        const e = b.extra || {};
+        await q(
+          `INSERT INTO dcr_lead (created_by, created_by_name, unit_code, visit_id, lead_type,
+             name, mobile, address, lat, lng, current_paper, current_copies, potential_copies,
+             remarks, followup_date)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [staff.person_code, staff.name, unit, N(idr[0].id),
+           form === 'reader_visit' ? 'New Reader' : 'New Area',
+           S(b.target_name || e.name || e.area_name, 200), S(e.mobile, 20),
+           S(e.address || e.area_name, 400), hasGeo ? lat : null, hasGeo ? lng : null,
+           S(Array.isArray(e.current_paper) ? e.current_paper.join(', ') : e.current_paper, 120),
+           e.current_copies == null || e.current_copies === '' ? null : parseInt(e.current_copies, 10),
+           e.potential_copies == null || e.potential_copies === '' ? null : parseInt(e.potential_copies, 10),
+           S(b.remarks, 1000), isDate(b.next_followup_date) ? b.next_followup_date : null]);
+      }
+
+      res.json({ ok: true, id: N(idr[0].id), visit_mode: mode,
+        geofence: dist == null ? null : { distance_m: dist, within, anchor: anchorSrc } });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  /* Which forms this user may open. The dashboard shows an icon per permitted form, so
+     this is the single place that decides — the UI never invents an entitlement. */
+  app.get('/api/dcr-m/rights', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const { rows } = await q(
+        `SELECT form_key, can_view FROM user_permissions WHERE person_code = ?`, [staff.person_code])
+        .catch(() => ({ rows: [] }));
+      const override = {};
+      rows.forEach(r => { override[r.form_key] = !!r.can_view; });
+
+      const lvl = Number(staff.level) || Number(req.auth.hierarchyLevel) || 99;
+      const isAdmin = !!req.auth.isAdmin;
+      /* Default entitlement by role, overridable per user. An agent-side executive and a
+         hawker-side executive do different jobs, but the ERP does not label which is
+         which, so everyone gets both sets by default and the incharge trims per person. */
+      const out = {};
+      Object.entries(FORM_TYPES).forEach(([k, v]) => {
+        out[k] = override[v.perm] !== undefined ? override[v.perm] : (isAdmin || lvl <= 7);
+      });
+      res.json({ forms: out, level: lvl, is_admin: isAdmin });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
