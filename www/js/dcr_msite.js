@@ -19,7 +19,7 @@ const DM = {
   centres: null, plan: null, planDate: null, approved: null,
   pending: null, team: null, live: null, day: null,
   geo: null, geoAt: 0, geoErr: null, photo: null,
-  fbSet: 'basic', busy: '', flyout: null,
+  fbSet: 'basic', busy: '', flyout: null, msOpen: '',
 };
 
 function _dmOn() { return S.screen === 'app_dcr' || String(S.screen || '').startsWith('dcrm'); }
@@ -80,17 +80,32 @@ const _txt = (k, ph, rows) => `<textarea id="f_${k}" rows="${rows || 2}" placeho
 const _xin = (k, ph, type) => `<input value="${esc(DM.extra[k] || '')}" type="${type || 'text'}" placeholder="${esc(ph || '')}"
   oninput="dmSetX('${k}',this.value)">`;
 
-/* Multi-select as a dropdown plus removable tags: a chip row for eight publications
-   costs three rows of scroll, this costs one. */
+/* Multi-select: one control that opens a tick list and stays open across picks.
+   A plain <select> can only hand back one value per open, so choosing four
+   competitors meant opening the same menu four times; the chip row that made the
+   choices visible then cost more scroll than the question itself. The button now
+   carries the summary, so the whole answer is one line whether it holds one value
+   or six. */
 const _multi = (k, opts, ph) => {
   const cur = DM.extra[k] || [];
-  return `<select onchange="dmMulti('${k}',this.value);this.value=''">
-      <option value="">${esc(ph || 'Add…')}</option>
-      ${opts.filter(o => !cur.includes(Array.isArray(o) ? o[0] : o))
-        .map(o => { const [v, l] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(v)}">${esc(l)}</option>`; }).join('')}
-    </select>
-    ${cur.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${cur.map(v =>
-      `<span class="dcr-pill">${esc(v)}<a onclick="dmMulti('${k}','${_Q(v)}')">×</a></span>`).join('')}</div>` : ''}`;
+  const open = DM.msOpen === k;
+  const label = !cur.length ? `<span class="ph">${esc(ph || 'Select…')}</span>`
+    : cur.length <= 2 ? esc(cur.join(', '))
+    : `${esc(cur[0])} <span class="n">+${cur.length - 1} more</span>`;
+  const rows = opts.map(o => {
+    const [v, l] = Array.isArray(o) ? o : [o, o];
+    const on = cur.includes(v);
+    return `<div class="dcr-ms-opt ${on ? 'on' : ''}" onclick="dmMulti('${k}','${_Q(v)}')">
+      <span class="box">${on ? '✓' : ''}</span><span>${esc(l)}</span></div>`;
+  }).join('');
+  return `<div class="dcr-ms ${open ? 'open' : ''}">
+    <button type="button" class="dcr-ms-btn" onclick="dmMsOpen('${open ? '' : k}')">
+      <span class="val">${label}</span><span class="car">▾</span></button>
+    ${open ? `<div class="dcr-ms-back" onclick="dmMsOpen('')"></div>
+      <div class="dcr-ms-pan"><div class="list">${rows}</div>
+        <button type="button" class="dcr-ms-done" onclick="dmMsOpen('')">Done${cur.length ? ` · ${cur.length} selected` : ''}</button>
+      </div>` : ''}
+  </div>`;
 };
 
 const _btn = (l, on, kind, ex) => `<button class="dcr-btn ${kind || 'ghost'}" onclick="${on}" ${ex || ''}>${l}</button>`;
@@ -100,6 +115,8 @@ window.dmSet  = (k, v) => { DM.form[k] = v; };
 window.dmSetX = (k, v) => { DM.extra[k] = v; };
 window.dmMulti = (k, v) => { const a = DM.extra[k] || [];
   DM.extra[k] = a.includes(v) ? a.filter(x => x !== v) : a.concat(v); render(); };
+// One open list at a time; '' closes. Panel state survives the re-render each tick causes.
+window.dmMsOpen = k => { DM.msOpen = k || ''; render(); };
 
 // ── flyout ──────────────────────────────────────────────────────────────────
 /* Used where a choice would otherwise push the form off-screen: picking an
@@ -296,7 +313,7 @@ window.dmCancelPlan = async id => {
 };
 
 window.dmOpen = key => {
-  DM.form = {}; DM.extra = {}; DM.photo = null; DM.err = null; DM.flyout = null;
+  DM.form = {}; DM.extra = {}; DM.photo = null; DM.err = null; DM.flyout = null; DM.msOpen = '';
   DM.form.visit_date = _DAY(); DM.form.check_in = _NOW();
   DM.mode = key; DM.targets = null; DM.targetsKey = ''; DM.search = '';
   if (key === 'calling') DM.targetType = 'agent';
@@ -340,7 +357,7 @@ function _planPick() {
 }
 // Ad-hoc visits stay possible; the picker is the default path, not a gate.
 window.dmVisitAdhoc = () => { DM.pickPlan = false; DM.err = null; render(); };
-window.dmHome = () => { DM.mode = null; DM.err = null; DM.flyout = null; DM.dashLoaded = false; render(); };
+window.dmHome = () => { DM.mode = null; DM.err = null; DM.flyout = null; DM.msOpen = ''; DM.dashLoaded = false; render(); };
 /* Back out of a plan-opened visit to the plan list, not all the way home — a mis-tapped
    row otherwise costs the executive the whole list and a return trip through the tile. */
 window.dmBack = () => {
@@ -460,7 +477,7 @@ function _fPlanTour() {
     _f('Purpose', _sel('purpose', PURPOSES, '-- Select purpose --'), true) +
     _f('What do you intend to achieve?', _txt('remarks', '', 2)) +
     _sec('Competitor supply in area') +
-    _f('Publications carried', _multi('comp_papers', PAPERS, 'Add publication…')) +
+    _f('Publications carried', _multi('comp_papers', PAPERS, 'Select publications…')) +
     ((DM.extra.comp_papers || []).length ? (DM.extra.comp_papers || []).map(p =>
       _f(p + ' — copies', `<input value="${esc((DM.extra.comp || {})[p] || '')}" type="number" inputmode="numeric"
         oninput="dmComp('${_Q(p)}',this.value)" placeholder="0" style="${IN}">`)).join('') : '') +
@@ -605,7 +622,7 @@ function _fFeedback() {
     const v = r[q.id];
     let ctl;
     if (q.t === 'sel')       ctl = _sel(q.id, q.o, '-- चुनें --', true);
-    else if (q.t === 'multi')ctl = _multi(q.id, q.o, 'जोड़ें…');
+    else if (q.t === 'multi')ctl = _multi(q.id, q.o, 'चुनें…');
     else if (q.t === 'star') ctl = `<div style="display:flex;gap:5px">${[1, 2, 3, 4, 5].map(n =>
         `<button type="button" onclick="dmSetX('${q.id}',${n});render()" style="border:none;background:none;font-size:23px;cursor:pointer;padding:2px;line-height:1;filter:${Number(v) >= n ? 'none' : 'grayscale(1) opacity(.35)'}">⭐</button>`).join('')}</div>`;
     else if (q.t === 'calc') ctl = `<div style="${IN};background:${K.s2};color:${K.ink}">${q.calc(r)}</div>`;
@@ -683,7 +700,7 @@ function _fReaderVisit() {
     _row(_f('Area / colony', _in('target_extra', ''), true), _f('Gender', _sel('gender', ['Male', 'Female', 'Other'], 'Gender', true))) +
     _f('Address', _txt('location', '', 2)) +
     _sec('Newspaper') +
-    _f('Currently reads', _multi('current_paper', PAPERS.concat(['Rajasthan Patrika', 'None / New Reader']), 'Add…')) +
+    _f('Currently reads', _multi('current_paper', PAPERS.concat(['Rajasthan Patrika', 'None / New Reader']), 'Select…')) +
     _row(_f('Current copies', _xin('current_copies', '0', 'number')), _f('Potential copies', _xin('potential_copies', '0', 'number'))) +
     _sec('Outcome') +
     _f('Result', _sel('outcome', [['already', 'Already Patrika reader'], ['converted', 'Converted to Patrika'],
@@ -698,7 +715,7 @@ function _fNewArea() {
     _f('Area / locality', _in('target_name', ''), true) +
     _row(_f('City', _in('target_extra', '')), _f('District', _xin('district', ''))) +
     _row(_f('Households', _xin('households', '0', 'number')), _f('Potential copies/day', _xin('potential_copies', '0', 'number'))) +
-    _f('Current penetration', _multi('current_paper', PAPERS.concat(['None']), 'Add…')) +
+    _f('Current penetration', _multi('current_paper', PAPERS.concat(['None']), 'Select…')) +
     _f('Nearest hawker / centre', _xin('nearest', '')) +
     _f('Field observations', _txt('remarks', '', 3)) + _photo('Photo of area', 'Optional') + _geoLine() +
     _btn(DM.busy ? 'Submitting…' : 'Submit', "dmSubmit('new_area')", 'ok', DM.busy ? 'disabled' : '');
