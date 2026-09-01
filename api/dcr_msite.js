@@ -813,6 +813,61 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
+  /* Reschedule / cancel a planned stop. A plan an executive cannot change is one they
+     work around — the visit still happens, the record does not, and the day's numbers
+     stop matching reality. Moving keeps the approval (the incharge agreed to the visit,
+     not to the calendar square); cancelling requires a reason and keeps the row so the
+     plan's history stays auditable rather than quietly shrinking. */
+  app.post('/api/dcr-m/tour/reschedule', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const b = req.body || {};
+      if (!b.id || !isDate(b.tour_date)) return res.status(400).json({ detail: 'id and tour_date are required' });
+
+      const { rows } = await q(`SELECT * FROM dcr_tour_plan WHERE id = ? LIMIT 1`, [Number(b.id)]);
+      if (!rows[0]) return res.status(404).json({ detail: 'Plan not found' });
+      // Own plan, or a subordinate's if you are the incharge.
+      if (rows[0].staff_person_code !== staff.person_code) {
+        const team = await subordinates(staff, await scopeUnits(req));
+        if (!team.some(t => t.person_code === rows[0].staff_person_code)) {
+          return res.status(403).json({ detail: 'Not your tour plan' });
+        }
+      }
+      if (rows[0].status === 'done') return res.status(409).json({ detail: 'This visit is already recorded.' });
+
+      await q(
+        `UPDATE dcr_tour_plan SET tour_date = ?,
+           description = CONCAT(COALESCE(description,''), ' [moved from ', DATE_FORMAT(tour_date,'%Y-%m-%d'), ']')
+         WHERE id = ?`, [b.tour_date, Number(b.id)]);
+      res.json({ ok: true, id: Number(b.id), tour_date: b.tour_date });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  app.post('/api/dcr-m/tour/cancel', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const b = req.body || {};
+      if (!b.id) return res.status(400).json({ detail: 'id is required' });
+      if (!S(b.reason, 500)) return res.status(400).json({ detail: 'A reason is required to cancel a planned visit.' });
+
+      const { rows } = await q(`SELECT * FROM dcr_tour_plan WHERE id = ? LIMIT 1`, [Number(b.id)]);
+      if (!rows[0]) return res.status(404).json({ detail: 'Plan not found' });
+      if (rows[0].staff_person_code !== staff.person_code) {
+        const team = await subordinates(staff, await scopeUnits(req));
+        if (!team.some(t => t.person_code === rows[0].staff_person_code)) {
+          return res.status(403).json({ detail: 'Not your tour plan' });
+        }
+      }
+      if (rows[0].status === 'done') return res.status(409).json({ detail: 'This visit is already recorded.' });
+
+      await q(`UPDATE dcr_tour_plan SET status = 'cancelled', reject_reason = ? WHERE id = ?`,
+        [S(b.reason, 500), Number(b.id)]);
+      res.json({ ok: true, id: Number(b.id) });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
   app.post('/api/dcr-m/tour/decide', async (req, res) => {
     try {
       const staff = await staffOf(req);

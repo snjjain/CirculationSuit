@@ -127,10 +127,12 @@ function _flyout() {
 window.dmFly = k => { DM.flyout = k; render(); };
 
 // ── home: small icons, light type, no boxes ─────────────────────────────────
+/* Agent Feedback is deliberately NOT here — it belongs to a visit, not beside it.
+   It opens from a button inside the Agency Visit form, where the agency is already
+   chosen, so the questionnaire can never be filed against nobody. */
 const FORMS = [
   { key: 'plan_tour',    icon: '🗺️', name: 'Plan Tour' },
   { key: 'agency_visit', icon: '🏪', name: 'Agency Visit' },
-  { key: 'agent_feedback', icon: '📝', name: 'Agent Feedback' },
   { key: 'calling',      icon: '📞', name: 'Calling' },
   { key: 'center_attn',  icon: '📍', name: 'Attendance' },
   { key: 'hawker_visit', icon: '🛵', name: 'Hawker Visit' },
@@ -139,35 +141,164 @@ const FORMS = [
   { key: 'office_work',  icon: '🏢', name: 'Office / Other' },
 ];
 
+/* ── Executive Dashboard ────────────────────────────────────────────────────
+   The first screen answers, in order: who am I and is the phone ready, how is the
+   day going against target, am I on duty, and who is next. Built to the team's
+   layout. Sized for a thumb throughout — 48px targets, nothing hover-dependent —
+   because this is intended to become a packaged mobile app. */
+async function _loadDash() {
+  if (DM.dashLoaded) return;
+  DM.dashLoaded = true;
+  try {
+    const [day, plan] = await Promise.all([_api('/day-close'), _api(`/tour?date=${_DAY()}`)]);
+    DM.day = day; DM.plan = plan;
+  } catch (e) { DM.err = e.message; }
+  if (_dmOn()) render();
+}
+
+function _greet() {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+}
+
 function _home() {
+  _loadDash();
   const c = DM.ctx, t = c.trip;
+  const running = t && t.status === 'active';
+  const day = DM.day || {};
+  const stops = ((DM.plan && DM.plan.rows) || []).filter(r => ['approved', 'done'].includes(r.status));
+  const target = stops.length || 0;
+  const done = day.total_visits || 0;
+  const pct = target ? Math.min(100, Math.round(done / target * 100)) : null;
+
+  // Working time runs from the trip start, so it is real elapsed duty, not a guess.
+  let worked = '—';
+  if (t && t.start_at) {
+    const end = t.end_at ? new Date(t.end_at) : new Date();
+    const m = Math.max(0, Math.round((end - new Date(t.start_at)) / 60000));
+    worked = `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+  }
+
+  const g = DM.geo;
+  const gpsTone = !g ? '#94a3b8' : g.accuracy <= 30 ? '#15803d' : g.accuracy <= 80 ? '#b45309' : '#b91c1c';
+
+  const header = `<div style="margin-bottom:14px">
+    <div style="font-size:19px;color:${K.ink};margin-bottom:2px">${_greet()}, ${esc(String(c.staff.name || '').split(' ')[0])} 👋</div>
+    <div style="font-size:12px;color:${K.mut}">${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}${c.staff.unit_code ? ' · ' + esc(c.staff.unit_code) : ''}</div>
+    <div style="display:flex;gap:12px;align-items:center;margin-top:7px;font-size:11.5px">
+      <span style="color:${gpsTone}">● ${!g ? 'GPS not read' : `GPS active · ±${g.accuracy} m`}</span>
+      <a onclick="dmRefreshGeo()" style="cursor:pointer;color:#1e3a8a;text-decoration:underline">refresh</a>
+      <span style="color:${K.mut};margin-left:auto">${DM.busy ? 'Syncing…' : 'Synced'}</span>
+    </div></div>`;
+
+  /* Achievement leads the KPI block: a bar says "you are 60% through the day" at a
+     glance, where five numbers need reading. It appears only when a plan exists — a
+     progress bar against a target of nothing is noise. */
+  const ach = target ? `<div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
+        <span style="font-size:12px;color:${K.mut}">Visit achievement</span>
+        <span style="font-size:15px;color:${K.ink}">${pct}% <span style="font-size:11.5px;color:${K.mut}">· ${done} of ${target}</span></span></div>
+      <div style="height:8px;background:#eef2f7;border-radius:5px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:${pct >= 80 ? '#15803d' : pct >= 50 ? '#d97706' : '#b91c1c'};border-radius:5px"></div></div>
+    </div>` : '';
+
+  const kpi = (icon, label, val) => `<div style="background:${K.s2};border-radius:11px;padding:11px 9px">
+    <div style="font-size:10.5px;color:${K.mut};margin-bottom:3px">${icon} ${label}</div>
+    <div style="font-size:16px;color:${K.ink}">${val}</div></div>`;
+  const kpis = `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px">
+    ${kpi('🎯', 'Target', target || '—')}
+    ${kpi('✅', 'Visits done', target ? `${done} / ${target}` : done)}
+    ${kpi('💰', 'Collection', _INR(day.collection || 0))}
+    ${kpi('📍', 'Distance', (day.total_km || 0) + ' km')}
+    ${kpi('⏱', 'Working time', worked)}
+    ${kpi('📞', 'Calls', (day.visits || []).filter(v => v.visit_mode === 'call').length)}
+  </div>`;
+
+  /* Trip control sits on the dashboard, not behind a menu — starting and closing the
+     day are the two things an executive does most and should never hunt for. */
+  const trip = running
+    ? `<div style="background:#e8f6ee;border-radius:12px;padding:13px;margin-bottom:14px">
+        <div style="font-size:12.5px;color:#15803d;margin-bottom:2px">Trip started — ${t.start_at ? new Date(t.start_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
+        <div style="font-size:12px;color:${K.mut};margin-bottom:11px">${day.total_km || 0} km · ${done} ${done === 1 ? 'visit' : 'visits'}</div>
+        <button onclick="dmEndTrip()" style="width:100%;background:#b91c1c;color:#fff;border:none;border-radius:10px;padding:13px;font-size:15px;font-weight:600;cursor:pointer;min-height:48px">🔴 Check out</button>
+      </div>`
+    : t
+      ? `<div style="background:${K.s2};border-radius:12px;padding:13px;margin-bottom:14px;font-size:12.5px;color:${K.mut}">
+          Day closed · ${t.total_visits || 0} visits · ${t.total_km || 0} km · ${_INR(t.collection_amt)}</div>`
+      : `<button onclick="dmStartTrip()" ${DM.busy === 'trip' ? 'disabled' : ''}
+          style="width:100%;background:#15803d;color:#fff;border:none;border-radius:12px;padding:15px;font-size:16px;font-weight:600;cursor:pointer;margin-bottom:14px;min-height:52px">
+          ${DM.busy === 'trip' ? 'Starting…' : '🟢 Start trip'}</button>`;
+
+  /* Today's plan in visit order, next stop called out. Tapping it opens the visit
+     already filled in — the point of having planned it. Each row also carries
+     reschedule and cancel, because a plan that cannot change gets ignored instead. */
+  const doneCodes = new Set((day.visits || []).map(v => String(v.target_code)));
+  let nextMarked = false;
+  const list = stops.length ? `<div style="margin-bottom:14px">
+      ${_sec(`Today's visits — ${stops.length}`)}
+      ${stops.map(r => {
+        const isDone = r.status === 'done' || doneCodes.has(String(r.target_code));
+        const isNext = !isDone && !nextMarked && (nextMarked = true);
+        return `<div style="display:flex;gap:10px;align-items:center;padding:11px 0;border-bottom:1px solid ${K.line};${isNext ? 'background:#f0f7ff;margin:0 -8px;padding-left:8px;padding-right:8px;border-radius:8px' : ''}">
+          <span style="font-size:15px;flex:none">${isDone ? '✅' : isNext ? '🔵' : '⚪'}</span>
+          <div ${isDone ? '' : `onclick="dmStartFromPlan(${r.id})" style="cursor:pointer"`} style="min-width:0;flex:1">
+            <div style="font-size:13.5px;color:${isDone ? K.mut : K.ink};${isDone ? 'text-decoration:line-through' : ''};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.target_name || r.target_code)}</div>
+            <div style="font-size:11px;color:${K.mut}">${isDone ? 'Visited' : isNext ? 'Next visit' : 'Pending'}${r.visit_time ? ' · ' + esc(r.visit_time) : ''}</div>
+          </div>
+          ${Number(r.outstanding_snap) > 0 ? _tag(_INR(r.outstanding_snap), 'warn') : ''}
+          ${isDone ? '' : `<button onclick="dmPlanMenu(${r.id})" style="flex:none;border:none;background:none;color:#94a3b8;font-size:19px;cursor:pointer;padding:4px 6px;line-height:1">⋮</button>`}
+        </div>`;
+      }).join('')}
+    </div>` : (running ? `<div style="font-size:12.5px;color:${K.mut};padding:10px 0;margin-bottom:8px">No approved plan for today — use the forms below to record any visit.</div>` : '');
+
   const allowed = FORMS.filter(f => DM.rights && DM.rights[f.key]);
+  if (!allowed.length) return header + kpis + trip + `<div style="font-size:12.5px;color:${K.mut};padding:14px 0">No forms have been assigned to you.</div>`;
 
-  const head = `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:3px">
-      <span style="font-size:15px;color:${K.ink}">${esc(c.staff.name)}</span>
-      ${t && t.status === 'active' ? _tag('On duty', 'good') : t ? _tag('Day closed', 'mute') : _tag('Not started', 'warn')}
-    </div>
-    <div style="font-size:11.5px;color:${K.mut};margin-bottom:12px">${esc(c.staff.designation || 'Field Executive')}${c.staff.unit_code ? ' · ' + esc(c.staff.unit_code) : ''} · ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</div>
-    ${t ? `<div style="display:flex;gap:18px;font-size:12px;color:${K.mut};margin-bottom:13px">
-        <span>Entries <b style="color:${K.ink};font-weight:600">${t.visits || 0}</b></span>
-        <span>Collected <b style="color:${K.ink};font-weight:600">${_INR(t.collected || 0)}</b></span>
-      </div>` : `<div style="margin-bottom:13px">${_btn(DM.busy === 'trip' ? 'Starting…' : 'Start duty', 'dmStartTrip()', 'ok', DM.busy === 'trip' ? 'disabled' : '')}</div>`}`;
-
-  if (!allowed.length) return head + `<div style="font-size:12.5px;color:${K.mut};padding:16px 0">No forms have been assigned to you. Your incharge decides which DCR forms you can use.</div>`;
-
-  /* Small icons, four across on a phone. A tile is an icon and a word — the
-     description text that was here only made the grid twice as tall. */
-  const grid = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:6px">
+  /* Bigger icons, three across — small enough to fit them all, large enough to hit
+     without looking: a 30px glyph in a 56px tile. */
+  const grid = `${_sec('Forms')}<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
     ${allowed.map(f => `<button onclick="dmOpen('${f.key}')" style="background:none;border:none;cursor:pointer;
-        padding:10px 4px;border-radius:10px;display:flex;flex-direction:column;align-items:center;gap:5px"
-        onmouseenter="this.style.background='${K.s2}'" onmouseleave="this.style.background='none'">
-      <span style="font-size:23px;line-height:1">${f.icon}</span>
-      <span style="font-size:11px;color:${K.ink};text-align:center;line-height:1.25">${f.name}</span>
+        padding:10px 4px;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:7px;min-height:96px">
+      <span style="width:56px;height:56px;border-radius:16px;background:${K.s2};display:flex;align-items:center;justify-content:center;font-size:30px;line-height:1">${f.icon}</span>
+      <span style="font-size:11.5px;color:${K.ink};text-align:center;line-height:1.25">${f.name}</span>
     </button>`).join('')}
   </div>`;
 
-  return head + _sec('Forms') + grid;
+  return header + ach + kpis + trip + list + grid;
 }
+
+/* Reschedule / cancel. A plan an executive cannot change is a plan they work around
+   — the visit happens, the record does not, and the day's numbers stop matching
+   reality. Cancelling asks for a reason for the same purpose. */
+window.dmPlanMenu = id => {
+  const p = ((DM.plan && DM.plan.rows) || []).find(x => Number(x.id) === Number(id));
+  if (!p) return;
+  DM.flyout = { title: esc(p.target_name || p.target_code), body: () => `
+    <button onclick="dmStartFromPlan(${id})" style="width:100%;text-align:left;background:none;border:none;border-bottom:1px solid ${K.line};padding:14px 2px;font-size:14px;color:${K.ink};cursor:pointer">📍 Start this visit</button>
+    <button onclick="dmReschedule(${id})" style="width:100%;text-align:left;background:none;border:none;border-bottom:1px solid ${K.line};padding:14px 2px;font-size:14px;color:${K.ink};cursor:pointer">📅 Reschedule to another date</button>
+    <button onclick="dmCancelPlan(${id})" style="width:100%;text-align:left;background:none;border:none;padding:14px 2px;font-size:14px;color:#b91c1c;cursor:pointer">✕ Cancel this stop</button>` };
+  render();
+};
+window.dmReschedule = async id => {
+  const d = prompt('Move this visit to which date? (YYYY-MM-DD)', _DAY());
+  if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+  try {
+    await _api('/tour/reschedule', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, tour_date: d }) });
+    DM.flyout = null; DM.plan = null; DM.dashLoaded = false; DM.approved = null;
+    toast('Moved to ' + d); _loadDash();
+  } catch (e) { DM.err = e.message; DM.flyout = null; render(); }
+};
+window.dmCancelPlan = async id => {
+  const why = prompt('Why is this stop being cancelled?');
+  if (!why) return;
+  try {
+    await _api('/tour/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, reason: why }) });
+    DM.flyout = null; DM.plan = null; DM.dashLoaded = false; DM.approved = null;
+    toast('Stop cancelled'); _loadDash();
+  } catch (e) { DM.err = e.message; DM.flyout = null; render(); }
+};
 
 window.dmOpen = key => {
   DM.form = {}; DM.extra = {}; DM.photo = null; DM.err = null; DM.flyout = null;
@@ -176,7 +307,26 @@ window.dmOpen = key => {
   if (key === 'calling') DM.targetType = 'agent';
   render();
 };
-window.dmHome = () => { DM.mode = null; DM.err = null; DM.flyout = null; render(); };
+window.dmHome = () => { DM.mode = null; DM.err = null; DM.flyout = null; DM.dashLoaded = false; render(); };
+
+/* Feedback opened from a visit keeps that visit's form intact underneath — the
+   executive fills the questionnaire and comes back to the half-written report, rather
+   than losing it and starting again. */
+window.dmFeedbackFromVisit = () => {
+  DM._visitForm = { form: DM.form, extra: DM.extra, photo: DM.photo };
+  DM.form = { _target: DM._visitForm.form._target, visit_date: _DAY() };
+  DM.extra = DM._visitForm.extra._fb || {};
+  DM.mode = 'agent_feedback'; DM.err = null; render();
+};
+window.dmFeedbackBack = save => {
+  const v = DM._visitForm;
+  if (!v) { DM.mode = null; render(); return; }
+  if (save) { v.extra._fb = { ...DM.extra, fb_set: DM.fbSet, health: _health(DM.extra) }; DM.fbDone = true; }
+  DM.form = v.form; DM.extra = v.extra; DM.photo = v.photo;
+  DM._visitForm = null; DM.mode = 'agency_visit'; DM.err = null;
+  if (save) toast('Feedback attached to this visit');
+  render();
+};
 
 // ── target picker (flyout) ──────────────────────────────────────────────────
 async function _loadTargets(type) {
@@ -255,6 +405,14 @@ function _fAgencyVisit() {
       'Complaint resolved', 'Complaint pending', 'Growth opportunity identified', 'Customer unavailable',
       'Shop closed', 'Other'], '-- Select --'), true) +
     _f('Remarks', _txt('remarks', 'English or Hindi', 3)) +
+    /* Feedback belongs to this visit, so it opens from here with the agency already
+       chosen and returns when saved. Filing it as a standalone form let it be recorded
+       against an agency nobody actually met. */
+    _sec('Agent feedback') +
+    `<button onclick="dmFeedbackFromVisit()" style="width:100%;text-align:left;border:1px solid #d7dde5;background:${DM.fbDone ? '#e8f6ee' : '#fff'};
+        border-radius:9px;padding:12px;font-size:13.5px;cursor:pointer;margin-bottom:11px;display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:46px">
+      <span style="color:${K.ink}">${DM.fbDone ? '✅ Feedback recorded' : '📝 Record agent feedback'}</span>
+      <span style="color:${K.mut};font-size:11.5px">${DM.fbDone ? 'edit' : '23 questions · by visit type'}</span></button>` +
     _sec('Selfie with agent') + _photo('Take selfie', 'Required for a field visit') + _geoLine() +
     _btn(DM.busy ? 'Submitting…' : 'Submit report', "dmSubmit('agency_visit')", 'ok', DM.busy ? 'disabled' : '');
 }
@@ -314,8 +472,17 @@ const FB = [
   { id: 'q17', s: 'Growth',        q: 'कोई नया area जहाँ reach बढ़ सके?', t: 'sel', o: ['हाँ', 'नहीं'], sets: ['growth', 'full'] },
   { id: 'q17a', s: 'Growth',       q: 'Area का नाम', t: 'text', sets: ['growth', 'full'], when: r => r.q17 === 'हाँ' },
   { id: 'q17b', s: 'Growth',       q: 'अनुमानित households', t: 'num', sets: ['growth', 'full'], when: r => r.q17 === 'हाँ' },
+  { id: 'q17c', s: 'Growth',       q: 'Potential copies', t: 'num', sets: ['growth', 'full'], when: r => r.q17 === 'हाँ' },
+  { id: 'q17d', s: 'Growth',       q: 'वहाँ का current competitor', t: 'multi', o: PAPERS.concat(['None']), sets: ['growth', 'full'], when: r => r.q17 === 'हाँ' },
+  { id: 'q17e', s: 'Growth',       q: 'नए area की photo', t: 'photo', sets: ['growth', 'full'], when: r => r.q17 === 'हाँ' },
   { id: 'q18', s: 'Growth',        q: 'क्या agent additional copies बढ़ा सकता है?', t: 'sel', o: ['हाँ', 'नहीं', 'Discussion required'], sets: ['growth', 'full'] },
-  { id: 'q19', s: 'Growth',        q: 'संभावित copy growth', t: 'num', sets: ['growth', 'full'] },
+  // Q19 in the document is current → potential → growth, not one number; the growth is
+  // shown rather than asked, so the two figures cannot contradict the difference.
+  { id: 'q19a', s: 'Growth',       q: 'Current copies', t: 'num', sets: ['growth', 'full'] },
+  { id: 'q19b', s: 'Growth',       q: 'Potential copies', t: 'num', sets: ['growth', 'full'] },
+  { id: 'q19c', s: 'Growth',       q: 'संभावित growth', t: 'calc', sets: ['growth', 'full'],
+    calc: r => { const a = Number(r.q19a) || 0, b = Number(r.q19b) || 0;
+      return (a || b) ? `${b - a >= 0 ? '+' : ''}${(b - a).toLocaleString('en-IN')} copies` : '—'; } },
   { id: 'q20', s: 'Service',       q: 'हमारी field service कैसी लगती है?', t: 'star', sets: ['basic', 'problem', 'full'] },
   { id: 'q21', s: 'Service',       q: 'Visit frequency पर्याप्त है?', t: 'sel', o: ['बहुत अच्छी', 'पर्याप्त', 'कम', 'बहुत कम'], sets: ['problem', 'full'] },
   { id: 'q22', s: 'Service',       q: 'किस प्रकार की support चाहिए?', t: 'multi', o: ['Promotional material', 'Scheme', 'Supply improvement', 'Recovery support', 'Reader acquisition', 'Area development', 'कोई support नहीं', 'अन्य'], sets: ['problem', 'growth', 'full'] },
@@ -356,7 +523,18 @@ function _fFeedback() {
     else if (q.t === 'multi')ctl = _multi(q.id, q.o, 'जोड़ें…');
     else if (q.t === 'star') ctl = `<div style="display:flex;gap:5px">${[1, 2, 3, 4, 5].map(n =>
         `<button type="button" onclick="dmSetX('${q.id}',${n});render()" style="border:none;background:none;font-size:23px;cursor:pointer;padding:2px;line-height:1;filter:${Number(v) >= n ? 'none' : 'grayscale(1) opacity(.35)'}">⭐</button>`).join('')}</div>`;
-    else if (q.t === 'long') ctl = `<textarea rows="3" placeholder="बोलकर या लिखकर भरें" oninput="dmSetX('${q.id}',this.value)" style="${IN}">${esc(v || '')}</textarea>`;
+    else if (q.t === 'calc') ctl = `<div style="${IN};background:${K.s2};color:${K.ink}">${q.calc(r)}</div>`;
+    else if (q.t === 'photo') ctl = _photo('Area photo', 'Captured with GPS');
+    else if (q.t === 'long') {
+      /* Voice as the document asks. Web Speech API where the browser has it — Chrome
+         on Android does, which is where this runs — and always a text box, because a
+         dictation button that silently does nothing is worse than none. */
+      const sr = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
+      ctl = `<textarea id="fb_${q.id}" rows="3" placeholder="बोलकर या लिखकर भरें" oninput="dmSetX('${q.id}',this.value)" style="${IN}">${esc(v || '')}</textarea>
+        ${sr ? `<button type="button" onclick="dmVoice('${q.id}')" style="margin-top:6px;border:1px solid #d7dde5;background:${DM.listening === q.id ? '#fdeceb' : '#fff'};
+          color:${DM.listening === q.id ? '#b91c1c' : '#334155'};border-radius:8px;padding:9px 13px;font-size:13px;cursor:pointer;min-height:40px">
+          ${DM.listening === q.id ? '● सुन रहा है… रोकें' : '🎤 बोलकर भरें'}</button>` : ''}`;
+    }
     else ctl = `<input value="${esc(v || '')}" type="${q.t === 'num' ? 'number' : q.t === 'date' ? 'date' : q.t === 'time' ? 'time' : 'text'}"
         ${q.t === 'num' ? 'inputmode="numeric"' : ''} oninput="dmSetX('${q.id}',this.value)" style="${IN}">`;
     return head + _f(q.q, ctl);
@@ -377,7 +555,11 @@ function _fFeedback() {
         <span>${n}</span><span>${g}/${m}</span></div>`).join('')}
       <div style="font-size:10.5px;color:#9aa5b4;margin-top:6px">Scored on the ${h.params.length} parameters answered in this set.</div>
     </div>` : '') +
-    _btn(DM.busy ? 'Saving…' : 'Submit feedback', "dmSubmit('agent_feedback')", 'ok', DM.busy ? 'disabled' : '');
+    (DM._visitForm
+      ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+          ${_btn('Attach to visit', 'dmFeedbackBack(true)', 'ok')}
+          ${_btn('Back', 'dmFeedbackBack(false)', 'ghost')}</div>`
+      : _btn(DM.busy ? 'Saving…' : 'Submit feedback', "dmSubmit('agent_feedback')", 'ok', DM.busy ? 'disabled' : ''));
 }
 
 // ── remaining forms ─────────────────────────────────────────────────────────
@@ -519,6 +701,25 @@ function _dash() {
 }
 
 // ── submit / actions ────────────────────────────────────────────────────────
+/* Dictation appends rather than replaces, so a second burst does not wipe the first,
+   and Hindi is the default because that is the language these notes are spoken in. */
+window.dmVoice = qid => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+  if (DM.listening === qid && DM._sr) { try { DM._sr.stop(); } catch (_) {} return; }
+  const r = new SR();
+  r.lang = 'hi-IN'; r.interimResults = false; r.continuous = false;
+  r.onresult = e => {
+    const txt = Array.from(e.results).map(x => x[0].transcript).join(' ').trim();
+    DM.extra[qid] = ((DM.extra[qid] || '') + ' ' + txt).trim();
+    DM.listening = null; DM._sr = null; render();
+  };
+  r.onerror = () => { DM.listening = null; DM._sr = null; render(); };
+  r.onend = () => { if (DM.listening === qid) { DM.listening = null; DM._sr = null; render(); } };
+  DM.listening = qid; DM._sr = r; render();
+  try { r.start(); } catch (_) { DM.listening = null; DM._sr = null; render(); }
+};
+
 window.dmClearPhoto = () => { DM.photo = null; render(); };
 window.dmRefreshGeo = async () => { try { await _geo(true); } catch (_) {} render(); };
 window.dmPhoto = async input => {
