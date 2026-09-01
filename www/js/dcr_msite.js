@@ -307,9 +307,9 @@ window.dmOpen = key => {
   render();
 };
 
-/* Today's plans, both approved and awaiting approval. Pending ones are offered
-   because approval often lags the visit, and an executive standing at the counter
-   should not be blocked by an incharge who has not tapped approve yet. */
+/* Today's plans. Only approved rows can be opened — a plan still awaiting approval
+   is listed so the executive can see it is filed and why it will not open, but it
+   stays inert until the incharge approves it. */
 async function _loadPickPlans() {
   if (DM.pickRows) return;
   try { const r = await _api(`/tour?date=${_DAY()}`);
@@ -325,14 +325,16 @@ function _planPick() {
   if (!rows.length) return `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut);text-align:center">
       No agency planned for today.</div>` + skip;
   return _sec('Today\'s plan') + `<div class="dcr-card">${rows.map(r => {
-    const done = r.status === 'done';
-    return `<div class="dcr-row ${done ? 'done' : ''}" ${done ? '' : `onclick="dmStartFromPlan(${r.id})" style="cursor:pointer"`}>
-      <span style="font-size:16px;flex:none">${done ? '✅' : '🏪'}</span>
+    const done = r.status === 'done', pending = r.status === 'submitted';
+    const open = !done && !pending;
+    return `<div class="dcr-row ${done ? 'done' : ''} ${pending ? 'locked' : ''}"
+      ${open ? `onclick="dmStartFromPlan(${r.id})" style="cursor:pointer"` : ''}>
+      <span style="font-size:16px;flex:none">${done ? '✅' : pending ? '🔒' : '🏪'}</span>
       <div style="min-width:0;flex:1">
         <div class="t">${esc(r.target_name || r.target_code)}</div>
-        <div class="s">${esc(r.purpose || 'Agency visit')}${r.visit_time ? ' · ' + esc(r.visit_time) : ''}</div></div>
-      ${done ? _tag('Visited', 'mute')
-             : r.status === 'submitted' ? _tag('Awaiting approval', 'warn') : _tag('Approved', 'good')}
+        <div class="s">${pending ? 'Waiting for your incharge to approve'
+          : esc(r.purpose || 'Agency visit') + (r.visit_time ? ' · ' + esc(r.visit_time) : '')}</div></div>
+      ${done ? _tag('Visited', 'mute') : pending ? _tag('Awaiting approval', 'warn') : _tag('Approved', 'good')}
     </div>`;
   }).join('')}</div>` + skip;
 }
@@ -471,7 +473,7 @@ window.dmComp = (p, v) => { DM.extra.comp = DM.extra.comp || {}; DM.extra.comp[p
 function _fAgencyVisit() {
   const fromPlan = DM.form._fromPlan;
   return (fromPlan ? `<div style="font-size:11.5px;color:#0369a1;background:#e6f2fb;border-radius:8px;padding:8px 10px;margin-bottom:11px">
-      ${DM.form._planStatus === 'submitted' ? 'From your plan · awaiting approval' : 'From your approved plan'}${DM.form.purpose ? ' · ' + esc(DM.form.purpose) : ''}</div>` : '') +
+      From your approved plan${DM.form.purpose ? ' · ' + esc(DM.form.purpose) : ''}</div>` : '') +
     _sec('Visit') +
     _pickField('agent', 'Agency') +
     _row(_f('Check-in', _in('check_in', '', 'time')), _f('Check-out', _in('check_out', '', 'time'))) +
@@ -759,11 +761,13 @@ window.dmStartFromPlan = async id => {
   let p = null;
   for (const pool of pools) { p = (pool || []).find(x => Number(x.id) === Number(id)); if (p) break; }
   if (!p) return;
+  // A plan opens only once approved, whichever list it was tapped from.
+  if (p.status === 'submitted') { toast('This plan is still awaiting approval'); return; }
   DM.pickPlan = false;
   DM.form = {}; DM.extra = {}; DM.photo = null; DM.err = null;
   DM.form._target = { unit_code: p.unit_code, target_code: p.target_code, target_name: p.target_name,
                       outstanding: p.outstanding_snap, city: p.target_extra };
-  DM.form._fromPlan = true; DM.form.plan_id = p.id; DM.form._planStatus = p.status;
+  DM.form._fromPlan = true; DM.form.plan_id = p.id;
   DM.form.purpose = p.purpose || ''; DM.form.visit_date = _DAY();
   DM.form.check_in = p.visit_time || _NOW();
   DM.mode = 'agency_visit';

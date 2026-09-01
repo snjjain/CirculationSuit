@@ -159,6 +159,10 @@
 .dcr-row.next { background: var(--d-info-bg); margin: 0 -10px; padding-left: 10px; padding-right: 10px;
                 border-radius: 10px; border-bottom-color: transparent; }
 .dcr-row.done .t { color: var(--d-mut); text-decoration: line-through; }
+/* Unapproved plan: visible so the executive knows it is filed, dimmed and inert
+   so it does not read as something they can act on. */
+.dcr-row.locked { opacity: .62; cursor: not-allowed; }
+.dcr-row.locked .t { color: var(--d-mut); }
 
 /* ── auto-filled agency panel ─────────────────────────────────────────────── */
 .dcr-auto { background: var(--d-info-bg); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
