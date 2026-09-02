@@ -4302,8 +4302,13 @@ function _ccLoad() {
 }
 
 /* ── small formatters ── */
+/* Cr / L keeps a KPI card readable, but the rounded figure hides up to a lakh, so the
+   exact rupee amount is on the tooltip. Below a lakh the figure is already exact and is
+   left as plain text — a tooltip repeating the same number is only noise. */
 const _ccINR = v => { const n = Number(v) || 0, a = Math.abs(n);
-  return a >= 1e7 ? `₹${(n / 1e7).toFixed(2)} Cr` : a >= 1e5 ? `₹${(n / 1e5).toFixed(2)} L` : `₹${Math.round(n).toLocaleString('en-IN')}`; };
+  if (a < 1e5) return `₹${Math.round(n).toLocaleString('en-IN')}`;
+  const short = a >= 1e7 ? `₹${(n / 1e7).toFixed(2)} Cr` : `₹${(n / 1e5).toFixed(2)} L`;
+  return `<span title="₹${Math.round(n).toLocaleString('en-IN')}" style="cursor:help">${short}</span>`; };
 const _ccN = v => (Number(v) || 0).toLocaleString('en-IN');
 const _CC_STATUS = {
   healthy:  { bg: '#dcfce7', fg: '#15803d', label: 'Healthy' },
@@ -5863,9 +5868,16 @@ function _cmdViewNew() {
       onClick: `ccDrill('outstanding','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Field Coverage', color: '#8b5cf6',
       value: (t.coverage.pct == null ? '—' : t.coverage.pct + '%'),
-      trend: cmpTrend(t.coverage.value, t.coverage.prev, t.coverage.growth_pct),
+      /* No field-visit records exist before 2026, so a year-on-year comparison has
+         nothing to measure against. Saying "was 0 agencies visited" turned a gap in
+         the record into an apparent collapse in field activity; the card now says the
+         record is missing and shows no trend arrow for it. */
+      trend: t.coverage.prev_has_data === false ? '' : cmpTrend(t.coverage.value, t.coverage.prev, t.coverage.growth_pct),
       sub: `${_ccN(t.coverage.value)} of ${_ccN(t.coverage.of)} agencies · ${esc(t.coverage.window)}${
-        t.coverage.prev == null ? '' : `<br><span style="color:#475569">${wasWord} ${_ccN(t.coverage.prev)} agencies visited</span>`}`,
+        t.coverage.prev_has_data === false
+          ? `<br><span style="color:#94a3b8">no field-visit records for the comparison period</span>`
+          : t.coverage.prev == null ? ''
+          : `<br><span style="color:#475569">${wasWord} ${_ccN(t.coverage.prev)} agencies visited</span>`}`,
       barPct: t.coverage.pct, onClick: `ccDrill('dcr_analytics','${q(anyState)}')` })}
   </div>
   <style>@media(max-width:1180px){.cc-strip{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
@@ -6605,7 +6617,12 @@ function _csZHRows(st, d) {
   const zh_perf = (d && d.zh_perf) || [];
   const exp = st.zhExp || (st.zhExp = new Set());
 
-  const NF = v => { const n = Number(v)||0; if (!n) return '<span style="color:#cbd5e1">—</span>'; return n >= 100000 ? (n/100000).toFixed(1)+'L' : n >= 1000 ? (n/1000).toFixed(0)+'k' : String(n); };
+  /* Columns are narrow, so the figure stays short — but a shortened number you cannot
+     check is not much use, so the exact value rides along in the tooltip. */
+  const NF = v => { const n = Number(v)||0; if (!n) return '<span style="color:#cbd5e1">—</span>';
+    const short = n >= 100000 ? (n/100000).toFixed(1)+'L' : n >= 1000 ? (n/1000).toFixed(0)+'k' : String(n);
+    const exact = n.toLocaleString('en-IN');
+    return short === exact ? short : `<span title="${exact}" style="cursor:help;border-bottom:1px dotted #cbd5e1">${short}</span>`; };
   const GP = v => { if (v == null) return '<span style="color:#94a3b8">—</span>'; const c = v >= 5 ? '#16a34a' : v >= 0 ? '#64748b' : '#dc2626'; return `<span style="color:${c}">${v > 0 ? '+' : ''}${v}%</span>`; };
   const CP = v => { if (v == null) return '<span style="color:#94a3b8">—</span>'; const c = v >= 90 ? '#16a34a' : v >= 70 ? '#d97706' : '#dc2626'; return `<b style="color:${c}">${v}%</b>`; };
   const CR = v => v > 0 ? `<b style="color:#dc2626">${v}</b>` : '<span style="color:#cbd5e1">—</span>';

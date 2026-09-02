@@ -342,15 +342,23 @@ module.exports = function installCommandCentre({ app, q }) {
     const uC = unitScope ? ' AND unit_code = ?' : '';
     const uD = unitScope ? ' AND unit_code = ?' : '';
     const uP = unitScope ? [unitScope] : [];
-    const [coll, visits] = await Promise.all([
+    const [coll, visits, any] = await Promise.all([
       q(`SELECT -COALESCE(SUM(amount),0) amt, COUNT(*) txn, COUNT(DISTINCT ag_code) agencies
          FROM agency_collection WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uC}`, [win.from, win.to, ...uP]),
       q(`SELECT COUNT(*) visits, COUNT(DISTINCT visit_to_main_code) agencies, COUNT(DISTINCT emp_code) execs
          FROM dcr_agency_visit WHERE mark_attn_date BETWEEN ? AND ?${uD}`, [win.from, win.to, ...uP]),
+      /* Whether the DCR feed holds anything at all for this window, nationally and
+         regardless of scope. Field reporting only began during 2026, so a comparison
+         against last year returns zero visits — which is a gap in the record, not a
+         month when nobody went out. Without this the card reported "was 0 agencies
+         visited" and read as a total collapse in field activity. */
+      q(`SELECT COUNT(*) n FROM dcr_agency_visit WHERE mark_attn_date BETWEEN ? AND ?`,
+        [win.from, win.to]),
     ]);
     return {
       collection: N(coll.rows[0]?.amt), txn: N(coll.rows[0]?.txn), agencies_paid: N(coll.rows[0]?.agencies),
       visits: N(visits.rows[0]?.visits), agencies_visited: N(visits.rows[0]?.agencies), execs_active: N(visits.rows[0]?.execs),
+      dcr_has_data: N(any.rows[0]?.n) > 0,
     };
   }
 
@@ -762,7 +770,8 @@ module.exports = function installCommandCentre({ app, q }) {
         outstanding:   { value: osTot, prev: osPrevTot, growth_pct: r1(pct(osTot, osPrevTot)), window: `as on today` },
         critical:      { value: sum(s => s.os.critical_agencies), of: sum(s => s.os.agencies), window: 'agencies above ₹1 L' },
         coverage:      { value: rng.agencies_visited, prev: rngPrev.agencies_visited,
-                         growth_pct: r1(pct(rng.agencies_visited, rngPrev.agencies_visited)),
+                         prev_has_data: rngPrev.dcr_has_data, has_data: rng.dcr_has_data,
+                         growth_pct: rngPrev.dcr_has_data ? r1(pct(rng.agencies_visited, rngPrev.agencies_visited)) : null,
                          of: bookTot, visits: rng.visits, prev_visits: rngPrev.visits, execs: rng.execs_active,
                          pct: bookTot ? r1(rng.agencies_visited / bookTot * 100) : null, window: win.label },
       };
