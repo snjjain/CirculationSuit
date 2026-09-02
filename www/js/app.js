@@ -15250,6 +15250,7 @@ function fbRow(q, i, n, sets) {
         <button class="ic" title="Move up"   onclick="fbMove(${q.id},-1)" ${i === 0 ? 'disabled' : ''}>↑</button>
         <button class="ic" title="Move down" onclick="fbMove(${q.id},1)" ${i === n - 1 ? 'disabled' : ''}>↓</button>
         <button class="ic" title="Duplicate" onclick="fbDup(${q.id})">⧉</button>
+        ${q.is_active ? `<button class="ic danger" title="Remove this question" onclick="fbRetire(${q.id})">🗑</button>` : ''}
       </div>
     </div></div>`;
 }
@@ -15577,9 +15578,28 @@ window.fbSave = async () => {
     await fbLoad(true);
   } catch (err) { e.err = err.message; render(); }
 };
+/* Removing is one click from the list now, so the warning has to carry its weight.
+   The real hazard is not the question itself but what hangs off it: a question whose
+   answer gates another would leave that other one permanently hidden, and a figure
+   feeding a calculated field would leave it stuck. Both fail silently — nothing looks
+   broken, the question simply never appears again — so they are named before the fact
+   rather than found weeks later in a report. */
 window.fbRetire = async id => {
-  const q = (_fbState().data.questions || []).find(x => x.id === id);
-  if (!confirm(`Remove "${q ? q.question : id}" from the form?\n\nAnswers already recorded keep their label, and you can bring it back with "Show retired".`)) return;
+  const all = _fbState().data.questions || [];
+  const q = all.find(x => x.id === id);
+  if (!q) return;
+  const live = all.filter(x => x.is_active && x.id !== id);
+  const gated = live.filter(x => x.show_when && x.show_when.field === q.code);
+  const inCalc = live.filter(x => x.calc && (x.calc.a === q.code || x.calc.b === q.code));
+
+  let msg = `Remove this question from the form?\n\n  "${q.question}"\n`;
+  if (gated.length) {
+    msg += `\n!  ${gated.length} question${gated.length === 1 ? '' : 's'} appear${gated.length === 1 ? 's' : ''} only on this answer, and would never be shown again:\n`
+         + gated.map(x => `     - ${x.question}`).join('\n') + '\n';
+  }
+  if (inCalc.length) msg += `\n!  Used to calculate: ${inCalc.map(x => x.question).join(', ')}\n`;
+  msg += `\nAnswers already recorded keep their label. You can bring it back any time with "Show retired".`;
+  if (!confirm(msg)) return;
   try { await fbApi(`/api/admin/feedback-questions/${id}`, 'DELETE'); _fbState().openId = null; _fbState().edit = null;
         toast('Removed from the form'); await fbLoad(true); }
   catch (e) { toast(e.message); }
