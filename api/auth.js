@@ -278,11 +278,29 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
   // GET /api/admin/users
   app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
     try {
+      /* Branch and employee code are not columns on app_users — they belong to the
+         person, and hierarchy_master is where a person's posting lives. They are
+         joined rather than copied so a transfer in the ERP shows here without a
+         second place to keep in step. The unit code is turned into a name because
+         "JA0" means nothing to whoever is granting access.
+
+         MIN() over the join because hierarchy_master is keyed by (comp, unit,
+         person) and a person carried on more than one row would otherwise duplicate
+         the user in this list. */
       const { rows } = await q(`
         SELECT au.id, au.person_code, au.name, au.username, au.mobile, au.email, au.hierarchy_level,
                au.user_type, au.is_active, au.must_change_password, au.failed_attempts,
-               au.locked_until, au.last_login_at, (au.password_hash IS NOT NULL) AS has_password
-        FROM app_users au ORDER BY (au.hierarchy_level IS NULL), au.hierarchy_level, au.name`);
+               au.locked_until, au.last_login_at, (au.password_hash IS NOT NULL) AS has_password,
+               MIN(hm.unit_code)     AS unit_code,
+               MIN(u.unit_name)      AS unit_name,
+               MIN(hm.employee_code) AS employee_code
+        FROM app_users au
+        LEFT JOIN hierarchy_master hm ON hm.person_code = au.person_code AND hm.is_active = 1
+        LEFT JOIN units u             ON u.unit_code = hm.unit_code
+        GROUP BY au.id, au.person_code, au.name, au.username, au.mobile, au.email,
+                 au.hierarchy_level, au.user_type, au.is_active, au.must_change_password,
+                 au.failed_attempts, au.locked_until, au.last_login_at, au.password_hash
+        ORDER BY (au.hierarchy_level IS NULL), au.hierarchy_level, au.name`);
       res.json({ users: rows, total: rows.length });
     } catch (e) { res.status(500).json({ detail: e.message }); }
   });

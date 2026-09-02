@@ -14872,7 +14872,20 @@ window.umCreate = async () => {
 };
 window.umEdit = (id) => {
   const u = (S.live.adminUsers || []).find(x => x.id === id); if (!u) return;
+  /* Branch and employee code come from the ERP posting, not from this record, so they
+     are shown for identification and not offered for editing — changing them here
+     would be overwritten by the next hierarchy sync and would silently disagree with
+     the person's real posting. */
+  const posting = (u.unit_name || u.unit_code || u.employee_code)
+    ? `<div style="background:var(--surface-2);border-radius:8px;padding:9px 11px;margin-bottom:12px;font-size:12.5px;line-height:1.7">
+         ${u.employee_code ? `<div><span style="color:var(--ink-2)">Employee code</span> &nbsp;<b>${esc(u.employee_code)}</b></div>` : ''}
+         ${(u.unit_name || u.unit_code) ? `<div><span style="color:var(--ink-2)">Branch</span> &nbsp;<b>${esc(u.unit_name || '')}</b>${u.unit_code ? ` <span style="color:var(--ink-2)">(${esc(u.unit_code)})</span>` : ''}</div>` : ''}
+         <div style="font-size:11px;color:var(--ink-2);margin-top:3px">From the ERP hierarchy — change it there, not here.</div>
+       </div>`
+    : `<div style="background:var(--surface-2);border-radius:8px;padding:9px 11px;margin-bottom:12px;font-size:12px;color:var(--ink-2)">
+         No branch posting found for this person in the ERP hierarchy.</div>`;
   modal(`<h3>Edit user</h3><div id="umErr"></div>
+    ${posting}
     <div class="fld"><label>Full name</label><input id="umName" value="${esc(u.name || '')}"></div>
     <div class="fld"><label>Mobile number</label><input id="umMobile" maxlength="10" inputmode="numeric" value="${esc(u.mobile || '')}"></div>
     <div class="fld"><label>User ID</label><input id="umUsername" value="${esc(u.username || '')}"></div>
@@ -15090,6 +15103,9 @@ VIEWS.user_mgmt = () => {
     (u.mobile || '').includes(search) ||
     (u.username || '').toLowerCase().includes(search) ||
     umLevelLabel(u.hierarchy_level).toLowerCase().includes(search) ||
+    (u.unit_name || '').toLowerCase().includes(search) ||
+    (u.unit_code || '').toLowerCase().includes(search) ||
+    (u.employee_code || '').toLowerCase().includes(search) ||
     (u.user_type || '').includes(search));
 
   const rows = filtered.map(u => {
@@ -15099,8 +15115,11 @@ VIEWS.user_mgmt = () => {
       : `<span class="chip" style="background:var(--grn-l);color:var(--grn)">Active</span>`;
     const nmeSafe = (u.name || '').replace(/'/g, "\\'");
     return `<tr style="border-top:1px solid var(--border)">
-      <td style="padding:8px 10px"><b>${esc(u.name || '')}</b>${u.person_code ? `<div style="font-size:10px;color:var(--ink-2)">${esc(u.person_code)}</div>` : ''}</td>
+      <td style="padding:8px 10px"><b>${esc(u.name || '')}</b>
+        <div style="font-size:10px;color:var(--ink-2)">${u.employee_code ? 'Emp ' + esc(u.employee_code) : esc(u.person_code || '')}</div></td>
       <td style="padding:8px 10px">${esc(u.username || u.mobile || '—')}</td>
+      <td style="padding:8px 10px;font-size:12px">${u.unit_name ? esc(u.unit_name) : '<span style="color:var(--ink-2)">—</span>'}
+        ${u.unit_code ? `<div style="font-size:10px;color:var(--ink-2)">${esc(u.unit_code)}</div>` : ''}</td>
       <td style="padding:8px 10px;font-size:12px">${esc(umLevelLabel(u.hierarchy_level))}</td>
       <td style="padding:8px 10px;font-size:12px">${esc(u.user_type || '')}</td>
       <td style="padding:8px 10px;text-align:center">${status}${!u.has_password ? `<div style="font-size:10px;color:var(--red)">no password</div>` : ''}</td>
@@ -15119,16 +15138,17 @@ VIEWS.user_mgmt = () => {
     ? `<div style="padding:24px;text-align:center;color:var(--ink-2)">Loading users…</div>`
     : `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
         <thead><tr style="background:var(--surface-2);text-align:left">
-          <th style="padding:8px 10px">Name</th><th style="padding:8px 10px">Login (ID/Mobile)</th>
+          <th style="padding:8px 10px">Name / Emp code</th><th style="padding:8px 10px">Login (ID/Mobile)</th>
+          <th style="padding:8px 10px">Branch</th>
           <th style="padding:8px 10px">Designation</th><th style="padding:8px 10px">Type</th>
           <th style="padding:8px 10px;text-align:center">Status</th><th style="padding:8px 10px">Last login</th>
           <th style="padding:8px 10px;text-align:right">Actions</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--ink-2)">No users match</td></tr>`}</tbody>
+        <tbody>${rows || `<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--ink-2)">No users match</td></tr>`}</tbody>
       </table></div>`;
 
   return pagehead('User Management', `${users.length} users · create, activate, assign designation, reset passwords`) +
     `<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-      <input id="umSearch" placeholder="Search name / mobile / User ID / role…" value="${esc(S.live.umSearch || '')}" oninput="umSearch(this.value)" style="flex:1;min-width:200px;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+      <input id="umSearch" placeholder="Search name / mobile / User ID / emp code / branch / role…" value="${esc(S.live.umSearch || '')}" oninput="umSearch(this.value)" style="flex:1;min-width:200px;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
       <button class="btn navy" onclick="umNew()">+ New User</button>
       <button class="btn" onclick="fetchAdminUsers(true)">↻ Refresh</button>
     </div>
