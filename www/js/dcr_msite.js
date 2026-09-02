@@ -178,8 +178,16 @@ const _f = (label, ctl, req, hint) => `<div class="dcr-f">
   ${ctl}${hint ? `<div class="hint">${T(hint)}</div>` : ''}</div>`;
 const _row = (a, b) => `<div class="dcr-2col">${a}${b}</div>`;
 
-const _in = (k, ph, type, extra) => `<input class="dcr-in" id="f_${k}" value="${esc(DM.form[k] || '')}" type="${type || 'text'}"
-  placeholder="${esc(T(ph) || '')}" oninput="dmSet('${k}',this.value)" ${extra || ''}>`;
+/* Date and time open their picker from anywhere in the field, not just the small icon
+   at the right edge. On a phone that icon is a ~20px target next to a 46px field, and
+   tapping the rest of the field appeared to do nothing. showPicker() needs a user
+   gesture, which a click is, and is wrapped because older browsers lack it. */
+const _in = (k, ph, type, extra) => {
+  const picky = type === 'date' || type === 'time';
+  return `<input class="dcr-in" id="f_${k}" value="${esc(DM.form[k] || '')}" type="${type || 'text'}"
+  placeholder="${esc(T(ph) || '')}" oninput="dmSet('${k}',this.value)"
+  ${picky ? `onclick="try{this.showPicker&&this.showPicker()}catch(e){}"` : ''} ${extra || ''}>`;
+};
 const _sel = (k, opts, ph, onX) => `<select onchange="${onX ? `dmSetX('${k}',this.value)` : `dmSet('${k}',this.value)`};render()">
   <option value="">${esc(T(ph) || '-- Select --')}</option>
   ${opts.map(o => { const [v, l] = Array.isArray(o) ? o : [o, o];
@@ -523,21 +531,55 @@ async function _loadTargets(type) {
   const key = `${type}|${DM.search}`;
   if (DM.targetsKey === key && DM.targets) return;
   DM.targetsKey = key;
+  DM.targetsBusy = true;
   try { const r = await _api(`/targets?type=${type}&limit=60${DM.search ? '&q=' + encodeURIComponent(DM.search) : ''}`);
-        DM.targets = r.rows || []; } catch (e) { DM.targets = []; }
+        DM.targets = r.rows || []; DM.targetsNote = r.note || null; }
+  catch (e) { DM.targets = []; DM.targetsNote = e.message; }
+  DM.targetsBusy = false;
   if (_dmOn()) render();
 }
 window.dmSearch = (() => { let t; return v => { DM.search = v; clearTimeout(t);
   t = setTimeout(() => { DM.targets = null; DM.targetsKey = ''; render(); }, 350); }; })();
 
+/* The whole flyout is re-rendered when results arrive, which takes the caret out of
+   the search box mid-word — so a name longer than the debounce could never be typed.
+   Focus and caret are put back after each render while the picker is open. */
+function _keepSearchFocus() {
+  setTimeout(() => {
+    const el = document.getElementById('dmTargetSearch');
+    if (!el || document.activeElement === el) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;  // don't steal it
+    el.focus();
+    const n = el.value.length;
+    try { el.setSelectionRange(n, n); } catch (_) {}
+  }, 0);
+}
+
 function _pickerBody(type) {
   _loadTargets(type);
+  _keepSearchFocus();
+  const term = String(DM.search || '').trim();
   const rows = (DM.targets || []).slice(0, 40).map(r => `<div class="dcr-row" onclick='dmPick(${JSON.stringify(r).replace(/'/g, "&#39;")})' style="cursor:pointer">
     <div style="min-width:0;flex:1"><div class="t">${esc(r.target_name || r.target_code)}</div>
       <div class="s">${esc(r.city || r.centre || '')}</div></div>
     ${Number(r.outstanding) > 0 ? _tag(_INR(r.outstanding), Number(r.outstanding) > 100000 ? 'bad' : 'warn') : ''}</div>`).join('');
-  return `<input class="dcr-in" value="${esc(DM.search)}" oninput="dmSearch(this.value)" placeholder="Type 3 letters…" style="margin-bottom:10px" autofocus>
-    ${DM.targets ? (rows || `<div style="font-size:13px;color:var(--d-mut);padding:12px 0">No match.</div>`) : `<div style="font-size:13px;color:var(--d-mut);padding:12px 0">Loading…</div>`}`;
+
+  /* "No match" was shown before anything had been typed, which reads as a broken
+     search rather than an empty box. Each state now says what it actually is. */
+  const hint = m => `<div style="font-size:13px;color:var(--d-mut);padding:12px 0">${m}</div>`;
+  let body;
+  if (DM.targetsBusy && !rows) body = hint('Searching…');
+  else if (rows)               body = rows;
+  else if (!DM.targets)        body = hint('Loading…');
+  else if (term.length && term.length < 3) body = hint('Type at least 3 letters.');
+  else if (term.length)        body = hint(`No ${type === 'hawker' ? 'hawker' : 'agency'} found for “${esc(term)}”.`);
+  else body = hint(DM.targetsNote || `Type a name or code to search — at least 3 letters.`);
+
+  return `<input id="dmTargetSearch" class="dcr-in" value="${esc(DM.search)}" oninput="dmSearch(this.value)"
+      placeholder="${type === 'hawker' ? 'Search hawker…' : 'Search agency by name or code…'}"
+      autocomplete="off" autocapitalize="off" spellcheck="false"
+      style="margin-bottom:10px" autofocus>${body}`;
 }
 window.dmPick = async r => {
   DM.form._target = r; DM.search = ''; DM.flyout = null; DM.agency = null;
@@ -841,7 +883,9 @@ function _fFeedback() {
       </div>`;
     }
     else ctl = `<input value="${esc(v || '')}" type="${q.t === 'num' ? 'number' : q.t === 'date' ? 'date' : q.t === 'time' ? 'time' : 'text'}"
-        ${q.t === 'num' ? 'inputmode="numeric"' : ''} oninput="dmSetX('${q.id}',this.value)" style="${IN}">`;
+        ${q.t === 'num' ? 'inputmode="numeric"' : ''}
+        ${['date', 'time'].includes(q.t) ? `onclick="try{this.showPicker&&this.showPicker()}catch(e){}"` : ''}
+        oninput="dmSetX('${q.id}',this.value)" style="${IN}">`;
     return head + _f(q.q, ctl, q.req, q.hint);
   }).join('');
 
@@ -1035,7 +1079,7 @@ function _todaysApproved() {
   _loadApproved();
   const rows = DM.approved || [];
   return _sec('Approved — ready to visit') +
-    _f('Date', `<input type="date" value="${DM.planDate || _DAY()}" onchange="DM.planDate=this.value;DM.approved=null;render()">`) +
+    _f('Date', `<input type="date" value="${DM.planDate || _DAY()}" onclick="try{this.showPicker&&this.showPicker()}catch(e){}" onchange="DM.planDate=this.value;DM.approved=null;render()">`) +
     (!DM.approved ? `<div style="font-size:12.5px;color:${K.mut};padding:10px 0">${T('Loading…')}</div>`
      : rows.length ? `<div class="dcr-card">${rows.map(r => `<div class="dcr-row">
         <div style="min-width:0;flex:1"><div class="t">${esc(r.target_name || r.target_code)}</div>
