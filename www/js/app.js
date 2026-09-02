@@ -15228,8 +15228,12 @@ VIEWS.fb_form = () => {
    row is the target, not a small Edit button. */
 function fbRow(q, i, n, sets) {
   const setLabel = k => (sets.find(s => s.set_key === k) || {}).label || k;
-  return `<div class="fbq ${q.is_active ? '' : 'retired'}" onclick="fbOpen(${q.id})">
+  return `<div class="fbq ${q.is_active ? '' : 'retired'}" onclick="fbOpen(${q.id})"
+    draggable="true" data-id="${q.id}"
+    ondragstart="fbDragStart(event,${q.id})" ondragover="fbDragOver(event,${q.id})"
+    ondragleave="fbDragLeave(event)" ondrop="fbDrop(event,${q.id})" ondragend="fbDragEnd()">
     <div class="fbq-h">
+      <span class="fbq-grip" title="Drag to move">⠿</span>
       <span class="fbq-n">${i + 1}</span>
       <div style="flex:1;min-width:0">
         <div class="fbq-t">${esc(q.question)}${q.is_required ? '<span class="fbq-req">*</span>' : ''}</div>
@@ -15422,6 +15426,13 @@ function fbStyle() {
   .fbq-h{display:flex;gap:11px;align-items:center}
   .fbq-n{flex:none;width:24px;height:24px;border-radius:50%;background:var(--surf2);color:var(--muted);
     font-size:11.5px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .fbq-grip{flex:none;color:var(--muted);opacity:.35;cursor:grab;font-size:15px;line-height:1;
+    letter-spacing:-2px;user-select:none}
+  .fbq:hover .fbq-grip{opacity:.8}
+  .fbq-grip:active{cursor:grabbing}
+  .fbq.dragging{opacity:.4}
+  .fbq.over-top{box-shadow:0 -3px 0 0 var(--navy,#1C2B45)}
+  .fbq.over-bot{box-shadow:0 3px 0 0 var(--navy,#1C2B45)}
   .fbq-t{font-size:14px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .fbq-req{color:var(--red);margin-left:3px}
   .fbq-m{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:3px}
@@ -15573,15 +15584,79 @@ window.fbRetire = async id => {
         toast('Removed from the form'); await fbLoad(true); }
   catch (e) { toast(e.message); }
 };
+/* Drag to reorder. The ↑↓ buttons stay: dragging is not available on a touch screen
+   and is awkward for anyone using a keyboard, so it is the faster path, not the only
+   one.
+
+   The DOM is not reordered directly — the drop mutates the list and re-renders, so
+   what is on screen always comes from the same state the save will send. */
+window.fbDragStart = (ev, id) => {
+  const st = _fbState();
+  if (st.openId) { ev.preventDefault(); return; }   // don't drag a card being edited
+  st.dragId = id;
+  ev.dataTransfer.effectAllowed = 'move';
+  try { ev.dataTransfer.setData('text/plain', String(id)); } catch (_) {}
+  ev.currentTarget.classList.add('dragging');
+};
+window.fbDragOver = (ev, id) => {
+  const st = _fbState();
+  if (!st.dragId || st.dragId === id) return;
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect = 'move';
+  const el = ev.currentTarget, r = el.getBoundingClientRect();
+  const above = (ev.clientY - r.top) < r.height / 2;
+  el.classList.toggle('over-top', above);
+  el.classList.toggle('over-bot', !above);
+  st.dropAbove = above;
+};
+window.fbDragLeave = ev => ev.currentTarget.classList.remove('over-top', 'over-bot');
+window.fbDragEnd = () => {
+  document.querySelectorAll('.fbq').forEach(el => el.classList.remove('dragging', 'over-top', 'over-bot'));
+  _fbState().dragId = null;
+};
+window.fbDrop = async (ev, overId) => {
+  ev.preventDefault(); ev.stopPropagation();
+  const st = _fbState();
+  const from = st.dragId;
+  fbDragEnd();
+  if (!from || from === overId) return;
+
+  const list = (st.data.questions || []).filter(q => st.showRetired || q.is_active);
+  const fi = list.findIndex(q => q.id === from);
+  if (fi < 0) return;
+  const [moved] = list.splice(fi, 1);
+  let ti = list.findIndex(q => q.id === overId);
+  if (ti < 0) return;
+  if (!st.dropAbove) ti += 1;
+  list.splice(ti, 0, moved);
+
+  /* A question dropped inside another section takes that section's name. Leaving it
+     with its old name would draw a second heading in the middle of the run — the same
+     duplicate-heading problem as adding one. The neighbour above wins, or the one
+     below when it lands at the very top. */
+  const neighbour = list[ti - 1] || list[ti + 1];
+  if (neighbour && neighbour.section !== moved.section) moved.section = neighbour.section;
+
+  st.data.questions = list;
+  render();
+  try { await fbApi('/api/admin/feedback-questions/reorder', 'POST',
+          { items: list.map(q => ({ id: q.id, section: q.section })) }); }
+  catch (e) { toast(e.message); await fbLoad(true); }
+};
+
 window.fbMove = async (id, dir) => {
   const st = _fbState();
   const list = (st.data.questions || []).filter(q => st.showRetired || q.is_active);
   const i = list.findIndex(q => q.id === id), j = i + dir;
   if (i < 0 || j < 0 || j >= list.length) return;
   [list[i], list[j]] = [list[j], list[i]];
+  // Stepping past a heading joins that section, exactly as dragging across one does.
+  const moved = list[j], neighbour = list[j - 1] || list[j + 1];
+  if (neighbour && neighbour.section !== moved.section) moved.section = neighbour.section;
   st.data.questions = list;                        // move on screen first, then persist
   render();
-  try { await fbApi('/api/admin/feedback-questions/reorder', 'POST', { ids: list.map(q => q.id) }); }
+  try { await fbApi('/api/admin/feedback-questions/reorder', 'POST',
+          { items: list.map(q => ({ id: q.id, section: q.section })) }); }
   catch (e) { toast(e.message); await fbLoad(true); }
 };
 

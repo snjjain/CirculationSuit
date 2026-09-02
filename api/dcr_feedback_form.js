@@ -185,6 +185,20 @@ module.exports = function installFeedbackForm({ app, q, requireAdmin }) {
     return 'q' + (max + 1);
   }
 
+  /* Sort order just past the last question already in this section, shifting whatever
+     followed out of the way. A brand-new section name goes to the end of the form. */
+  async function placeInSection(section) {
+    const { rows } = await q(
+      `SELECT COALESCE(MAX(sort_order),0) m FROM dcr_feedback_question WHERE section = ?`, [section]);
+    const last = Number(rows[0].m);
+    if (!last) {
+      const { rows: mx } = await q('SELECT COALESCE(MAX(sort_order),0) m FROM dcr_feedback_question');
+      return Number(mx[0].m) + 10;
+    }
+    await q('UPDATE dcr_feedback_question SET sort_order = sort_order + 10 WHERE sort_order > ?', [last]);
+    return last + 10;
+  }
+
   function validate(b, existing) {
     const code = S(b.code, 20);
     if (!code || !/^[a-zA-Z0-9_]+$/.test(code)) return 'Code is required — letters, digits and underscore only.';
@@ -233,6 +247,25 @@ module.exports = function installFeedbackForm({ app, q, requireAdmin }) {
         Number(b.sort_order) || 0, S(req.auth && req.auth.personCode, 20),
       ];
 
+      /* Retyping the section on an existing question moves it there, for the same
+         reason: a question sitting outside the run that shares its name would draw a
+         second heading with that name. */
+      if (existing && !Number(b.sort_order)) {
+        /* Re-place when the section changed, and also when the question is sitting
+           outside the run that already carries its name — a question stranded past
+           another section draws a second heading with the same title, and re-saving
+           it is the obvious way someone would try to fix that. */
+        const sec = S(b.section, 60);
+        const { rows: run } = await q(
+          `SELECT MIN(sort_order) lo, MAX(sort_order) hi FROM dcr_feedback_question
+            WHERE section = ? AND id <> ?`, [sec, existing.id]);
+        const lo = run[0].lo, hi = run[0].hi;
+        const inRun = lo != null && existing.sort_order >= lo && existing.sort_order <= hi;
+        vals[16] = (sec !== existing.section || (lo != null && !inRun))
+          ? await placeInSection(sec)
+          : existing.sort_order;
+      }
+
       if (existing) {
         await q(`UPDATE dcr_feedback_question SET code=?, section=?, question=?, input_type=?,
                    options=?, sets=?, show_when=?, calc=?, score_kind=?, score_map=?, score_max=?,
@@ -243,10 +276,12 @@ module.exports = function installFeedbackForm({ app, q, requireAdmin }) {
       // A code already used by a retired question is reused rather than duplicated.
       const { rows: dup } = await q('SELECT id FROM dcr_feedback_question WHERE code = ?', [S(b.code, 20)]);
       if (dup[0]) return res.status(409).json({ detail: `Code "${b.code}" is already used by another question.` });
-      if (!Number(b.sort_order)) {
-        const { rows: mx } = await q('SELECT COALESCE(MAX(sort_order),0) m FROM dcr_feedback_question');
-        vals[16] = Number(mx[0].m) + 10;
-      }
+      /* Place it at the end of its own section rather than the end of the form.
+         Appending blindly put a question named "Supply" after the last section, and
+         because the list draws a heading whenever the section changes, the same
+         section appeared twice. A section is a contiguous run, so a new question
+         joins the run that already carries its name. */
+      if (!Number(b.sort_order)) vals[16] = await placeInSection(S(b.section, 60));
       const r = await q(`INSERT INTO dcr_feedback_question
           (code, section, question, input_type, options, sets, show_when, calc, score_kind,
            score_map, score_max, score_label, score_ref, hint, is_required, is_active, sort_order, updated_by)
@@ -269,12 +304,21 @@ module.exports = function installFeedbackForm({ app, q, requireAdmin }) {
   app.post('/api/admin/feedback-questions/reorder', requireAdmin, async (req, res) => {
     try {
       await ready;
-      const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.map(Number).filter(Boolean) : [];
-      if (!ids.length) return res.status(400).json({ detail: 'ids are required' });
-      for (let i = 0; i < ids.length; i++) {
-        await q('UPDATE dcr_feedback_question SET sort_order = ? WHERE id = ?', [(i + 1) * 10, ids[i]]);
+      /* Accepts either a plain id list or {id, section} pairs. Dragging a question
+         across a heading has to move it into that section as well as past it —
+         otherwise it keeps its old name in the middle of another run and draws a
+         stray heading, which is the bug this endpoint exists to avoid. */
+      const body = req.body || {};
+      const items = Array.isArray(body.items) ? body.items
+        : Array.isArray(body.ids) ? body.ids.map(id => ({ id })) : [];
+      const clean = items.filter(x => Number(x.id));
+      if (!clean.length) return res.status(400).json({ detail: 'ids are required' });
+      for (let i = 0; i < clean.length; i++) {
+        const sec = S(clean[i].section, 60);
+        if (sec) await q('UPDATE dcr_feedback_question SET sort_order = ?, section = ? WHERE id = ?', [(i + 1) * 10, sec, Number(clean[i].id)]);
+        else     await q('UPDATE dcr_feedback_question SET sort_order = ? WHERE id = ?', [(i + 1) * 10, Number(clean[i].id)]);
       }
-      res.json({ ok: true, n: ids.length });
+      res.json({ ok: true, n: clean.length });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
