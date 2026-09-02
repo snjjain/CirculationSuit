@@ -4528,6 +4528,7 @@ require('./dcr_app')({ app, q, getScopeUnitCodes });
 
 // ── DCR M-Site — field executive's day: trip, geofenced check-in, tour approval ──
 require('./dcr_msite')({ app, q, getScopeUnitCodes });
+require('./dcr_feedback_form')({ app, q, requireAdmin: auth.requireAdmin });
 
 // ── DCR Analytics — manager/admin field visit intelligence & agency GPS map ──
 require('./dcr_analytics')({ app, q, getScopeUnitCodes });

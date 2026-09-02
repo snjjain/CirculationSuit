@@ -42,6 +42,7 @@ const ADMIN_MENU = [
   ["manage_rights",   "Manage Rights",    "🔐"],
   ["audit_log",       "Audit Trail",      "📜"],
   ["email_config",    "Email Config",     "✉"],
+  ["fb_form",         "Agent Feedback Form", "📝"],
   ["competitor_data", "Competitor Data",  "📊"],
   ["exec_targets",    "Monthly Targets",  "🎯"],
 ];
@@ -15132,6 +15133,233 @@ VIEWS.user_mgmt = () => {
       <button class="btn" onclick="fetchAdminUsers(true)">↻ Refresh</button>
     </div>
     <div class="card" style="padding:0;overflow:hidden">${body}</div>`;
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Admin: Agent Feedback Form
+
+   The DCR questionnaire is management's, not the developers'. This edits the rows
+   the field app renders, so a wording change or a new question reaches every phone
+   on its next load with no deploy.
+
+   Two guard rails are deliberate and visible in the UI:
+     - the code is fixed once created, because recorded answers are stored against it;
+     - removing a question retires it rather than deleting it, so past reports keep
+       their labels.
+   ═══════════════════════════════════════════════════════════════════════════ */
+function _fbState() {
+  return S.live.fbForm || (S.live.fbForm = { data: null, loading: false, edit: null, showRetired: false });
+}
+/* The shared api.post returns null on failure and drops the body, but every validation
+   message here is written for the admin to read ("a choice question needs at least one
+   option"). This surfaces it instead of failing silently. */
+async function fbApi(path, method, body) {
+  const r = await fetch(api.base + path, {
+    method, headers: api.h(), body: body === undefined ? undefined : JSON.stringify(body) });
+  if (r.status === 401) { onAuthExpired(); throw new Error('Session expired'); }
+  const txt = await r.text();
+  let j = null; try { j = JSON.parse(txt); } catch (_) {}
+  if (!r.ok) throw new Error((j && j.detail) || `Request failed (${r.status})`);
+  return j;
+}
+async function fbLoad(force) {
+  const st = _fbState();
+  if (st.loading || (st.data && !force)) return;
+  st.loading = true;
+  try { st.data = await fbApi('/api/admin/feedback-questions', 'GET'); }
+  catch (e) { st.data = { error: e.message }; }
+  st.loading = false;
+  if (S.screen === 'fb_form') render();
+}
+VIEWS.fb_form = () => {
+  const st = _fbState();
+  fbLoad();
+  const d = st.data;
+  if (!d) return `<div class="pagehead"><h1>Agent Feedback Form</h1></div><div class="card">Loading…</div>`;
+  if (d.error) return `<div class="pagehead"><h1>Agent Feedback Form</h1></div>
+    <div class="card" style="color:var(--red)">${esc(d.error)}</div>`;
+
+  const sets = d.sets || [];
+  const setLabel = k => (sets.find(s => s.set_key === k) || {}).label || k;
+  const qs = (d.questions || []).filter(q => st.showRetired || q.is_active);
+  const live = (d.questions || []).filter(q => q.is_active).length;
+
+  let lastSec = '';
+  const rows = qs.map((q, i) => {
+    const head = q.section !== lastSec ? (lastSec = q.section,
+      `<tr><td colspan="6" style="background:var(--surf2);font-weight:700;font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);padding:7px 10px">${esc(q.section)}</td></tr>`) : '';
+    return head + `<tr${q.is_active ? '' : ' style="opacity:.5"'}>
+      <td class="num" style="color:var(--muted);font-size:12px">${esc(q.code)}</td>
+      <td>${esc(q.question)}
+        ${q.show_when ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">shown when <b>${esc(q.show_when.field)}</b> ${esc(q.show_when.op)} ${esc((q.show_when.values || []).join(', '))}</div>` : ''}
+        ${q.score ? `<div style="font-size:11px;color:var(--grn);margin-top:2px">scores up to ${esc(String(q.score.max))} · ${esc(q.score.label || '')}</div>` : ''}</td>
+      <td style="font-size:12px">${esc(q.input_type)}${q.options ? ` <span style="color:var(--muted)">(${q.options.length})</span>` : ''}</td>
+      <td style="font-size:11.5px;color:var(--muted)">${(q.sets || []).map(s => esc(setLabel(s))).join(', ')}</td>
+      <td style="text-align:center">${q.is_active ? '' : '<span class="pill">Retired</span>'}</td>
+      <td style="white-space:nowrap;text-align:right">
+        <button class="btn sm" onclick="fbMove(${q.id},-1)" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn sm" onclick="fbMove(${q.id},1)" ${i === qs.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="btn sm" onclick="fbEdit(${q.id})">Edit</button>
+        ${q.is_active ? `<button class="btn sm danger" onclick="fbRetire(${q.id})">Retire</button>` : ''}
+      </td></tr>`;
+  }).join('');
+
+  return `<div class="pagehead">
+      <h1>Agent Feedback Form</h1>
+      <div class="sub">${live} live question${live === 1 ? '' : 's'} across ${sets.length} visit types · edits reach the field app on its next load</div>
+    </div>
+    <div class="card">
+      <div style="display:flex;gap:9px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+        <button class="btn primary" onclick="fbEdit(0)">+ Add question</button>
+        <button class="btn" onclick="fbLoad(true)">↻ Refresh</button>
+        <label style="margin-left:auto;font-size:12.5px;display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" ${st.showRetired ? 'checked' : ''} onchange="_fbState().showRetired=this.checked;render()"> Show retired</label>
+      </div>
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>Code</th><th>Question</th><th>Answer type</th><th>Visit types</th><th></th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" style="color:var(--muted);padding:14px">No questions yet.</td></tr>'}</tbody>
+      </table></div>
+    </div>
+    ${st.edit ? fbEditor() : ''}`;
+};
+
+function fbEditor() {
+  const st = _fbState(), e = st.edit, d = st.data;
+  const isNew = !e.id;
+  const types = d.input_types || ['sel', 'multi', 'star', 'num', 'text', 'long', 'date', 'time', 'photo', 'calc'];
+  const codes = (d.questions || []).filter(q => q.code !== e.code).map(q => q.code);
+  const f = (label, ctl, hint) => `<div style="margin-bottom:12px">
+    <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">${label}</label>${ctl}
+    ${hint ? `<div style="font-size:11px;color:var(--muted);margin-top:3px">${hint}</div>` : ''}</div>`;
+
+  return `<div class="modal-back" onclick="if(event.target===this)fbClose()">
+    <div class="modal" style="max-width:640px">
+      <h3 style="margin:0 0 4px">${isNew ? 'Add question' : 'Edit question'}</h3>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px">${isNew ? 'It appears in the field app as soon as it is saved.' : 'Answers already recorded keep their code.'}</div>
+      ${e.err ? `<div class="card" style="background:var(--red-l);color:var(--red);margin-bottom:12px;font-size:12.5px">${esc(e.err)}</div>` : ''}
+
+      ${f('Code', `<input class="inp" value="${esc(e.code || '')}" ${isNew ? '' : 'disabled'} oninput="_fbState().edit.code=this.value">`,
+          isNew ? 'Short key answers are stored against, e.g. q24. Cannot be changed later.' : 'Fixed — recorded answers are stored against it.')}
+      ${f('Section', `<input class="inp" value="${esc(e.section || '')}" oninput="_fbState().edit.section=this.value" list="fbsecs">
+         <datalist id="fbsecs">${[...new Set((d.questions || []).map(q => q.section))].map(s => `<option value="${esc(s)}">`).join('')}</datalist>`,
+          'Questions are grouped under this heading in the app.')}
+      ${f('Question', `<textarea class="inp" rows="2" oninput="_fbState().edit.question=this.value">${esc(e.question || '')}</textarea>`,
+          'Hindi or English — shown to the executive exactly as typed.')}
+      ${f('Answer type', `<select class="inp" onchange="_fbState().edit.input_type=this.value;render()">
+          ${types.map(t => `<option value="${t}" ${e.input_type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>`,
+          'sel = one choice · multi = several · star = 1-5 rating · long = free text with dictation')}
+
+      ${['sel', 'multi'].includes(e.input_type) ? f('Options — one per line',
+        `<textarea class="inp" rows="5" oninput="_fbState().edit._opts=this.value">${esc((e.options || []).join('\n'))}</textarea>`,
+        'The exact words the executive picks from.') : ''}
+
+      ${f('Appears in', `<div style="display:flex;flex-wrap:wrap;gap:9px">
+        ${(d.sets || []).map(s => `<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer">
+          <input type="checkbox" ${(e.sets || []).includes(s.set_key) ? 'checked' : ''}
+            onchange="fbToggleSet('${esc(s.set_key)}',this.checked)"> ${esc(s.label)}</label>`).join('')}
+        </div>`, 'Which kinds of visit this question is asked on.')}
+
+      ${f('Only ask when (optional)', `<div style="display:flex;gap:7px;flex-wrap:wrap">
+        <select class="inp" style="flex:1;min-width:110px" onchange="fbWhen('field',this.value)">
+          <option value="">— always ask —</option>
+          ${codes.map(c => `<option value="${esc(c)}" ${e.show_when && e.show_when.field === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+        </select>
+        <select class="inp" style="flex:0 0 130px" onchange="fbWhen('op',this.value)">
+          ${['in', 'not_in', 'answered'].map(o => `<option value="${o}" ${e.show_when && e.show_when.op === o ? 'selected' : ''}>${o === 'in' ? 'is one of' : o === 'not_in' ? 'is not one of' : 'is answered'}</option>`).join('')}
+        </select>
+        <input class="inp" style="flex:1;min-width:130px" placeholder="value, value"
+          value="${esc(((e.show_when || {}).values || []).join(', '))}" oninput="fbWhen('values',this.value)">
+        </div>`, 'e.g. only ask “which competitors?” when q13 is one of हाँ.')}
+
+      ${f('Counts towards health score (optional)', `<div style="display:flex;gap:7px;flex-wrap:wrap">
+        <select class="inp" style="flex:0 0 150px" onchange="fbScore('kind',this.value);render()">
+          <option value="">— not scored —</option>
+          ${['map', 'star', 'competition'].map(k => `<option value="${k}" ${e.score && e.score.kind === k ? 'selected' : ''}>${k === 'map' ? 'points per option' : k === 'star' ? 'star rating' : 'competition risk'}</option>`).join('')}
+        </select>
+        ${e.score && e.score.kind ? `<input class="inp" style="flex:0 0 90px" type="number" placeholder="max"
+            value="${esc(String(e.score.max == null ? '' : e.score.max))}" oninput="fbScore('max',this.value)">
+          <input class="inp" style="flex:1;min-width:130px" placeholder="label, e.g. Supply satisfaction"
+            value="${esc(e.score.label || '')}" oninput="fbScore('label',this.value)">` : ''}
+        </div>
+        ${e.score && e.score.kind === 'map' ? `<div style="margin-top:8px">
+          ${(e.options || []).map(o => `<div style="display:flex;gap:8px;align-items:center;margin-bottom:5px">
+            <span style="flex:1;font-size:12.5px">${esc(o)}</span>
+            <input class="inp" style="flex:0 0 90px" type="number" placeholder="0"
+              value="${esc(String(((e.score.map || {})[o]) ?? ''))}" oninput="fbScoreMap('${esc(o).replace(/'/g, "\\'")}',this.value)">
+          </div>`).join('')}</div>` : ''}`,
+        'Leave unscored unless management wants it in the agent health score.')}
+
+      ${f('Required', `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer">
+        <input type="checkbox" ${e.is_required ? 'checked' : ''} onchange="_fbState().edit.is_required=this.checked"> Executive must answer this</label>`)}
+
+      <div style="display:flex;gap:9px;margin-top:18px">
+        <button class="btn primary" onclick="fbSave()">${isNew ? 'Add question' : 'Save changes'}</button>
+        <button class="btn" onclick="fbClose()">Cancel</button>
+      </div>
+    </div></div>`;
+}
+
+window.fbEdit = id => {
+  const st = _fbState();
+  const q = (st.data.questions || []).find(x => x.id === id);
+  st.edit = q ? JSON.parse(JSON.stringify(q))
+    : { code: '', section: '', question: '', input_type: 'sel', options: [], sets: ['full'], is_required: false };
+  st.edit._opts = (st.edit.options || []).join('\n');
+  render();
+};
+window.fbClose = () => { _fbState().edit = null; render(); };
+window.fbToggleSet = (k, on) => {
+  const e = _fbState().edit;
+  e.sets = on ? [...new Set([...(e.sets || []), k])] : (e.sets || []).filter(x => x !== k);
+};
+window.fbWhen = (k, v) => {
+  const e = _fbState().edit;
+  e.show_when = e.show_when || { field: '', op: 'in', values: [] };
+  if (k === 'values') e.show_when.values = String(v).split(',').map(s => s.trim()).filter(Boolean);
+  else e.show_when[k] = v;
+  if (!e.show_when.field) e.show_when = null;
+};
+window.fbScore = (k, v) => {
+  const e = _fbState().edit;
+  if (k === 'kind' && !v) { e.score = null; return; }
+  e.score = e.score || { kind: 'map', map: {}, max: null, label: '' };
+  e.score[k] = k === 'max' ? (v === '' ? null : Number(v)) : v;
+};
+window.fbScoreMap = (opt, v) => {
+  const e = _fbState().edit;
+  e.score = e.score || { kind: 'map', map: {}, max: null, label: '' };
+  e.score.map = e.score.map || {};
+  if (v === '') delete e.score.map[opt]; else e.score.map[opt] = Number(v);
+};
+window.fbSave = async () => {
+  const st = _fbState(), e = st.edit;
+  // The options textarea is edited as text and only becomes a list on save.
+  if (['sel', 'multi'].includes(e.input_type)) {
+    e.options = String(e._opts || '').split('\n').map(s => s.trim()).filter(Boolean);
+  }
+  try {
+    await fbApi('/api/admin/feedback-questions', 'POST', { ...e, sort_order: e.sort_order || 0 });
+    st.edit = null;
+    toast('Saved — the field app picks it up on next load');
+    await fbLoad(true);
+  } catch (err) { e.err = err.message; render(); }
+};
+window.fbRetire = async id => {
+  const q = (_fbState().data.questions || []).find(x => x.id === id);
+  if (!confirm(`Retire "${q ? q.code : id}"? It stops appearing in the app. Answers already recorded keep their label.`)) return;
+  try { await fbApi(`/api/admin/feedback-questions/${id}`, 'DELETE'); toast('Retired'); await fbLoad(true); }
+  catch (e) { toast(e.message); }
+};
+window.fbMove = async (id, dir) => {
+  const st = _fbState();
+  const list = (st.data.questions || []).filter(q => st.showRetired || q.is_active);
+  const i = list.findIndex(q => q.id === id), j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  st.data.questions = list;                        // move on screen first, then persist
+  render();
+  try { await fbApi('/api/admin/feedback-questions/reorder', 'POST', { ids: list.map(q => q.id) }); }
+  catch (e) { toast(e.message); await fbLoad(true); }
 };
 
 /* ---- Admin: Audit Trail ---- */

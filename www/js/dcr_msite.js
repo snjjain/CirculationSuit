@@ -19,7 +19,7 @@ const DM = {
   centres: null, plan: null, planDate: null, approved: null, pending: null, mine: null, teamSize: 0,
   pending: null, team: null, live: null, day: null,
   geo: null, geoAt: 0, geoErr: null, photo: null,
-  fbSet: 'basic', busy: '', flyout: null, msOpen: '',
+  fbSet: 'basic', fbForm: null, busy: '', flyout: null, msOpen: '',
   dictLang: (() => { try { return localStorage.getItem('dcr_dict_lang') || 'hi-IN'; } catch (_) { return 'hi-IN'; } })(),
   lang: (() => { try { return localStorage.getItem('dcr_lang') || 'en'; } catch (_) { return 'en'; } })(),
 };
@@ -728,15 +728,40 @@ const FB = [
    says how much of it was answered — a 3-question visit must not read as a verdict. */
 function _health(r) {
   const P = [];
-  const pay = { 'आज भुगतान किया': 25, 'आंशिक भुगतान किया': 18, 'निर्धारित तारीख को करेगा': 14,
-                'Payment pending है': 8, 'भुगतान में समस्या है': 4, 'कोई commitment नहीं': 0 }[r.q9];
-  if (pay != null) P.push(['Payment / recovery', pay, 25]);
-  const gro = { 'बहुत अधिक': 25, 'अधिक': 20, 'सामान्य': 13, 'कम': 6, 'नहीं': 0 }[r.q16];
-  if (gro != null) P.push(['Copy growth', gro, 25]);
-  const sup = { 'हाँ, हमेशा': 20, 'कभी-कभी समस्या': 14, 'अक्सर समस्या': 7, 'बहुत अधिक समस्या': 0 }[r.q5];
-  if (sup != null) P.push(['Supply satisfaction', sup, 20]);
-  if (r.q20) P.push(['Relationship', Math.round((Number(r.q20) / 5) * 20), 20]);
-  if (r.q13) P.push(['Competition risk', r.q13 === 'नहीं' ? 10 : Math.max(0, 10 - ((r.q14 || []).length * 2)), 10]);
+  const cfg = DM.fbForm && DM.fbForm.questions;
+  if (cfg) {
+    /* Weights travel with the questions, so a scored question management adds counts
+       towards the score instead of being decorative. The seed carries today's weights
+       unchanged — payment 25, growth 25, supply 20, relationship 20, competition 10 —
+       so a score computed before and after this became configurable agrees. */
+    for (const qq of cfg) {
+      const sc = qq.score; if (!sc || !sc.kind) continue;
+      const v = r[qq.code], max = Number(sc.max) || 0;
+      if (v == null || v === '') continue;
+      if (sc.kind === 'map') {
+        const pts = sc.map ? sc.map[v] : undefined;
+        if (pts != null) P.push([sc.label || qq.code, Number(pts), max]);
+      } else if (sc.kind === 'star') {
+        P.push([sc.label || qq.code, Math.round((Number(v) / 5) * max), max]);
+      } else if (sc.kind === 'competition') {
+        // Carrying no competitor scores full; each one named costs a fifth of the weight.
+        const named = (sc.ref && Array.isArray(r[sc.ref]) ? r[sc.ref] : []).length;
+        const noneOpt = (qq.options || [])[1];
+        P.push([sc.label || qq.code,
+                v === noneOpt ? max : Math.max(0, max - named * (max / 5)), max]);
+      }
+    }
+  } else {
+    const pay = { 'आज भुगतान किया': 25, 'आंशिक भुगतान किया': 18, 'निर्धारित तारीख को करेगा': 14,
+                  'Payment pending है': 8, 'भुगतान में समस्या है': 4, 'कोई commitment नहीं': 0 }[r.q9];
+    if (pay != null) P.push(['Payment / recovery', pay, 25]);
+    const gro = { 'बहुत अधिक': 25, 'अधिक': 20, 'सामान्य': 13, 'कम': 6, 'नहीं': 0 }[r.q16];
+    if (gro != null) P.push(['Copy growth', gro, 25]);
+    const sup = { 'हाँ, हमेशा': 20, 'कभी-कभी समस्या': 14, 'अक्सर समस्या': 7, 'बहुत अधिक समस्या': 0 }[r.q5];
+    if (sup != null) P.push(['Supply satisfaction', sup, 20]);
+    if (r.q20) P.push(['Relationship', Math.round((Number(r.q20) / 5) * 20), 20]);
+    if (r.q13) P.push(['Competition risk', r.q13 === 'नहीं' ? 10 : Math.max(0, 10 - ((r.q14 || []).length * 2)), 10]);
+  }
   if (!P.length) return null;
   const got = P.reduce((s, x) => s + x[1], 0), max = P.reduce((s, x) => s + x[2], 0);
   const pct = Math.round(got / max * 100);
@@ -745,9 +770,57 @@ function _health(r) {
                  : pct >= 35 ? ['At risk', 'warn'] : ['Critical', 'bad'] };
 }
 
+/* The questionnaire is configuration now — management edits it in Admin → Agent
+   Feedback Form and the change is live on the next load, with no deploy. FB below is
+   the fallback for a phone that has never reached the server. */
+async function _loadFbForm() {
+  if (DM.fbForm) return;
+  try {
+    const r = await _api('/feedback-form');
+    if (r && Array.isArray(r.questions) && r.questions.length) DM.fbForm = r;
+    else DM.fbForm = { sets: null, questions: null };
+  } catch (_) { DM.fbForm = { sets: null, questions: null }; }
+  if (_dmOn()) render();
+}
+
+/* Conditions arrive as data, so they are evaluated here rather than eval'd — a
+   question's visibility must never be able to run code that came from a table. */
+function _fbWhen(cond, r) {
+  if (!cond || !cond.field) return true;
+  const v = r[cond.field];
+  const has = v != null && v !== '' && !(Array.isArray(v) && !v.length);
+  const vals = Array.isArray(cond.values) ? cond.values : [];
+  switch (cond.op) {
+    case 'answered': return has;
+    case 'in':       return Array.isArray(v) ? v.some(x => vals.includes(x)) : vals.includes(v);
+    case 'not_in':   return Array.isArray(v) ? !v.some(x => vals.includes(x)) : !vals.includes(v);
+    case 'gt':       return Number(v) >  Number(vals[0]);
+    case 'lt':       return Number(v) <  Number(vals[0]);
+    default:         return true;
+  }
+}
+function _fbCalc(calc, r) {
+  if (!calc || !calc.op) return '—';
+  const a = Number(r[calc.a]) || 0, b = Number(r[calc.b]) || 0;
+  if (!a && !b) return '—';
+  const n = calc.op === 'sum' ? a + b : a - b;
+  return `${calc.op === 'diff' && n >= 0 ? '+' : ''}${n.toLocaleString('en-IN')}${calc.suffix ? ' ' + calc.suffix : ''}`;
+}
+// Config shape → the shape the renderer below already expects.
+function _fbQuestions() {
+  const cfg = DM.fbForm && DM.fbForm.questions;
+  if (!cfg) return FB;
+  return cfg.map(x => ({ id: x.code, s: x.section, q: x.question, t: x.input_type,
+    o: x.options || undefined, sets: x.sets || [], hint: x.hint,
+    _when: x.show_when, _calc: x.calc, req: x.is_required }));
+}
+
 function _fFeedback() {
+  _loadFbForm();
   const set = DM.fbSet, r = DM.extra;
-  const qs = FB.filter(q => q.sets.includes(set)).filter(q => !q.when || q.when(r));
+  const qs = _fbQuestions()
+    .filter(q => q.sets.includes(set))
+    .filter(q => (q._when ? _fbWhen(q._when, r) : (!q.when || q.when(r))));
   let lastSec = '';
   const body = qs.map(q => {
     const head = q.s !== lastSec ? (lastSec = q.s, _sec(q.s)) : '';
@@ -757,7 +830,7 @@ function _fFeedback() {
     else if (q.t === 'multi')ctl = _multi(q.id, q.o, 'चुनें…');
     else if (q.t === 'star') ctl = `<div style="display:flex;gap:5px">${[1, 2, 3, 4, 5].map(n =>
         `<button type="button" onclick="dmSetX('${q.id}',${n});render()" style="border:none;background:none;font-size:23px;cursor:pointer;padding:2px;line-height:1;filter:${Number(v) >= n ? 'none' : 'grayscale(1) opacity(.35)'}">⭐</button>`).join('')}</div>`;
-    else if (q.t === 'calc') ctl = `<div style="${IN};background:${K.s2};color:${K.ink}">${q.calc(r)}</div>`;
+    else if (q.t === 'calc') ctl = `<div class="dcr-in" style="background:var(--d-soft)">${q._calc ? _fbCalc(q._calc, r) : (q.calc ? q.calc(r) : '—')}</div>`;
     else if (q.t === 'photo') ctl = _photo('Area photo', 'Captured with GPS');
     else if (q.t === 'long') {
       // Same dictation control as the visit forms, so the mic behaves identically everywhere.
@@ -769,11 +842,14 @@ function _fFeedback() {
     }
     else ctl = `<input value="${esc(v || '')}" type="${q.t === 'num' ? 'number' : q.t === 'date' ? 'date' : q.t === 'time' ? 'time' : 'text'}"
         ${q.t === 'num' ? 'inputmode="numeric"' : ''} oninput="dmSetX('${q.id}',this.value)" style="${IN}">`;
-    return head + _f(q.q, ctl);
+    return head + _f(q.q, ctl, q.req, q.hint);
   }).join('');
 
   const h = _health(r);
-  return _f('Visit type', _sel('fb_set', Object.entries(FB_SETS).map(([k, v]) => [k, v]), null, true).replace(
+  const setOpts = (DM.fbForm && DM.fbForm.sets && DM.fbForm.sets.length)
+    ? DM.fbForm.sets.map(s => [s.set_key, s.label])
+    : Object.entries(FB_SETS);
+  return _f('Visit type', _sel('fb_set', setOpts, null, true).replace(
       `onchange="dmSetX('fb_set',this.value);render()"`, `onchange="DM.fbSet=this.value;render()"`)
       .replace('<option value="">null</option>', '')
       .replace(/selected/g, '') .replace(`value="${set}"`, `value="${set}" selected`),
