@@ -4296,9 +4296,19 @@ function _ccLoad() {
   if (st.unit) p.set('unit_code', st.unit);
   if (st.range === 'custom' && st.rangeFrom && st.rangeTo) { p.set('range_from', st.rangeFrom); p.set('range_to', st.rangeTo); }
   if (st.cmpFrom && st.cmpTo) { p.set('compare_from', st.cmpFrom); p.set('compare_to', st.cmpTo); }
-  dashJson(`${location.origin}/api/command/state-performance?${p}`)
-    .then(d => { st.data = d; st._loading = false; if (S.screen === 'command') render(); })
-    .catch(e => { st.data = { _err: String(e && e.message || e) }; st._loading = false; if (S.screen === 'command') render(); });
+  // Same stale-reply guard as the branch view — a custom range is two edits, so two
+  // requests are in flight and the slower one must not overwrite the newer.
+  const stamp = p.toString();
+  st._stamp = stamp;
+  dashJson(`${location.origin}/api/command/state-performance?${stamp}`)
+    .then(d => {
+      if (st._stamp !== stamp) return;
+      st.data = d; st._loading = false; if (S.screen === 'command') render();
+    })
+    .catch(e => {
+      if (st._stamp !== stamp) return;
+      st.data = { _err: String(e && e.message || e) }; st._loading = false; if (S.screen === 'command') render();
+    });
 }
 
 /* ── small formatters ── */
@@ -6252,13 +6262,29 @@ window.csClearCompare = () => {
   st.cmpFrom = ''; st.cmpTo = '';
   _csReset(st); render();
 };
+/* Each request is stamped with the parameters it was made for, and a reply whose stamp
+   no longer matches is dropped.
+
+   Editing a custom range touches two inputs. Changing "from" fires a load for the range
+   as it stands, and changing "to" a moment later fires another; whichever reply landed
+   last used to win. So picking 1–31 July after a range ending 26 August could leave the
+   older reply on screen — the inputs read 31 July while the header and every figure
+   were still 1 Jul → 26 Aug. The figures were not wrong, they were for a window nobody
+   had asked for any more. */
 function _csLoad() {
   const st = _csState();
   if (st._loading || st.data) return;
-  st._loading = true;
-  dashJson(`${api.base}/api/command/state-dashboard?${_csParams(st)}`)
-    .then(d => { st.data = d; st._loading = false; if (S.screen === 'cc_state') render(); })
-    .catch(e => { st.data = { _err: String(e && e.message || e) }; st._loading = false; if (S.screen === 'cc_state') render(); });
+  const stamp = _csParams(st).toString();
+  st._loading = true; st._stamp = stamp;
+  dashJson(`${api.base}/api/command/state-dashboard?${stamp}`)
+    .then(d => {
+      if (st._stamp !== stamp) return;              // parameters moved on; this reply is stale
+      st.data = d; st._loading = false; if (S.screen === 'cc_state') render();
+    })
+    .catch(e => {
+      if (st._stamp !== stamp) return;
+      st.data = { _err: String(e && e.message || e) }; st._loading = false; if (S.screen === 'cc_state') render();
+    });
 }
 /* Movers and short payment load after the first paint. The movers query is a ~50-day
    scan of supply_data and short payment telescopes six monthly snapshots; holding the
