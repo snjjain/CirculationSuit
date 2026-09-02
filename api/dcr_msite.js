@@ -56,6 +56,11 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
      not the shopfront, so holding it to 100 m would fail honest visits. */
   const FENCE_M = { registered: 100, observed: 150, station: 400, none: null };
 
+  // Mirrors LEVEL_META in server.js — used to name whoever a plan is waiting on.
+  const LEVEL_ROLE = { 1: 'Admin', 2: 'Edition Incharge', 3: 'Circulation Incharge',
+                       4: 'Zonal Head', 5: 'VP Circulation', 7: 'Field Executive' };
+  const LEVEL_EXECUTIVE = 7;
+
   // ── Schema ──────────────────────────────────────────────────────────────────
   async function ensureSchema() {
     const add = async (t, col, def) => {
@@ -322,10 +327,20 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
                 COALESCE(SUM(amount_collected),0) amt
          FROM dcr_visit WHERE trip_id = ?`, [t.id]) : { rows: [{}] };
 
+      /* Who reviews this person's plans, and whether they review anyone else's. Both
+         drive what the app shows, so they travel with the context rather than costing
+         two more round trips on every screen. */
+      const approver = await approverFor(staff.person_code);
+      const isIncharge = Number(staff.level) > 0 && Number(staff.level) < LEVEL_EXECUTIVE;
+
       res.json({
         staff: { ...staff,
+          role: LEVEL_ROLE[staff.level] || null,
+          is_incharge: isIncharge,
           designation: ex.rows[0] ? ex.rows[0].exec_designation : null,
           mobile: ex.rows[0] ? ex.rows[0].mobile_no : null },
+        approver: approver ? { person_code: approver.person_code, name: approver.person_name,
+                               role: LEVEL_ROLE[approver.hierarchy_level] || 'Incharge' } : null,
         date: today(),
         units: units,        // null = all units (admin)
         trip: t ? { ...t, visits: N(vis[0].n), completed: N(vis[0].done), collected: N(vis[0].amt) } : null,
@@ -907,17 +922,31 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       const team = await subordinates(staff, await scopeUnits(req));
       if (!team.length) return res.json({ rows: [] });
       const codes = team.map(t => t.person_code);
+      const lvlOf = new Map(team.map(t => [t.person_code, Number(t.hierarchy_level)]));
+      const unitOf = new Map(team.map(t => [t.person_code, t.unit_code]));
+      /* Past dates are kept deliberately: a plan nobody acted on does not stop being a
+         decision that was owed, and dropping it at midnight hides the backlog. */
       const { rows } = await q(
         `SELECT staff_person_code, staff_name, tour_date, COUNT(*) stops,
                 SUM(COALESCE(outstanding_snap,0)) outstanding,
                 SUM(COALESCE(expected_recovery,0)) expected_recovery,
-                MIN(id) first_id
+                GROUP_CONCAT(target_name ORDER BY COALESCE(seq_no,999) SEPARATOR ' · ') targets,
+                MIN(id) first_id, MIN(created_at) filed_at
          FROM dcr_tour_plan
-         WHERE status = 'submitted' AND tour_date >= CURDATE()
+         WHERE status = 'submitted'
+           AND tour_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
            AND staff_person_code IN (${codes.map(() => '?').join(',')})
          GROUP BY staff_person_code, staff_name, tour_date
          ORDER BY tour_date, staff_name`, codes);
-      res.json({ rows });
+      res.json({
+        rows: rows.map(r => ({
+          ...r,
+          role: LEVEL_ROLE[lvlOf.get(r.staff_person_code)] || null,
+          unit_code: unitOf.get(r.staff_person_code) || null,
+          overdue: String(r.tour_date) < today(),
+        })),
+        team_size: team.length,
+      });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
@@ -995,38 +1024,115 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
 
       const ids = Array.isArray(b.ids) && b.ids.length ? b.ids.map(Number) : null;
       const idCl = ids ? ` AND id IN (${ids.map(() => '?').join(',')})` : '';
-      const { rows: r } = await q(
+      /* affectedRows from the UPDATE itself. The previous re-count returned every row
+         already in the target status for that person and date, so approving one stop
+         of a plan whose others were approved yesterday reported all of them as newly
+         decided — and with `ids` supplied it ignored the filter entirely. */
+      const r = await q(
         `UPDATE dcr_tour_plan
          SET status = ?, approved_by = ?, approved_by_name = ?, approved_at = NOW(), reject_reason = ?
          WHERE staff_person_code = ? AND tour_date = ? AND status = 'submitted'${idCl}`,
         [action === 'approve' ? 'approved' : 'rejected', staff.person_code, staff.name,
-         action === 'reject' ? S(b.reason, 500) : null, who, d, ...(ids || [])]).then(async () => {
-          const { rows } = await q(
-            `SELECT COUNT(*) n FROM dcr_tour_plan WHERE staff_person_code=? AND tour_date=? AND status=?`,
-            [who, d, action === 'approve' ? 'approved' : 'rejected']);
-          return { rows };
-        });
-      res.json({ ok: true, action, affected: N(r[0].n) });
+         action === 'reject' ? S(b.reason, 500) : null, who, d, ...(ids || [])]);
+      // q() wraps mysql2's result as { rows }; for an UPDATE that is the OkPacket.
+      const affected = N((r && r.rows && r.rows.affectedRows) || 0);
+      res.json({ ok: true, action, affected, by: staff.name });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
-  /* People who report to me. hierarchy_mapping names the incharge on each executive
-     row, so a match on any of the four incharge columns is a reporting line. */
+  /* My whole downline, not just direct reports.
+     A Zonal Head must see every plan in the zone, a Circulation Incharge his branch
+     executives *and* his edition incharges, an Edition Incharge his executives — that
+     is the same question asked at three depths, so it is answered once by walking the
+     tree instead of a single hop.
+
+     The walk descends THROUGH inactive rows but only returns active people. Vacant
+     posts are common — 41 of the 43 edition incharges the ERP still names are marked
+     inactive in Oracle too — and a single-hop match would strand every executive under
+     a vacant post with nobody able to see or approve their plans. Descending through
+     the vacancy escalates them to the next real manager instead.
+
+     Depth is capped because reporting_to is free-form data and a cycle would otherwise
+     spin forever. */
+  const DOWNLINE_MAX_DEPTH = 6;
   async function subordinates(staff, units) {
-    if (!staff.emp_code && !staff.person_code) return [];
+    if (!staff.person_code) return [];
     const { rows } = await q(
-      `SELECT DISTINCT hm.person_code, hm.person_name, hm.employee_code, hm.unit_code
-       FROM hierarchy_master hm
-       WHERE hm.is_active = 1 AND hm.reporting_to = ?
-       ${units && units.length ? `AND hm.unit_code IN (${units.map(() => '?').join(',')})` : ''}`,
-      [staff.person_code, ...(units && units.length ? units : [])]);
+      `WITH RECURSIVE dl AS (
+         SELECT person_code, person_name, employee_code, unit_code,
+                hierarchy_level, is_active, 0 AS depth
+           FROM hierarchy_master WHERE reporting_to = ?
+         UNION ALL
+         SELECT h.person_code, h.person_name, h.employee_code, h.unit_code,
+                h.hierarchy_level, h.is_active, dl.depth + 1
+           FROM hierarchy_master h
+           JOIN dl ON h.reporting_to = dl.person_code
+          WHERE dl.depth < ${DOWNLINE_MAX_DEPTH}
+       )
+       SELECT DISTINCT person_code, person_name, employee_code, unit_code, hierarchy_level
+         FROM dl
+        WHERE is_active = 1 AND person_code <> ?
+       ${units && units.length ? `AND unit_code IN (${units.map(() => '?').join(',')})` : ''}
+        ORDER BY hierarchy_level, person_name`,
+      [staff.person_code, staff.person_code, ...(units && units.length ? units : [])]);
     return rows;
+  }
+
+  /* Where a plan goes for approval: the nearest ACTIVE manager above the planner.
+     Executive → Edition Incharge → Circulation Incharge → Zonal Head → VP, with
+     vacant rungs skipped rather than dead-ending. */
+  async function approverFor(personCode) {
+    let cur = personCode;
+    for (let hop = 0; hop < DOWNLINE_MAX_DEPTH; hop++) {
+      const { rows } = await q(
+        `SELECT m.person_code, m.person_name, m.hierarchy_level, m.is_active
+           FROM hierarchy_master me
+           JOIN hierarchy_master m ON m.person_code = me.reporting_to
+          WHERE me.person_code = ? LIMIT 1`, [cur]);
+      if (!rows[0]) return null;
+      if (Number(rows[0].is_active) === 1) return rows[0];
+      cur = rows[0].person_code;                       // vacant post — keep climbing
+    }
+    return null;
   }
   app.get('/api/dcr-m/team', async (req, res) => {
     try {
       const staff = await staffOf(req);
       if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
       res.json({ rows: await subordinates(staff, await scopeUnits(req)) });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  /* Who approves my plans — shown on the plan form so the executive knows where it
+     went, and so a missing approver is visible before they file rather than after. */
+  app.get('/api/dcr-m/approver', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const a = await approverFor(staff.person_code);
+      res.json({
+        approver: a ? { person_code: a.person_code, name: a.person_name,
+                        role: (LEVEL_ROLE[a.hierarchy_level] || 'Incharge') } : null,
+      });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  /* My own plans across a window, rejection reasons included. An executive whose plan
+     was turned down has to be told why, or the same plan comes back unchanged. */
+  app.get('/api/dcr-m/tour/mine', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const days = Math.min(60, Math.max(1, Number(req.query.days) || 14));
+      const { rows } = await q(
+        `SELECT id, tour_date, target_name, target_code, unit_code, visit_time, purpose,
+                status, reject_reason, approved_by_name, approved_at, assigned_by_name
+           FROM dcr_tour_plan
+          WHERE staff_person_code = ?
+            AND tour_date BETWEEN DATE_SUB(CURDATE(), INTERVAL ${days} DAY)
+                              AND DATE_ADD(CURDATE(), INTERVAL ${days} DAY)
+          ORDER BY tour_date DESC, COALESCE(seq_no,999), id`, [staff.person_code]);
+      res.json({ rows });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
@@ -1148,6 +1254,30 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
 
       const tt = FORM_TYPES[form].target;
       const code = S(b.target_code, 40) || (tt === 'office' ? 'OFFICE' : tt === 'area' ? 'AREA' : 'ADHOC');
+
+      /* A field executive works the plan: visits are recorded against a tour their
+         incharge approved, or one the incharge assigned. Everyone from Edition
+         Incharge upward may record an unplanned visit, since they are the people who
+         approve in the first place.
+
+         Calls are exempt — a call is how an executive answers something that came up
+         between visits, and requiring an approved plan for it would only push that
+         work off the record. Office work and new-area survey have no agency to plan
+         against, so they are exempt too. */
+      const PLAN_REQUIRED = ['agency_visit', 'hawker_visit', 'reader_visit', 'center_attn'];
+      if (Number(staff.level) === LEVEL_EXECUTIVE && mode === 'field' && PLAN_REQUIRED.includes(form)) {
+        const { rows: ok } = await q(
+          `SELECT id FROM dcr_tour_plan
+            WHERE staff_person_code = ? AND tour_date = ? AND status IN ('approved','done')
+              AND (target_code = ? OR ? = '') LIMIT 1`,
+          [staff.person_code, isDate(b.visit_date) ? b.visit_date : today(), code, code || '']);
+        if (!ok.length) {
+          return res.status(403).json({
+            detail: 'This visit is not on your approved tour plan for today. Plan the visit and have your incharge approve it, or record it as a call.',
+            code: 'not_on_plan',
+          });
+        }
+      }
 
       // Geofence only where there is a real place to be, and only for field mode.
       let dist = null, within = null, anchorSrc = null;

@@ -16,7 +16,7 @@ const DM = {
   ctx: null, rights: null, loading: false, err: null,
   mode: null, form: {}, extra: {},
   targets: null, targetsKey: '', targetType: 'agent', search: '',
-  centres: null, plan: null, planDate: null, approved: null,
+  centres: null, plan: null, planDate: null, approved: null, pending: null, mine: null, teamSize: 0,
   pending: null, team: null, live: null, day: null,
   geo: null, geoAt: 0, geoErr: null, photo: null,
   fbSet: 'basic', busy: '', flyout: null, msOpen: '',
@@ -885,19 +885,114 @@ async function _loadApproved() {
   catch (_) { DM.approved = []; }
   if (_dmOn()) render();
 }
+/* The team's plans waiting on me, and the outcome of my own. An incharge and an
+   executive open the same tab and each sees the half that is theirs — an incharge
+   also plans tours, so the two are not exclusive. */
+async function _loadPending() {
+  if (DM.pending) return;
+  try { const r = await _api('/tour/pending'); DM.pending = r.rows || []; DM.teamSize = r.team_size || 0; }
+  catch (_) { DM.pending = []; }
+  if (_dmOn()) render();
+}
+async function _loadMine() {
+  if (DM.mine) return;
+  try { const r = await _api('/tour/mine?days=14'); DM.mine = r.rows || []; }
+  catch (_) { DM.mine = []; }
+  if (_dmOn()) render();
+}
+
 function _approvals() {
+  const inch = DM.ctx && DM.ctx.staff && DM.ctx.staff.is_incharge;
+  return (inch ? _pendingQueue() : '') + _myPlans() + _todaysApproved();
+}
+
+function _pendingQueue() {
+  _loadPending();
+  const rows = DM.pending;
+  if (!rows) return _sec('Waiting for my approval') + `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">${T('Loading…')}</div>`;
+  if (!rows.length) {
+    return _sec('Waiting for my approval') + `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut);text-align:center">
+      Nothing waiting on you${DM.teamSize ? ` · ${DM.teamSize} in your team` : ''}.</div>`;
+  }
+  return _sec(`Waiting for my approval · ${rows.length}`) + rows.map(r => `<div class="dcr-card">
+    <div style="display:flex;justify-content:space-between;gap:9px;align-items:flex-start;margin-bottom:8px">
+      <div style="min-width:0">
+        <div style="font-size:14.5px;font-weight:650;color:var(--d-ink)">${esc(r.staff_name || r.staff_person_code)}</div>
+        <div style="font-size:11.5px;color:var(--d-mut);margin-top:2px">${esc(r.role || '')}${r.unit_code ? ' · ' + esc(r.unit_code) : ''} · ${esc(String(r.tour_date))}</div>
+      </div>
+      ${r.overdue ? _tag('Overdue', 'bad') : _tag(`${r.stops} ${r.stops === 1 ? 'stop' : 'stops'}`, 'info')}
+    </div>
+    <div style="font-size:12px;color:var(--d-mut);margin-bottom:9px;line-height:1.5">${esc(r.targets || '')}</div>
+    ${Number(r.outstanding) > 0 ? `<div style="font-size:11.5px;color:var(--d-mut);margin-bottom:9px">Outstanding on route ${_INR(r.outstanding)}${Number(r.expected_recovery) > 0 ? ` · expects ${_INR(r.expected_recovery)}` : ''}</div>` : ''}
+    <div style="display:flex;gap:8px">
+      <button class="dcr-btn ok" style="flex:1" onclick="dmDecide('${_Q(r.staff_person_code)}','${_Q(String(r.tour_date))}','approve')">Approve</button>
+      <button class="dcr-btn stop" style="flex:1" onclick="dmRejectAsk('${_Q(r.staff_person_code)}','${_Q(String(r.tour_date))}','${_Q(r.staff_name || '')}')">Reject</button>
+    </div>
+  </div>`).join('');
+}
+
+/* My own filed plans. A rejection is only useful if the reason reaches the person who
+   has to act on it, so it is shown in full rather than as a status word. */
+function _myPlans() {
+  _loadMine();
+  const rows = DM.mine;
+  if (!rows) return '';
+  const open = rows.filter(r => ['submitted', 'rejected'].includes(r.status));
+  if (!open.length) return '';
+  const appr = DM.ctx && DM.ctx.approver;
+  return _sec('My tour plans') + open.map(r => `<div class="dcr-card">
+    <div style="display:flex;justify-content:space-between;gap:9px;align-items:flex-start">
+      <div style="min-width:0">
+        <div style="font-size:14px;color:var(--d-ink)">${esc(r.target_name || r.target_code)}</div>
+        <div style="font-size:11.5px;color:var(--d-mut);margin-top:2px">${esc(String(r.tour_date))}${r.visit_time ? ' · ' + esc(r.visit_time) : ''}${r.purpose ? ' · ' + esc(r.purpose) : ''}</div>
+      </div>
+      ${r.status === 'rejected' ? _tag('Rejected', 'bad') : _tag('Awaiting approval', 'warn')}
+    </div>
+    ${r.status === 'rejected' && r.reject_reason
+      ? `<div class="dcr-reject"><b>${esc(r.approved_by_name || 'Your incharge')} rejected this:</b> ${esc(r.reject_reason)}</div>`
+      : r.status === 'submitted' && appr
+        ? `<div style="font-size:11.5px;color:var(--d-mut);margin-top:8px">With ${esc(appr.name)} · ${esc(appr.role)}</div>` : ''}
+  </div>`).join('');
+}
+
+function _todaysApproved() {
   _loadApproved();
   const rows = DM.approved || [];
-  return _f('Date', `<input type="date" value="${DM.planDate || _DAY()}" onchange="DM.planDate=this.value;DM.approved=null;render()" style="${IN}">`) +
-    (!DM.approved ? `<div style="font-size:12.5px;color:${K.mut};padding:10px 0">Loading…</div>`
-     : rows.length ? rows.map(r => `<div style="padding:11px 0;border-bottom:1px solid ${K.line};display:flex;justify-content:space-between;gap:9px;align-items:center">
-        <div style="min-width:0"><div style="font-size:13.5px;color:${K.ink}">${esc(r.target_name || r.target_code)}</div>
-          <div style="font-size:11px;color:${K.mut}">${esc(r.purpose || '')}${r.visit_time ? ' · ' + esc(r.visit_time) : ''}</div></div>
+  return _sec('Approved — ready to visit') +
+    _f('Date', `<input type="date" value="${DM.planDate || _DAY()}" onchange="DM.planDate=this.value;DM.approved=null;render()">`) +
+    (!DM.approved ? `<div style="font-size:12.5px;color:${K.mut};padding:10px 0">${T('Loading…')}</div>`
+     : rows.length ? `<div class="dcr-card">${rows.map(r => `<div class="dcr-row">
+        <div style="min-width:0;flex:1"><div class="t">${esc(r.target_name || r.target_code)}</div>
+          <div class="s">${esc(r.purpose || '')}${r.visit_time ? ' · ' + esc(r.visit_time) : ''}</div></div>
         ${r.status === 'done' ? _tag('Visited', 'mute')
-          : `<button onclick="dmStartFromPlan(${r.id})" style="flex:none;background:#1e3a8a;color:#fff;border:none;border-radius:8px;padding:8px 13px;font-size:12.5px;cursor:pointer">Start visit</button>`}
-      </div>`).join('')
-     : `<div style="font-size:12.5px;color:${K.mut};padding:14px 0">No approved plans for this date. A plan appears here once your incharge approves it.</div>`);
+          : `<button class="dcr-btn pri" style="width:auto;min-height:38px;padding:8px 13px;font-size:12.5px;flex:none" onclick="dmStartFromPlan(${r.id})">Start visit</button>`}
+      </div>`).join('')}</div>`
+     : `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">No approved plans for this date. A plan appears here once your incharge approves it.</div>`);
 }
+
+window.dmDecide = async (who, date, action, reason) => {
+  try {
+    const r = await _api('/tour/decide', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ person_code: who, tour_date: date, action, reason: reason || undefined }) });
+    toast(action === 'approve' ? `Approved · ${r.affected} ${r.affected === 1 ? 'stop' : 'stops'}`
+                               : `Rejected · ${r.affected} ${r.affected === 1 ? 'stop' : 'stops'}`);
+    DM.pending = null; DM.flyout = null; render();
+  } catch (e) { DM.err = e.message; DM.flyout = null; render(); }
+};
+// A rejection without a reason gives the planner nothing to fix, so the box is required.
+window.dmRejectAsk = (who, date, name) => {
+  DM._rej = { who, date, name, text: '' };
+  dmFly({ title: 'Reject tour plan', body: () => `
+    <div style="font-size:12.5px;color:var(--d-mut);margin-bottom:10px">${esc(name)} · ${esc(date)}</div>
+    ${_f('Reason (the planner will see this)', `<textarea rows="3" placeholder="Why is this plan not approved?"
+      oninput="DM._rej.text=this.value"></textarea>`, true)}
+    <button class="dcr-btn stop" onclick="dmRejectGo()">Reject plan</button>` });
+};
+window.dmRejectGo = () => {
+  const r = DM._rej || {};
+  if (!String(r.text || '').trim()) { DM.err = 'Please give a reason — the planner sees it.'; render(); return; }
+  dmDecide(r.who, r.date, 'reject', r.text.trim());
+};
 /* Opening from an approved plan carries the agency, purpose and time across, so the
    executive never picks the same agency twice. */
 window.dmStartFromPlan = async id => {
@@ -1076,7 +1171,8 @@ window.appBottomNav = screen => {
     <span class="bico">${i}</span>${T(l)}</button>`).join('');
 };
 window.dmNav = k => { DM.mode = k || null; DM.err = null; DM.flyout = null;
-  if (k === 'dash') DM.day = null; if (k === 'approvals') DM.approved = null;
+  if (k === 'dash') DM.day = null;
+  if (k === 'approvals') { DM.approved = null; DM.pending = null; DM.mine = null; }
   if (S.sideOpen) toggleSide();
   render(); };
 

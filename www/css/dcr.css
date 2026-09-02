@@ -220,6 +220,13 @@
 .dcr-row.done .t { color: var(--d-mut); text-decoration: line-through; }
 /* Unapproved plan: visible so the executive knows it is filed, dimmed and inert
    so it does not read as something they can act on. */
+/* A rejection reason is the one thing the planner must not miss, so it is given the
+   weight of a message rather than a status line. */
+.dcr-reject { margin-top: 9px; padding: 9px 11px; border-radius: 9px;
+  background: var(--d-bad-bg); border-left: 3px solid var(--d-bad);
+  font-size: 12.5px; color: var(--d-ink); line-height: 1.5; }
+.dcr-reject b { color: var(--d-bad); font-weight: 600; }
+
 .dcr-row.locked { opacity: .62; cursor: not-allowed; }
 .dcr-row.locked .t { color: var(--d-mut); }
 
