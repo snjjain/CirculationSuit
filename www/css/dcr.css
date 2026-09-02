@@ -220,6 +220,20 @@
 .dcr-row.done .t { color: var(--d-mut); text-decoration: line-through; }
 /* Unapproved plan: visible so the executive knows it is filed, dimmed and inert
    so it does not read as something they can act on. */
+/* Active / Closed filter above the picker list. */
+.dcr-chips { display: flex; gap: 7px; margin-bottom: 10px; }
+.dcr-chip { border: 1px solid var(--d-line); background: var(--d-card); color: var(--d-mut);
+  border-radius: 20px; padding: 6px 14px; font: inherit; font-size: 12.5px; font-weight: 500;
+  text-transform: none; letter-spacing: normal; cursor: pointer; min-height: 34px; }
+.dcr-chip.on { background: var(--d-brand); border-color: var(--d-brand); color: #fff; font-weight: 600; }
+
+/* Says why a closed agency shows nil copies and nil billing, so the executive does not
+   read correct data as a broken screen. */
+.dcr-closed { margin-top: 10px; padding: 9px 11px; border-radius: 9px;
+  background: var(--d-warn-bg); border-left: 3px solid var(--d-warn);
+  font-size: 12px; color: var(--d-ink); line-height: 1.5; }
+.dcr-closed b { color: var(--d-warn); }
+
 /* A rejection reason is the one thing the planner must not miss, so it is given the
    weight of a message rather than a status line. */
 .dcr-reject { margin-top: 9px; padding: 9px 11px; border-radius: 9px;

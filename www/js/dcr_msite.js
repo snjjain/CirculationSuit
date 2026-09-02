@@ -17,6 +17,7 @@ const DM = {
   mode: null, form: {}, extra: {},
   targets: null, targetsKey: '', targetType: 'agent', search: '',
   centres: null, plan: null, planDate: null, approved: null, pending: null, mine: null, teamSize: 0,
+  targetStatus: 'active',
   pending: null, team: null, live: null, day: null,
   geo: null, geoAt: 0, geoErr: null, photo: null,
   fbSet: 'basic', fbForm: null, busy: '', flyout: null, msOpen: '',
@@ -528,16 +529,17 @@ window.dmFeedbackBack = save => {
 
 // ── target picker (flyout) ──────────────────────────────────────────────────
 async function _loadTargets(type) {
-  const key = `${type}|${DM.search}`;
+  const key = `${type}|${DM.search}|${DM.targetStatus || 'active'}`;
   if (DM.targetsKey === key && DM.targets) return;
   DM.targetsKey = key;
   DM.targetsBusy = true;
-  try { const r = await _api(`/targets?type=${type}&limit=60${DM.search ? '&q=' + encodeURIComponent(DM.search) : ''}`);
+  try { const r = await _api(`/targets?type=${type}&limit=60&status=${DM.targetStatus || 'active'}${DM.search ? '&q=' + encodeURIComponent(DM.search) : ''}`);
         DM.targets = r.rows || []; DM.targetsNote = r.note || null; }
   catch (e) { DM.targets = []; DM.targetsNote = e.message; }
   DM.targetsBusy = false;
   if (_dmOn()) render();
 }
+window.dmTargetStatus = v => { DM.targetStatus = v; DM.targets = null; DM.targetsKey = ''; render(); };
 window.dmSearch = (() => { let t; return v => { DM.search = v; clearTimeout(t);
   t = setTimeout(() => { DM.targets = null; DM.targetsKey = ''; render(); }, 350); }; })();
 
@@ -562,8 +564,16 @@ function _pickerBody(type) {
   const term = String(DM.search || '').trim();
   const rows = (DM.targets || []).slice(0, 40).map(r => `<div class="dcr-row" onclick='dmPick(${JSON.stringify(r).replace(/'/g, "&#39;")})' style="cursor:pointer">
     <div style="min-width:0;flex:1"><div class="t">${esc(r.target_name || r.target_code)}</div>
-      <div class="s">${esc(r.city || r.centre || '')}</div></div>
+      <div class="s">${esc(r.city || r.centre || '')}${r.ag_status === 'Closed' ? ' · closed' + (r.last_supply ? ' since ' + esc(String(r.last_supply).slice(0, 7)) : '') : r.ag_status === 'Suspended' ? ' · suspended' : ''}</div></div>
     ${Number(r.outstanding) > 0 ? _tag(_INR(r.outstanding), Number(r.outstanding) > 100000 ? 'bad' : 'warn') : ''}</div>`).join('');
+
+  /* Four out of five agencies in the book are closed, so the list defaults to the ones
+     still being supplied. Closed is one tap away rather than hidden, because a closed
+     agency that still owes money is exactly who a recovery visit is for. */
+  const ST = [['active', 'Active'], ['closed', 'Closed'], ['all', 'All']];
+  const cur = DM.targetStatus || 'active';
+  const chips = type === 'agent' ? `<div class="dcr-chips">${ST.map(([v, l]) =>
+    `<button type="button" class="dcr-chip ${cur === v ? 'on' : ''}" onclick="dmTargetStatus('${v}')">${l}</button>`).join('')}</div>` : '';
 
   /* "No match" was shown before anything had been typed, which reads as a broken
      search rather than an empty box. Each state now says what it actually is. */
@@ -579,7 +589,7 @@ function _pickerBody(type) {
   return `<input id="dmTargetSearch" class="dcr-in" value="${esc(DM.search)}" oninput="dmSearch(this.value)"
       placeholder="${type === 'hawker' ? 'Search hawker…' : 'Search agency by name or code…'}"
       autocomplete="off" autocapitalize="off" spellcheck="false"
-      style="margin-bottom:10px" autofocus>${body}`;
+      style="margin-bottom:10px" autofocus>${chips}${body}`;
 }
 window.dmPick = async r => {
   DM.form._target = r; DM.search = ''; DM.flyout = null; DM.agency = null;
@@ -623,6 +633,9 @@ function _autoPanel() {
       </div>
       ${tel.length === 10 ? `<a href="tel:+91${tel}" class="dcr-tag info" style="text-decoration:none;padding:6px 11px;font-size:12px;flex:none">📞 Call</a>` : ''}
     </div>
+    ${a.ag_status === 'Closed' || a.ag_status === 'Suspended' ? `<div class="dcr-closed">
+      <b>${esc(a.ag_status)} agency.</b> ${a.last_supply ? `Last supply ${esc(String(a.last_supply).slice(0, 10))}. ` : ''}Nil copies and nil billing are expected${Number(a.outstanding) > 0 ? ` — the ${_INR(a.outstanding)} outstanding is old dues` : ''}.
+    </div>` : ''}
     <div class="g">
       ${cell('Contact person', esc(a.contact_person || ''))}
       ${cell('Mobile', tel ? esc(a.mobile) : '')}

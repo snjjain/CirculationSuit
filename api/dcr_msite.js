@@ -477,17 +477,31 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       if (!uList.length && !term) return res.json({ rows: [], note: 'Pick a branch or search by name.' });
       const IN = uList.length ? `AND am.unit IN (${uList.map(() => '?').join(',')})` : '';
 
+      /* Closed agencies outnumber active ones roughly four to one — 21,650 against
+         5,782 — so an unfiltered list is mostly agencies nobody supplies any more, and
+         an executive picking blind lands on one. Active is therefore the default.
+
+         Closed ones are still reachable on request, because 1,923 of them owe ₹24.7 Cr
+         between them and a recovery visit to a closed agency is real work. An agency
+         with no CURRENT snapshot has no status at all; it is treated as active rather
+         than hidden, since absence of a record is not evidence the agency is shut. */
+      const status = ['active', 'closed', 'all'].includes(req.query.status) ? req.query.status : 'active';
+      const statusCl = status === 'all' ? ''
+        : status === 'closed' ? `AND os.ag_status = 'Closed'`
+        : `AND (os.ag_status IS NULL OR os.ag_status <> 'Closed')`;
+
       if (type === 'agent') {
         /* Outstanding, ageing, supply and last visit come back with the list, because an
            executive choosing whom to see next needs the reason, not just the name. */
         const { rows } = await q(
           `SELECT am.unit unit_code, am.agcd target_code, am.ag_name target_name,
                   am.city_name city, am.station_name station, am.mobile_no1 mobile,
-                  COALESCE(os.cl_amt,0) outstanding,
+                  COALESCE(os.cl_amt,0) outstanding, os.ag_status, os.last_supply,
                   sup.avg_copies, lv.last_visit, lv.last_outcome,
                   loc.lat, loc.lng, loc.source loc_source
            FROM agency_master am
-           LEFT JOIN (SELECT unit_code, ag_code, SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) cl_amt
+           LEFT JOIN (SELECT unit_code, ag_code, SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) cl_amt,
+                             MAX(ag_status) ag_status, MAX(last_supply_date) last_supply
                       FROM agency_outstanding WHERE period_label='CURRENT' GROUP BY unit_code, ag_code) os
              ON os.unit_code = am.unit AND os.ag_code = am.agcd
            LEFT JOIN (SELECT unit_code, agcd, ROUND(AVG(sup_copy)) avg_copies FROM supply_data
@@ -500,11 +514,11 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
              ON lv.unit_code = am.unit AND lv.target_code = am.agcd
            LEFT JOIN dcr_location loc
              ON loc.target_type='agent' AND loc.unit_code=am.unit AND loc.target_code=am.agcd
-           WHERE CAST(am.dpcd AS UNSIGNED)=1 ${IN}
+           WHERE CAST(am.dpcd AS UNSIGNED)=1 ${IN} ${statusCl}
              ${term ? 'AND (am.ag_name LIKE ? OR am.agcd = ?)' : ''}
            ORDER BY outstanding DESC LIMIT ${lim}`,
           [...uList, ...(term ? [`%${term}%`, term] : [])]);
-        return res.json({ rows, type });
+        return res.json({ rows, type, status });
       }
 
       const { rows } = await q(
@@ -575,7 +589,8 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
                   dist_name, address, ag_class_name, executive_name
            FROM agency_master WHERE unit = ? AND agcd = ? AND CAST(dpcd AS UNSIGNED) = 1 LIMIT 1`, [unit, code]),
         q(`SELECT SUM(CASE WHEN cl_amt > 0 THEN cl_amt ELSE 0 END) outstanding,
-                  MAX(last_supply_date) last_supply, SUM(rec_amt) rec_fy, SUM(bill_amt) bill_fy
+                  MAX(last_supply_date) last_supply, SUM(rec_amt) rec_fy, SUM(bill_amt) bill_fy,
+                  MAX(ag_status) ag_status
            FROM agency_outstanding WHERE unit_code = ? AND ag_code = ? AND period_label = 'CURRENT'`, [unit, code]),
         /* All this agency's snapshots, newest first. The month to report is whichever
            actually exists — asking for "last calendar month" returns nothing for the
@@ -648,6 +663,7 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         daily_copies: N(sup.rows[0] && sup.rows[0].daily_copies),
         outstanding: N(cur.rows[0] && cur.rows[0].outstanding),
         last_supply: iso(cur.rows[0] && cur.rows[0].last_supply),
+        ag_status: (cur.rows[0] && cur.rows[0].ag_status) || null,
         last_bill: lastBill, last_bill_month: lastBillMonth, last_bill_basis: billBasis,
         bill_collection: billColl, bill_collection_from: billFrom, bill_collection_txns: billTxns,
         bill_balance: Math.max(0, lastBill - billColl),
