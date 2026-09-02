@@ -176,6 +176,15 @@ module.exports = function installFeedbackForm({ app, q, requireAdmin }) {
   /* Validation is deliberate rather than trusting the form: these rows drive what
      hundreds of field phones render, and a malformed condition or an unknown input
      type would show up as a blank question on a phone in the field, not here. */
+  /* Nobody editing a questionnaire should have to invent a stable answer key, so the
+     server mints one. It is still the thing answers are stored against, which is why
+     it never changes afterwards. */
+  async function nextCode() {
+    const { rows } = await q(`SELECT code FROM dcr_feedback_question WHERE code REGEXP '^q[0-9]+$'`);
+    const max = rows.reduce((m, r) => Math.max(m, parseInt(String(r.code).slice(1), 10) || 0), 0);
+    return 'q' + (max + 1);
+  }
+
   function validate(b, existing) {
     const code = S(b.code, 20);
     if (!code || !/^[a-zA-Z0-9_]+$/.test(code)) return 'Code is required — letters, digits and underscore only.';
@@ -208,6 +217,7 @@ module.exports = function installFeedbackForm({ app, q, requireAdmin }) {
         if (!rows[0]) return res.status(404).json({ detail: 'Question not found' });
         existing = rows[0];
       }
+      if (!existing && !S(b.code, 20)) b.code = await nextCode();
       const err = validate(b, existing);
       if (err) return res.status(400).json({ detail: err });
 
