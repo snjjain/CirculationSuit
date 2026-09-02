@@ -317,12 +317,35 @@ async function ensureSchema(conn) {
     bill_no              VARCHAR(30),
     bill_dt              DATE,
     synced_at            DATETIME      DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uq_hwk (hawker_id, supply_date, publ_code, edition_code),
+    UNIQUE KEY uq_hwk (hawker_id, supply_date, publ_code, edition_code, gate_pass_no),
     INDEX idx_hs_date    (supply_date),
     INDEX idx_hs_unit    (loc_id, supply_date),
     INDEX idx_hs_hawker  (hawker_id, supply_date),
     INDEX idx_hs_center  (hwk_cent_code, supply_date)
   ) CHARACTER SET utf8mb4`);
+
+  /* One hawker can receive the same edition on the same day against more than one
+     gate pass. The original key stopped at edition_code, so the second gate pass
+     overwrote the first instead of adding to it -- 61 of 4,309 rows were lost on a
+     typical day (1.4%), and Jaipur's July average read 354,025 against the ERP's
+     360,239. Losing supply is worse than carrying a duplicate, so the gate pass is
+     part of the key.
+
+     Rebuilt in place for installs that already have the old key. A date is deleted
+     before it is re-inserted, so widening the key cannot introduce duplicates. */
+  try {
+    const [k] = await conn.execute(
+      `SELECT COUNT(*) n FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'hawker_supply'
+          AND INDEX_NAME = 'uq_hwk' AND COLUMN_NAME = 'gate_pass_no'`);
+    if (!Number(k[0].n)) {
+      log('Migrating uq_hwk to include gate_pass_no…');
+      await conn.execute('ALTER TABLE hawker_supply DROP INDEX uq_hwk');
+      await conn.execute(
+        'ALTER TABLE hawker_supply ADD UNIQUE KEY uq_hwk (hawker_id, supply_date, publ_code, edition_code, gate_pass_no)');
+      log('uq_hwk migrated — re-sync affected dates to recover the dropped rows.');
+    }
+  } catch (e) { log('uq_hwk migration skipped: ' + e.message); }
 
   await conn.execute(`CREATE TABLE IF NOT EXISTS hawker_supply_sync_log (
     from_date    DATE     NOT NULL,
