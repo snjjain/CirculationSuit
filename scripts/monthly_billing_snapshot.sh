@@ -37,11 +37,20 @@ if [ $# -ge 1 ]; then
   BILL_ON="$(date -d "$ANCHOR +1 month" '+%d-%b-%Y' | up)"
   YEAR="$(date -d "$ANCHOR" '+%Y')"
 else
-  # Default: yesterday is in the month that just closed (this runs on the 1st).
-  LABEL="$(date -d 'yesterday' '+%Y-%m')"
-  MONTH_END="$(date -d 'yesterday' '+%d-%b-%Y' | up)"
-  BILL_ON="$(date '+%d-%b-%Y' | up)"
-  YEAR="$(date -d 'yesterday' '+%Y')"
+  # Default: the month before the current one.
+  #
+  # Deliberately NOT "yesterday" — this runs on the 1st, 2nd and 3rd, because the ERP
+  # sometimes takes a couple of days to finish generating bills. On the 2nd, yesterday
+  # is the 1st, which belongs to the current month, so a yesterday-based label would
+  # ask for the wrong month on every run after the first.
+  FIRST_OF_THIS="$(date '+%Y-%m-01')"
+  LAST_OF_PREV="$(date -d "$FIRST_OF_THIS -1 day" '+%Y-%m-%d')"
+  LABEL="$(date -d "$LAST_OF_PREV" '+%Y-%m')"
+  MONTH_END="$(date -d "$LAST_OF_PREV" '+%d-%b-%Y' | up)"
+  # The ERP bill is dated the 1st of the following month whenever it is actually run,
+  # so this is the 1st of the current month, not today.
+  BILL_ON="$(date -d "$FIRST_OF_THIS" '+%d-%b-%Y' | up)"
+  YEAR="$(date -d "$LAST_OF_PREV" '+%Y')"
 fi
 YEAR_START="01-JAN-$YEAR"
 
