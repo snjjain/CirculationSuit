@@ -1049,7 +1049,7 @@ module.exports = function installCommandCentre({ app, q }) {
            WHERE mark_attn_date BETWEEN ? AND ? AND unit_code IN (${IN})
            GROUP BY unit_code, emp_code`, [win.from, win.to, ...codes]),
         // Active exec flag — scoped to unit_code IN scope so the scan stays small.
-        q(`SELECT executive_code, is_active_pli FROM exec_master WHERE unit_code IN (${IN})`, codes),
+        q(`SELECT executive_code, executive_desc, is_active_pli FROM exec_master WHERE unit_code IN (${IN})`, codes),
         // Exec-level billing: agency-level snapshots matched to executives via execOf in JS.
         // Avoid SQL join to agency_master — older snapshots may differ in dp_code/agcd format,
         // causing the June row to vanish (makes the diff return the full cumulative instead of delta).
@@ -1097,17 +1097,33 @@ module.exports = function installCommandCentre({ app, q }) {
           if (supplySet.has(k) && r.ag_class === 'CREDIT SALE') B[r.unit].dcrBook += 1;
         }
       });
+      /* Names for codes the range scan cannot carry.
+
+         The cash-supply scan groups by centre incharge but leaves center_incharge_name
+         out, because it is not in the covering index and dragging it through would pull
+         every row into the scan. The name was then filled in from the as-on-date query
+         alone — so a centre incharge with no supply on that one date got no name at all
+         and the screen showed a bare code like E01804 instead of BABU LAL KHATIK.
+
+         exec_master answers it for a thousand rows instead of a range scan: every one of
+         the 83 centre incharges active in June resolves there. */
+      const nameOf = new Map(
+        (execActive.rows || []).map(r => [r.executive_code, r.executive_desc])
+          .filter(([c, n]) => c && n && String(n).trim() && !/^(N\/A|#N\/A|NOT APPLICABLE)$/i.test(String(n).trim())));
+
       const exec = (code, name, unit) => {
         if (!code) return null;
+        const known = name && String(name).trim() && !/^(N\/A|#N\/A)$/i.test(String(name).trim())
+          ? name : nameOf.get(code);
         E[code] = E[code] || {
-          exec_code: code, exec_name: name || code, units: new Set(),
+          exec_code: code, exec_name: known || code, units: new Set(),
           is_active: activeMap.has(code) ? activeMap.get(code) : null,
           agencies: 0, supply_cur: 0, supply_prev: 0, cash_cur: 0, cash_prev: 0, collection: 0, billed: 0, os: 0,
           txn: 0, agencies_paid: 0, os_agencies: 0, critical: 0,
           visits: 0, agencies_visited: 0,
           hawker_centres: 0, hawker_count: 0, hawker_cent_name: null,
         };
-        if (name && E[code].exec_name === code) E[code].exec_name = name;
+        if (known && E[code].exec_name === code) E[code].exec_name = known;
         if (unit) E[code].units.add(unit);
         return E[code];
       };
