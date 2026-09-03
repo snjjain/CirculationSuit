@@ -375,6 +375,12 @@ module.exports = function installCommandCentre({ app, q }) {
      the same reason as the branch dashboard — a per-group divisor lets an irregular
      supplier's short-window rate stand in for a whole month. */
   async function supplyByState(win, prevWin, unitScope) {
+    /* Only the hawker feed is trimmed. Agent supply is dispatched and recorded in the
+       morning, so the current day is already complete — on 3 September it read
+       1,701,288 against a 1,700,110 average for the two days before it. Cash is keyed
+       through the day: the same date held 541,970 copies at 06:04 and 597,616 by
+       midday. Trimming both moved the agent figure away from the ERP for no reason. */
+    const cashWin = trimPartialDay(win);
     const uCl = unitScope ? ' AND s.unit_code = ?' : '';
     const uP  = unitScope ? [unitScope] : [];
     const hCl = unitScope ? ' AND h.loc_id = ?' : '';
@@ -394,7 +400,7 @@ module.exports = function installCommandCentre({ app, q }) {
     const [agentC, agentP, cashC, cashP, credit, uhs] = await Promise.all([
       q(agentSql, [win.from, win.to, ...uP]),
       q(agentSql, [prevWin.from, prevWin.to, ...uP]),
-      q(hawkSql,  [win.from, win.to, ...uP]),
+      q(hawkSql,  [cashWin.from, cashWin.to, ...uP]),
       q(hawkSql,  [prevWin.from, prevWin.to, ...uP]),
       // The credit-sale filter is applied per agency, so it cannot ride on the
       // state-level aggregate above; agent copies are corrected by its share below.
@@ -450,6 +456,31 @@ module.exports = function installCommandCentre({ app, q }) {
      cumulative for the FY and taking it raw overstates billing several-fold. A month
      with neither is skipped and counted, so a partial answer is never passed off as
      a whole one. */
+  /* A day still being keyed is not a day.
+
+     Supply is reported as copies per day, so a window ending on today divides a partial
+     day's copies by a whole day and pulls the average down. On 3 September the morning
+     sync held 4,627 hawker rows at 06:04 and 5,049 by midday; that missing tenth showed
+     as Rajasthan cash of 5.77 L against the ERP's 5.95 L, and the figure would have
+     climbed on its own during the afternoon with nothing on screen to explain why.
+
+     Averages therefore end at yesterday. Sums are left alone — a part-day of collection
+     is genuinely what has been collected so far, and hiding it would be the lie.
+
+     "Today" asked for on its own is honoured as asked; trimming it would leave nothing.
+     Server-local time is used because the rest of this file already builds its windows
+     that way. */
+  const trimPartialDay = win => {
+    const pad = n => String(n).padStart(2, '0');
+    const now = new Date();
+    const cur = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    if (win.to !== cur || win.from === cur) return win;
+    const d = new Date(cur + 'T00:00:00');
+    d.setDate(d.getDate() - 1);
+    const prev = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    return prev < win.from ? win : { ...win, to: prev, partial_day_excluded: cur };
+  };
+
   const _billMonthsFor = win => {
     const pad = n => String(n).padStart(2, '0');
     const lbl = dt => `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}`;
@@ -664,6 +695,8 @@ module.exports = function installCommandCentre({ app, q }) {
       const win = (_spRqRange === 'custom' && /^\d{4}-\d{2}-\d{2}$/.test(_spFrom || '') && /^\d{4}-\d{2}-\d{2}$/.test(_spTo || ''))
         ? { from: _spFrom, to: _spTo, label: `${_spFrom} → ${_spTo}`, key: 'custom' }
         : resolveRangeWindow(asOn, _spRqRange);
+      // The window supplyByState averages CASH over; reported so a card can say so.
+      const _supWinNat = trimPartialDay(win);
       /* Same comparison rule as the branch dashboard: default to the window one year
          back, let the caller name one explicitly, and for COVID compare against today —
          "18 Mar 2020 vs 18 Mar 2019" is not a question anyone asks of that range. */
@@ -779,6 +812,9 @@ module.exports = function installCommandCentre({ app, q }) {
       res.json({
         as_on: asOn, previous: prev, compare: mode, compare_label: label,
         range: win.key, range_label: win.label, range_from: win.from, range_to: win.to,
+        // Named so a card can say why supply covers one day fewer than the range asked.
+        // supplyByState trims the cash side only; this reports the same decision.
+        cash_range_to: _supWinNat.to, cash_partial_day_excluded: _supWinNat.partial_day_excluded || null,
         prev_range_from: prevWin.from, prev_range_to: prevWin.to,
         /* True when the comparison window is LATER than the selected one — which is the
            normal case for COVID, compared against today. The growth figure is then not
@@ -889,6 +925,11 @@ module.exports = function installCommandCentre({ app, q }) {
          snapshots. Selecting Last Month therefore asked for the 2026-08 snapshot, which
          the ERP does not write until month end, and the missing row differenced to a
          zero denominator: the card read "of ₹0 billed". */
+      /* Cash only. Agent supply is dispatched in the morning so the current day is
+         already complete, but hawker entries are keyed through the day — trimming both
+         would shorten the agent window for nothing. */
+      const supWin = trimPartialDay(win);
+
       const rangeBillMonths = _billMonthsFor(win);
       const billLabelSet = new Set();
       rangeBillMonths.forEach(m => { billLabelSet.add('BILL-' + m.label); billLabelSet.add(m.label); billLabelSet.add(m.prev); });
@@ -975,7 +1016,7 @@ module.exports = function installCommandCentre({ app, q }) {
              WHERE supply_date BETWEEN ? AND ? AND loc_id IN (${IN})`, [from, to, ...codes]);
           // Centre and hawker counts are a point-in-time headcount, not a range total.
           const [cur, prv, today, curD, prvD] = await Promise.all([
-            scan(win.from, win.to),
+            scan(supWin.from, supWin.to),
             scan(prevWin.from, prevWin.to),
             q(`SELECT loc_id unit_code, center_incharge,
                       MAX(center_incharge_name) center_incharge_name,
@@ -985,7 +1026,7 @@ module.exports = function installCommandCentre({ app, q }) {
                FROM hawker_supply
                WHERE supply_date = ? AND loc_id IN (${IN})
                GROUP BY loc_id, center_incharge`, [asOn, ...codes]),
-            windowDays(win.from, win.to),
+            windowDays(supWin.from, supWin.to),
             windowDays(prevWin.from, prevWin.to),
           ]);
           const curDays = N(curD.rows[0] && curD.rows[0].d) || 0;

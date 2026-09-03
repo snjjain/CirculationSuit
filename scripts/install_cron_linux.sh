@@ -15,6 +15,15 @@
 #   04:30 daily   oracle_emp_mobile_sync.js      user/mobile account refresh
 #   05:00 daily   supply_sync.js                 agent supply (yesterday)
 #   05:20 daily   hawker_supply_sync.js          hawker/cash sale (yesterday)
+#   06:25 daily   hawker_supply_sync.js --recheck  re-pull the last two days; entries
+#                                                  are still being keyed after the
+#                                                  morning run
+#   16:00 daily   hawker_supply_sync.js --today    today's cash sale. The morning run
+#                                                  catches only what was keyed by then —
+#                                                  on 3 Sept it held 4,627 rows at 06:04
+#                                                  and 5,049 by midday, and the missing
+#                                                  10% pulled Rajasthan's average down
+#                                                  from 5.95 L to 5.77 L
 #   05:40 daily   agency_master_sync.js          agency master incremental
 #   06:15 daily   collection_sync.js             collection receipts
 #   06:30 daily   oracle_outstanding_sync.js     agency outstanding balances
@@ -118,6 +127,8 @@ $(entry "04:30" "emp_mobile"     "oracle_emp_mobile_sync.js")
 $(entry "04:45" "hawker_master"  "oracle_hawker_master_sync.js")
 $(entry "05:00" "supply"         "supply_sync.js")
 $(entry "05:20" "hawker"         "hawker_supply_sync.js")
+$(entry "06:25" "hawker_recheck" "hawker_supply_sync.js --recheck")
+$(entry "16:00" "hawker_today"   "hawker_supply_sync.js --today")
 $(entry "05:40" "agency"         "agency_master_sync.js")
 $(entry "06:15" "collection"     "collection_sync.js")
 $(entry "06:30" "outstanding"    "oracle_outstanding_sync.js")
