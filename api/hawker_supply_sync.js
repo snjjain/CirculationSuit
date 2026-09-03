@@ -31,6 +31,10 @@ const args       = process.argv.slice(2);
 const HISTORICAL = args.includes('--historical');
 const REVERSE    = args.includes('--reverse');  // process monthly chunks newest → oldest
 const FROM_LAST  = args.includes('--from-last');
+/* Reload a range the log already marks done. Needed whenever the stored rows are wrong
+   rather than absent — a schema change like widening uq_hwk leaves every earlier chunk
+   "complete" and quietly un-repairable without this. */
+const FORCE      = args.includes('--force');
 const TODAY_MODE = args.includes('--today');     // sync today (4 PM intraday)
 const RECHECK    = args.includes('--recheck');   // re-sync yesterday+day-before (morning catch-up)
 const ARG_DATE   = args.find((_, i) => args[i - 1] === '--date');
@@ -493,7 +497,7 @@ async function fromLastSync(conn) {
     const { from, to } = chunks[i];
     log(`[${i+1}/${chunks.length}] Chunk ${from} → ${to}`);
     try {
-      total += await loadChunk(conn, from, to);
+      total += await loadChunk(conn, from, to, { skipIfDone: !FORCE });
     } catch (err) {
       log(`  ERROR in chunk ${from}→${to}: ${err.message} — skipping`);
     }
@@ -512,7 +516,7 @@ async function rangeSync(conn, fromStr, toStr) {
     const { from, to } = chunks[i];
     log(`[${i+1}/${chunks.length}] Chunk ${from} → ${to}`);
     try {
-      total += await loadChunk(conn, from, to);
+      total += await loadChunk(conn, from, to, { skipIfDone: !FORCE });
     } catch (err) {
       log(`  ERROR in chunk ${from}→${to}: ${err.message} — skipping, will retry next run`);
     }
