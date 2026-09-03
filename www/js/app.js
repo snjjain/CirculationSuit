@@ -7119,7 +7119,20 @@ VIEWS.cc_state = () => {
     ${_ccTopCard({ label: 'Collection vs billing', color: '#22c55e',
       value: t.collection.pct == null ? '—' : t.collection.pct + '%',
       trend: t.collection.growth_pct != null ? _ccTrend(t.collection.growth_pct) : '',
-      sub: `${_ccINR(t.collection.collected)} of ${_ccINR(t.collection.range_billed || t.collection.billed)} billed · ${t.collection.growth_pct != null ? (t.collection.growth_pct > 0 ? '+' : '') + t.collection.growth_pct + '% vs last year' : prevLbl}`,
+      /* Until the bill for the range is snapshotted there is no denominator, so the
+         card says which month is missing instead of printing "of ₹0 billed" — which
+         read as a total billing collapse rather than a record not yet written. */
+      sub: (() => {
+        const cl = t.collection, yoy = cl.growth_pct != null
+          ? `${cl.growth_pct > 0 ? '+' : ''}${cl.growth_pct}% vs last year` : prevLbl;
+        if (cl.range_billed == null) {
+          const miss = (cl.bill_missing || []).join(', ');
+          return `${_ccINR(cl.collected)} collected · ${miss ? esc(miss) + ' billing not loaded yet' : 'billing not loaded yet'}`;
+        }
+        const gap = (cl.bill_missing || []).length ? ` · ${esc(cl.bill_missing.join(', '))} not in yet` : '';
+        return `${_ccINR(cl.collected)} of ${_ccINR(cl.range_billed)} billed${
+          (cl.bill_months || []).length ? ' ' + esc(cl.bill_months.join(', ')) : ''} · ${yoy}${gap}`;
+      })(),
       barPct: t.collection.pct })}`;})()}
     ${_ccTopCard({ label: 'Outstanding', color: '#f59e0b',
       value: _ccINR(t.outstanding.amount),

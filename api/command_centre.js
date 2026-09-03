@@ -881,21 +881,18 @@ module.exports = function installCommandCentre({ app, q }) {
       // Billing snapshot labels for range-appropriate collection efficiency.
       // Complete billing months within [win.from, win.to]:
       //   billEnd = latest snapshot label to use; billBefore = snapshot to subtract.
-      const _rangeBillLabels = (() => {
-        const pad = n => String(n).padStart(2, '0');
-        const lbl = x => `${x.getFullYear()}-${pad(x.getMonth() + 1)}`;
-        const f = new Date(win.from + 'T00:00:00'), t = new Date(win.to + 'T00:00:00');
-        const firstBillMon = f.getDate() === 1 ? f : new Date(f.getFullYear(), f.getMonth() + 1, 1);
-        const lastDayOfT = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
-        const lastBillMon = t.getDate() === lastDayOfT ? t : new Date(t.getFullYear(), t.getMonth() - 1, 1);
-        if (firstBillMon > lastBillMon) {
-          // No complete month in range — use lastBillMon's own monthly billing
-          const billEnd = lbl(lastBillMon);
-          return { billEnd, billBefore: lbl(new Date(lastBillMon.getFullYear(), lastBillMon.getMonth() - 1, 1)) };
-        }
-        return { billEnd: lbl(lastBillMon), billBefore: lbl(new Date(firstBillMon.getFullYear(), firstBillMon.getMonth() - 1, 1)) };
-      })();
-      const { billEnd: rblEnd, billBefore: rblBefore } = _rangeBillLabels;
+      /* Which bills the collections in this range answer — the same shifted-month rule
+         the national view uses, so a branch and the country cannot disagree about what
+         "collection vs billing" means.
+
+         This used to take the range's OWN month and difference two cumulative
+         snapshots. Selecting Last Month therefore asked for the 2026-08 snapshot, which
+         the ERP does not write until month end, and the missing row differenced to a
+         zero denominator: the card read "of ₹0 billed". */
+      const rangeBillMonths = _billMonthsFor(win);
+      const billLabelSet = new Set();
+      rangeBillMonths.forEach(m => { billLabelSet.add('BILL-' + m.label); billLabelSet.add(m.label); billLabelSet.add(m.prev); });
+      const rangeBillLabels = [...billLabelSet];
 
       const [agentSup, cashSup, coll, os, billing, master, hier, visits, execActive, execBilling, monthSup, collPrevYr] = await Promise.all([
         /* Agent (credit) supply — daily average over the selected range vs the same
@@ -1023,8 +1020,10 @@ module.exports = function installCommandCentre({ app, q }) {
            WHERE period_label='CURRENT' AND unit_code IN (${IN})
            GROUP BY unit_code, ag_code`, codes),
         q(`SELECT period_label, unit_code, SUM(bill_amt) amt FROM agency_outstanding
-           WHERE period_label IN (?, ?, ?, ?) AND unit_code IN (${IN})
-           GROUP BY period_label, unit_code`, [prevMonthLabel, prevPrevLabel, rblEnd, rblBefore, ...codes]),
+           WHERE period_label IN (${[prevMonthLabel, prevPrevLabel, ...rangeBillLabels].map(() => '?').join(',')})
+             AND unit_code IN (${IN})
+           GROUP BY period_label, unit_code`,
+          [prevMonthLabel, prevPrevLabel, ...rangeBillLabels, ...codes]),
         q(`SELECT unit, agcd, MAX(ag_name) ag_name, MAX(executive_code) exec_code,
                   MAX(executive_name) exec_name, MAX(dist_name) dist_name,
                   MAX(ag_class_name) ag_class
@@ -1171,9 +1170,21 @@ module.exports = function installCommandCentre({ app, q }) {
       });
       // Range-appropriate billing denominator for the collection KPI card.
       // diff of two cumulative snapshots = billing for all complete months within the date range.
-      const rblEndTot   = billing.rows.filter(r => r.period_label === rblEnd)  .reduce((a, r) => a + N(r.amt), 0);
-      const rblBeforeTot = billing.rows.filter(r => r.period_label === rblBefore).reduce((a, r) => a + N(r.amt), 0);
-      const rangeBilledAmt = Math.max(0, rblEndTot - rblBeforeTot);
+      /* Each shifted month resolved on its own: the ERP's own BILL-YYYY-MM where it
+         exists, otherwise the difference of consecutive cumulative snapshots. A month
+         with neither is skipped and named, so a denominator that is only part of the
+         range is never passed off as the whole of it. */
+      const labelTot = lbl => billing.rows.filter(r => r.period_label === lbl).reduce((a, r) => a + N(r.amt), 0);
+      const haveLabel = lbl => billing.rows.some(r => r.period_label === lbl);
+      const billMonthsUsed = [], billMonthsMissing = [];
+      let rangeBilledAmt = 0;
+      rangeBillMonths.forEach(m => {
+        if (haveLabel('BILL-' + m.label))            { rangeBilledAmt += labelTot('BILL-' + m.label); billMonthsUsed.push(m.label); }
+        else if (haveLabel(m.label) && haveLabel(m.prev)) { rangeBilledAmt += Math.max(0, labelTot(m.label) - labelTot(m.prev)); billMonthsUsed.push(m.label); }
+        else if (haveLabel(m.label))                 { rangeBilledAmt += labelTot(m.label); billMonthsUsed.push(m.label); }
+        else billMonthsMissing.push(m.label);
+      });
+      const rangeBilledKnown = billMonthsUsed.length > 0;
       // Exec-level billing: use exec_code from agency_outstanding (covers closed/suspended agencies).
       // Falls back to execOf for agencies where exec_code is missing in the snapshot.
       const exBillThis = {}, exBillPrev = {};
@@ -1459,13 +1470,19 @@ module.exports = function installCommandCentre({ app, q }) {
           cash:  { current: cashCur, previous: cashPrev, growth_pct: r1(pct(cashCur, cashPrev)),
                    share_pct: supCur ? r1((cashCur / supCur) * 100) : null,
                    centres: codes.filter(c => B[c].cash_cur > 0).length },
-          collection: { collected, billed,
-                        range_billed: rangeBilledAmt || billed,
-                        pct: (rangeBilledAmt || billed) ? r1((collected / (rangeBilledAmt || billed)) * 100) : null,
-                        gap: Math.max(0, (rangeBilledAmt || billed) - collected), txn: bsum(b => b.txn),
+          collection: (() => {
+            /* null, not zero, when no bill for the range has been snapshotted yet.
+               Falling back to `billed` (last month's, anchored on as-on) silently
+               measured the range's collection against a different period's billing. */
+            const denom = rangeBilledKnown ? rangeBilledAmt : null;
+            return { collected, billed,
+                        range_billed: denom,
+                        bill_months: billMonthsUsed, bill_missing: billMonthsMissing,
+                        pct: denom ? r1((collected / denom) * 100) : null,
+                        gap: denom ? Math.max(0, denom - collected) : null, txn: bsum(b => b.txn),
                         agencies_paid: bsum(b => b.agencies_paid),
                         prev_yr: collected_prev_yr,
-                        growth_pct: collected_prev_yr ? r1((collected / collected_prev_yr - 1) * 100) : null },
+                        growth_pct: collected_prev_yr ? r1((collected / collected_prev_yr - 1) * 100) : null }; })(),
           outstanding: { amount: osTot, agencies: bsum(b => b.os_agencies),
                          critical: bsum(b => b.critical) },
           dcr: { visits: bsum(b => b.visits), agencies_visited: seenTot, book: bookTot,
