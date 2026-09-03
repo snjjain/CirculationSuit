@@ -25,6 +25,10 @@
 #   10:00-12:00 every 30min   oracle_tour_plan_sync.js -> tour_plan_daily_notify.js
 #                             submitted tour plans + AI audit pushed to Circulation Incharges
 #   02:00 Sunday  agency_master_sync.js --full   weekly full agency refresh
+#   08:15 on the 1st  monthly_billing_snapshot.sh  closed month's cumulative snapshot
+#                     and the ERP's BILL-YYYY-MM. The daily outstanding sync pulls only
+#                     CURRENT, so without this the closed month is never written and
+#                     Collection vs Billing reads "billing not loaded yet".
 #
 # Requirements on the server:
 #   - node in PATH (or edit NODE below)
@@ -78,6 +82,17 @@ entry() {  # entry "HH:MM-IST" "jobname" "script.js [args]"
   echo "$M $H * * * cd '$API_DIR' && flock -n /tmp/patrika_${name}.lock $NODE $cmd >> '$LOG_DIR/cron_${name}.log' 2>&1"
 }
 
+monthly_entry() {  # monthly_entry "HH:MM-IST" "jobname" "command…" — runs on the 1st
+  # Some figures only exist once a month has closed, so they cannot ride the daily
+  # schedule. Day-of-month 1 in server-local time; the IST conversion can shift the
+  # hour but never the date, because IST is ahead of no timezone this runs in by
+  # enough to cross midnight backwards.
+  local t="$1" name="$2" cmd="$3"
+  local H M
+  H="$(ist "$t" %H)"; M="$(ist "$t" %M)"
+  echo "$M $H 1 * * cd '$REPO_DIR' && flock -n /tmp/patrika_${name}.lock $cmd >> '$LOG_DIR/cron_${name}.log' 2>&1"
+}
+
 weekly_entry() {  # weekly_entry "next Sunday HH:MM" "jobname" "script.js [args]"
   local t="$1" name="$2" cmd="$3"
   local H M W
@@ -113,6 +128,7 @@ $(chained_entry "11:00" "tour_plan_1100" "oracle_tour_plan_sync.js" "tour_plan_d
 $(chained_entry "11:30" "tour_plan_1130" "oracle_tour_plan_sync.js" "tour_plan_daily_notify.js")
 $(chained_entry "12:00" "tour_plan_1200" "oracle_tour_plan_sync.js" "tour_plan_daily_notify.js")
 $(weekly_entry "next Sunday 02:00" "agency_full" "agency_master_sync.js --full")
+$(monthly_entry "08:15" "monthly_billing" "./scripts/monthly_billing_snapshot.sh")
 $MARK_END"
 
 # ── install: replace existing managed block, keep everything else ────────────
