@@ -410,8 +410,7 @@ module.exports = function installCommandCentre({ app, q }) {
                     AND s2.sup_type_code='S01' AND COALESCE(s2.publ,'') NOT IN ('P14')${unitScope ? ' AND s2.unit_code = ?' : ''}) all_tot
          FROM supply_data s
          JOIN (SELECT DISTINCT unit, agcd FROM agency_master
-               WHERE ag_class_name = 'CREDIT SALE' AND COALESCE(supply_stop_flag,'N') = 'N'
-                 AND (suspend_date IS NULL OR suspend_date > CURDATE())) cm
+               WHERE ag_class_name = 'CREDIT SALE') cm
            ON cm.unit = s.unit_code AND cm.agcd = s.agcd
          WHERE s.supply_date = ? AND s.sup_type_code = 'S01'
            AND COALESCE(s.publ,'') NOT IN ('P14')${uCl}
@@ -619,9 +618,7 @@ module.exports = function installCommandCentre({ app, q }) {
          FROM supply_data s
          JOIN (SELECT DISTINCT unit, agcd, unit_state_nm FROM agency_master
                WHERE CAST(dpcd AS UNSIGNED)=1
-                 AND ag_class_name = 'CREDIT SALE'
-                 AND COALESCE(supply_stop_flag,'N')='N'
-                 AND (suspend_date IS NULL OR suspend_date > CURDATE())${unitScope ? ' AND unit = ?' : ''}) am
+                 AND ag_class_name = 'CREDIT SALE'${unitScope ? ' AND unit = ?' : ''}) am
            ON am.unit = s.unit_code AND am.agcd = s.agcd
          WHERE s.supply_date BETWEEN ? AND ?
            AND s.sup_type_code = 'S01'
@@ -973,8 +970,15 @@ module.exports = function installCommandCentre({ app, q }) {
             scan(win.from, win.to),
             scan(prevWin.from, prevWin.to),
             q(`SELECT DISTINCT unit, agcd FROM agency_master
-               WHERE ag_class_name='CREDIT SALE' AND COALESCE(supply_stop_flag,'N')='N'
-                 AND (suspend_date IS NULL OR suspend_date > CURDATE())`),
+               /* CREDIT SALE is a class, not a status. The stopped/suspended conditions that used to
+             sit here were evaluated as of today and applied to BOTH windows, so an agency
+             stopped this year was erased from last year's total too — where it had really
+             supplied. Last year shrank, the current year did not, and growth was invented:
+             Shakir Khan read +10.4% against a true -5.6% (prev 22,079 instead of 25,811),
+             and Homesh Sharma +82.5% against -0.6% (prev 4,641 instead of 8,600).
+             A stopped agency contributes ~nothing to the current window anyway, so dropping
+             the status test changes today's figure by under 1% and makes history honest. */
+          WHERE ag_class_name='CREDIT SALE'`),
             windowDays(win.from, win.to),
             windowDays(prevWin.from, prevWin.to),
           ]);
@@ -1069,9 +1073,12 @@ module.exports = function installCommandCentre({ app, q }) {
                   MAX(executive_name) exec_name, MAX(dist_name) dist_name,
                   MAX(ag_class_name) ag_class
            FROM agency_master
+           /* No status test. This row set is what attributes supply to an executive, so
+              excluding stopped agencies dropped their historical copies from every
+              executive's previous-year figure — the same invented growth as the credit
+              set above. The DCR book built from these rows already requires supply in
+              the month, so a stopped agency cannot inflate that count either. */
            WHERE unit IN (${IN}) AND CAST(dpcd AS UNSIGNED)=1
-             AND COALESCE(supply_stop_flag,'N')='N'
-             AND (suspend_date IS NULL OR suspend_date > CURDATE())
            GROUP BY unit, agcd`, codes),
         q(`SELECT m.exec_code, MAX(m.exec_desig) desig,
                   MAX(m.edtn_incharge) edtn_code, MAX(m.edtn_incharge_name) edtn,
@@ -2010,8 +2017,7 @@ module.exports = function installCommandCentre({ app, q }) {
                   SUM(CASE WHEN s.supply_date = ? THEN s.sup_copy ELSE 0 END) prv
            FROM supply_data s
            JOIN (SELECT DISTINCT unit, agcd FROM agency_master
-                 WHERE ag_class_name='CREDIT SALE' AND COALESCE(supply_stop_flag,'N')='N'
-                   AND (suspend_date IS NULL OR suspend_date > CURDATE())) cm
+                 WHERE ag_class_name='CREDIT SALE') cm
              ON cm.unit = s.unit_code AND cm.agcd = s.agcd
            WHERE s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')
              AND s.supply_date IN (?, ?) AND ${stCl}
