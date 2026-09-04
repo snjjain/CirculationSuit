@@ -427,66 +427,84 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
        Rajasthan supply under Haryana, Punjab and MP, and split a branch's figures
        across state cards that no one manages. Cash supply already bucketed this way;
        agent did not, so the two halves of the same branch disagreed. */
+    /* Kept per unit AND per date, because the divisor has to be counted per STATE and a
+       state's publishing days are the union of its units' days, which cannot be
+       recovered from per-unit day counts. ~35 units x the window's days, so a month is
+       about a thousand rows off the covering index. */
+    /* Agent copies are the CREDIT SALE agencies' own copies, counted agency by agency —
+       the same test the branch drill-down applies. They used to be estimated instead:
+       the credit share of one day's supply, applied across the whole window. The mix
+       does move slowly, but "slowly" is not "not at all", and the estimate landed 465
+       copies a day away from the exact figure on the Rajasthan card while the drill-down
+       below it showed the exact one. A LEFT JOIN keeps both numbers in a single pass, so
+       every date with any supply still counts toward the divisor even when no credit
+       agency lifted that day. */
     const agentSql =
-      `SELECT s.unit_code unit, SUM(s.sup_copy) tot,
-              COUNT(DISTINCT s.supply_date) days
+      `SELECT s.unit_code unit, s.supply_date d,
+              SUM(CASE WHEN cm.agcd IS NOT NULL THEN s.sup_copy ELSE 0 END) tot
        FROM supply_data s FORCE INDEX (idx_sd_cover_range)
+       LEFT JOIN (SELECT DISTINCT unit, agcd FROM agency_master
+                   WHERE ag_class_name = 'CREDIT SALE') cm
+              ON cm.unit = s.unit_code AND cm.agcd = s.agcd
        WHERE s.supply_date BETWEEN ? AND ?
          AND s.sup_type_code = 'S01' AND COALESCE(s.publ,'') NOT IN ('P14')${uCl}
-       GROUP BY s.unit_code`;
+       GROUP BY s.unit_code, s.supply_date`;
     const hawkSql =
-      `SELECT h.loc_id unit, SUM(h.sup_copies) tot, COUNT(DISTINCT h.supply_date) days
+      `SELECT h.loc_id unit, h.supply_date d, SUM(h.sup_copies) tot
        FROM hawker_supply h FORCE INDEX (idx_hs_cover_range)
        WHERE h.supply_date BETWEEN ? AND ?${hCl}
-       GROUP BY h.loc_id`;
+       GROUP BY h.loc_id, h.supply_date`;
 
-    const [agentC, agentP, cashC, cashP, credit, uhs] = await Promise.all([
+    const [agentC, agentP, cashC, cashP, uhs] = await Promise.all([
       q(agentSql, [win.from, win.to, ...uP]),
       q(agentSql, [prevWin.from, prevWin.to, ...uP]),
       q(hawkSql,  [cashWin.from, cashWin.to, ...uP]),
       q(hawkSql,  [prevWin.from, prevWin.to, ...uP]),
-      // The credit-sale filter is applied per agency, so it cannot ride on the
-      // state-level aggregate above; agent copies are corrected by its share below.
-      q(`SELECT s.unit_code unit, SUM(s.sup_copy) credit_tot,
-                (SELECT SUM(s2.sup_copy) FROM supply_data s2
-                  WHERE s2.supply_date = s.supply_date AND s2.unit_code = s.unit_code
-                    AND s2.sup_type_code='S01' AND COALESCE(s2.publ,'') NOT IN ('P14')) all_tot
-         FROM supply_data s
-         JOIN (SELECT DISTINCT unit, agcd FROM agency_master
-               WHERE ag_class_name = 'CREDIT SALE') cm
-           ON cm.unit = s.unit_code AND cm.agcd = s.agcd
-         WHERE s.supply_date = ? AND s.sup_type_code = 'S01'
-           AND COALESCE(s.publ,'') NOT IN ('P14')${uCl}
-         GROUP BY s.unit_code, s.supply_date`,
-        // The correlated sub-select no longer carries a unit filter of its own, so the
-        // only parameters are the date and the outer scope. Leaving the old leading
-        // ...uP in place shifted every placeholder by one and a scoped caller read a
-        // larger figure than the unscoped admin.
-        [win.to, ...uP]),
       unitHomeState(),
     ]);
-    // Share of each state's supply that is credit sale, measured on one day (cheap) and
-    // applied across the window — the mix moves slowly, the volume is what changes.
-    // Credit share per UNIT now, matching how supply itself is keyed.
-    const creditShare = {};
-    credit.rows.forEach(r => {
-      const all = N(r.all_tot);
-      if (all > 0) creditShare[r.unit] = N(r.credit_tot) / all;
-    });
-    const avg = (tot, days) => (days > 0 ? Math.round(N(tot) / days) : 0);
-    const agent = { rows: agentC.rows.map(r => ({ unit: r.unit,
-      cur: Math.round(avg(r.tot, r.days) * (creditShare[r.unit] ?? 1)), prv: 0 })) };
-    const agentPrevRows = agentP.rows.map(r => ({ unit: r.unit,
-      prv: Math.round(avg(r.tot, r.days) * (creditShare[r.unit] ?? 1)) }));
-    const cash = { rows: cashC.rows.map(r => ({ unit: r.unit, cur: avg(r.tot, r.days), prv: 0 })) };
-    const cashPrevRows = cashP.rows.map(r => ({ unit: r.unit, prv: avg(r.tot, r.days) }));
     const home = uhs;
 
-    const agentCur = blank(), agentPrev = blank(), cashCur = blank(), cashPrev = blank();
-    agent.rows.forEach(r => { agentCur[bucketOf(home[r.unit]?.st)] += N(r.cur); });
-    agentPrevRows.forEach(r => { agentPrev[bucketOf(home[r.unit]?.st)] += N(r.prv); });
-    cash.rows.forEach(r => { cashCur[bucketOf(home[r.unit]?.st)] += N(r.cur); });
-    cashPrevRows.forEach(r => { cashPrev[bucketOf(home[r.unit]?.st)] += N(r.prv); });
+    /* ONE divisor per state — the same rule the branch drill-down already uses.
+
+       This used to average each unit over its OWN publishing days and then add those
+       averages up. That is not the state's average daily supply: on 16 August most
+       units did not publish, so a 30-day unit was divided by 30 while the state's
+       window ran 31 days, and every such unit came out proportionally too high. The
+       Rajasthan card read 11,23,651 against the drill-down's 11,07,269 for the same
+       month — 16,382 copies a day of pure arithmetic, and the two screens showing the
+       same state disagreed. Summing group averages only equals total/days when every
+       group shares the divisor.
+
+       Closed branches are dropped here too. The drill-down already excludes them, so
+       leaving them in nationally would reintroduce the same disagreement the moment a
+       range reaches back to when they still supplied. */
+    /* Rounded once per BRANCH and then added, which is what the drill-down does, so a
+       state card and the branch list under it are the same arithmetic and not merely
+       close. Rounding per branch is safe now only because the divisor is shared; it was
+       the divisor, not the rounding, that put the two screens 16,382 copies apart. */
+    const roll = rows => {
+      const byUnit = {}, days = {};
+      rows.forEach(r => {
+        if (CLOSED_UNITS.has(r.unit)) return;
+        const st = bucketOf(home[r.unit]?.st);
+        (byUnit[st] || (byUnit[st] = {}));
+        byUnit[st][r.unit] = (byUnit[st][r.unit] || 0) + N(r.tot);
+        (days[st] || (days[st] = new Set())).add(String(r.d));
+      });
+      const out = blank();
+      Object.keys(out).forEach(st => {
+        const n = days[st] ? days[st].size : 0;
+        out[st] = (n > 0 && byUnit[st])
+          ? Object.values(byUnit[st]).reduce((a, t) => a + Math.round(t / n), 0)
+          : 0;
+      });
+      return out;
+    };
+
+    const agentCur  = roll(agentC.rows);
+    const agentPrev = roll(agentP.rows);
+    const cashCur   = roll(cashC.rows);
+    const cashPrev  = roll(cashP.rows);
     return { agentCur, agentPrev, cashCur, cashPrev };
   }
 
@@ -1221,6 +1239,11 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
       // ── Roll everything up per branch and per executive ──
       const mk = () => ({
         agent_cur: 0, agent_prev: 0, cash_cur: 0, cash_prev: 0,
+        /* Raw copies plus the window's day count, kept so the average is taken ONCE at
+           the end. Adding a thousand quotients instead drifts in the last bit: Rajasthan
+           landed on 5,31,849.4999 where the exact division gives 5,31,849.5, and the
+           state card above read one copy more than the branch list below it. */
+        _agc: 0, _agp: 0, _csc: 0, _csp: 0, _agdc: 0, _agdp: 0, _csdc: 0, _csdp: 0,
         collection: 0, txn: 0, agencies_paid: 0, billed: 0,
         os: 0, os_agencies: 0, critical: 0, book: 0, dcrBook: 0,
         visits: 0, agencies_visited: 0, execs: new Set(),
@@ -1260,6 +1283,7 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
           exec_code: code, exec_name: known || code, units: new Set(),
           is_active: activeMap.has(code) ? activeMap.get(code) : null,
           agencies: 0, supply_cur: 0, supply_prev: 0, cash_cur: 0, cash_prev: 0, collection: 0, billed: 0, os: 0,
+          _agc: 0, _agp: 0, _csc: 0, _csp: 0, _agdc: 0, _agdp: 0, _csdc: 0, _csdp: 0,
           txn: 0, agencies_paid: 0, os_agencies: 0, critical: 0,
           visits: 0, agencies_visited: 0,
           hawker_centres: 0, hawker_count: 0, hawker_cent_name: null,
@@ -1270,21 +1294,56 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
       };
       master.rows.forEach(r => { const e = exec(r.exec_code, r.exec_name, r.unit); if (e) e.agencies += 1; });
 
+      /* Averaged, then added — not rounded per agency and then added. Every agency here
+         shares one divisor, so the exact sum is the branch's own copies-per-day; rounding
+         each of a thousand agencies first scattered up to half a copy apiece and left the
+         state 32 copies a day away from the card above it. Rounding happens once per
+         branch and once per executive, below, so each list still adds up to its header. */
+      /* Every row of a scan carries the same scope-wide day count, but a row that exists
+         only in the comparison window carries cur_days = 0 from its seed. Assigning
+         blindly let such a row land last and zero the divisor, which zeroed the figure
+         it divided. MAX keeps the real count whatever order the rows arrive in. */
+      const takeAg = (o, r) => { o._agc += N(r.cur_total); o._agp += N(r.prv_total);
+                                 o._agdc = Math.max(o._agdc, N(r.cur_days));
+                                 o._agdp = Math.max(o._agdp, N(r.prv_days)); };
+      const takeCs = (o, r) => { o._csc += N(r.cur_total); o._csp += N(r.prv_total);
+                                 o._csdc = Math.max(o._csdc, N(r.cur_days));
+                                 o._csdp = Math.max(o._csdp, N(r.prv_days)); };
       agentSup.rows.forEach(r => {
-        const cur = N(r.cur_days) > 0 ? Math.round(N(r.cur_total) / N(r.cur_days)) : 0;
-        const prv = N(r.prv_days) > 0 ? Math.round(N(r.prv_total) / N(r.prv_days)) : 0;
-        const b = B[r.unit_code]; if (b) { b.agent_cur += cur; b.agent_prev += prv; }
+        const b = B[r.unit_code]; if (b) takeAg(b, r);
         const k = `${r.unit_code}|${r.agcd}`;
         const e = execOf[k] && exec(execOf[k].code, execOf[k].name, r.unit_code);
-        if (e) { e.supply_cur += cur; e.supply_prev += prv; }
+        if (e) takeAg(e, r);
       });
       cashSup.rows.forEach(r => {
-        const cur = N(r.cur_days) > 0 ? Math.round(N(r.cur_total) / N(r.cur_days)) : 0;
-        const prv = N(r.prv_days) > 0 ? Math.round(N(r.prv_total) / N(r.prv_days)) : 0;
-        const b = B[r.unit_code]; if (b) { b.cash_cur += cur; b.cash_prev += prv; }
+        const cur = N(r.cur_days) > 0 ? N(r.cur_total) / N(r.cur_days) : 0;
+        const prv = N(r.prv_days) > 0 ? N(r.prv_total) / N(r.prv_days) : 0;
+        const b = B[r.unit_code]; if (b) takeCs(b, r);
         // City sale belongs to the centre incharge, who is an executive in their own right.
         const e = exec(r.center_incharge, r.center_incharge_name, r.unit_code);
-        if (e) { e.supply_cur += cur; e.supply_prev += prv; e.cash_cur += cur; e.cash_prev += prv; e.hawker_centres += N(r.centres); e.hawker_count += N(r.hawkers); if (r.cent_name && !e.hawker_cent_name) e.hawker_cent_name = r.cent_name; }
+        if (e) { takeCs(e, r); e.hawker_centres += N(r.centres); e.hawker_count += N(r.hawkers); if (r.cent_name && !e.hawker_cent_name) e.hawker_cent_name = r.cent_name; }
+      });
+      /* Both supply loops are done, so the average is taken here — once per branch and
+         once per executive, from raw copies over the window's own days. Agent and cash
+         divide by their own day counts because agent supply reads the publishing calendar
+         and cash stops at yesterday. Everything downstream (rows, totals, the zonal
+         hierarchy) reads these integers and rounds nothing further. */
+      const avgOnce = o => {
+        const ag  = o._agdc > 0 ? Math.round(o._agc / o._agdc) : 0;
+        const agP = o._agdp > 0 ? Math.round(o._agp / o._agdp) : 0;
+        const cs  = o._csdc > 0 ? Math.round(o._csc / o._csdc) : 0;
+        const csP = o._csdp > 0 ? Math.round(o._csp / o._csdp) : 0;
+        return { ag, agP, cs, csP };
+      };
+      codes.forEach(c => {
+        const b = B[c], v = avgOnce(b);
+        b.agent_cur = v.ag; b.agent_prev = v.agP; b.cash_cur = v.cs; b.cash_prev = v.csP;
+      });
+      Object.values(E).forEach(e => {
+        const v = avgOnce(e);
+        e.cash_cur = v.cs; e.cash_prev = v.csP;
+        // supply is agent + cash, so "agent = supply - cash" downstream stays exact.
+        e.supply_cur = v.ag + v.cs; e.supply_prev = v.agP + v.csP;
       });
       coll.rows.forEach(r => {
         const b = B[r.unit_code];
