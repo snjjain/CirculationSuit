@@ -4556,7 +4556,7 @@ require('./ai_nexus')({ app, q, getScopeUnitCodes, getOuScopeFilter, computeInsi
 
 // ── Tour Plan Validation — AI audit of submitted tour plans vs recommendation ──
 require('./tour_plan_validate')({ app, q });
-require('./command_centre')({ app, q });
+require('./command_centre')({ app, q, getScopeUnitCodes });
 
 // ── Competitor Data — agency/hawker market-share entry, Excel upload/download ──
 require('./competitor')({ app, q });

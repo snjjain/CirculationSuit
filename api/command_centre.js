@@ -24,7 +24,31 @@
  * Registered by server.js:  require('./command_centre')({ app, q })
  */
 
-module.exports = function installCommandCentre({ app, q }) {
+module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
+  /* The caller's own rights, as a hard ceiling on every figure this file returns.
+     null means unrestricted (level 1 / admin); an array is the exact set of units.
+
+     An empty array means "entitled to nothing" and must NOT be read as "no filter" —
+     that inversion is how a scoping bug turns into a data leak. uFilter() below returns
+     no clause for an empty list, so callers intersect first and refuse the request when
+     the intersection is empty, rather than letting it widen. */
+  async function callerScope(req) {
+    if (!getScopeUnitCodes || !req.auth) return null;
+    try { return await getScopeUnitCodes(req.auth.personCode, req.auth.hierarchyLevel); }
+    catch (_) { return []; }          // fail closed
+  }
+
+  /* The units this request may actually read: what was asked for, narrowed to what the
+     caller is entitled to. Returns null for unrestricted, [] when the caller asked for
+     something outside their rights. */
+  function narrow(requested, scope) {
+    const req_ = Array.isArray(requested) ? requested.filter(Boolean)
+               : (requested ? [String(requested)] : []);
+    if (scope == null) return req_.length ? req_ : null;   // admin
+    const allowed = new Set(scope);
+    return req_.length ? req_.filter(u => allowed.has(u)) : scope.slice();
+  }
+
   const N = v => { const n = Number(v); return isNaN(n) ? 0 : n; };
 
   /* ── Response cache for the expensive dashboard reads ────────────────────────
@@ -81,6 +105,19 @@ module.exports = function installCommandCentre({ app, q }) {
   }, CACHE_TTL_MS).unref?.();
   const r1 = v => v == null ? null : Math.round(v * 10) / 10;
   const pct = (cur, prev) => (!prev ? null : ((cur - prev) / Math.abs(prev)) * 100);
+
+  /* Unit filter that takes either a single unit code (a drill-down) or a list (the
+     caller's own rights). Both narrow the same way, and a list of one behaves exactly
+     like the old string, so every call site keeps its meaning.
+
+     Command Centre was mounted without getScopeUnitCodes at all, so nothing here
+     narrowed by who was asking: a VP of Rajasthan, a zonal head, an edition incharge —
+     every one of them saw all-India figures. */
+  const uFilter = (col, scope) => {
+    const list = Array.isArray(scope) ? scope.filter(Boolean) : (scope ? [scope] : []);
+    if (!list.length) return { cl: '', p: [] };
+    return { cl: ` AND ${col} IN (${list.map(() => '?').join(',')})`, p: list };
+  };
 
   const STATES = [
     { key: 'RAJASTHAN',      name: 'Rajasthan',      os: 'RPPL',     abbr: 'RJ' },
@@ -265,8 +302,8 @@ module.exports = function installCommandCentre({ app, q }) {
     const cySpan = yy => ({ from: `${yy}-01-01`, to: `${yy}-12-31` });
     const fyCur = fySpan(fy), fyBase = fySpan(fy - 1);
     const cyCur = cySpan(cy), cyBase = cySpan(cy - 1);
-    const uC = unitScope ? ' AND unit_code = ?' : '';
-    const uP = unitScope ? [unitScope] : [];
+    const _uf = uFilter('unit_code', unitScope);
+    const uC = _uf.cl, uP = _uf.p;
 
     const [coll, sup] = await Promise.all([
       q(`SELECT YEAR(coll_date) y, QUARTER(coll_date) q, -COALESCE(SUM(amount),0) amt
@@ -317,7 +354,8 @@ module.exports = function installCommandCentre({ app, q }) {
   const QTR_CACHE = new Map();
   const QTR_TTL_MS = 60 * 60 * 1000;
   async function quarterlyCached(asOn, unitScope) {
-    const key = `${asOn}|${unitScope || ''}`;
+    // A list scope must key distinctly, or one caller's slice is served to another.
+    const key = `${asOn}|${Array.isArray(unitScope) ? unitScope.join(',') : (unitScope || '')}`;
     const hit = QTR_CACHE.get(key);
     if (hit && Date.now() - hit.at < QTR_TTL_MS) return hit.val;
     const val = await quarterly(asOn, unitScope);
@@ -332,16 +370,18 @@ module.exports = function installCommandCentre({ app, q }) {
   app.get('/api/command/quarterly', async (req, res) => {
     try {
       const { asOn } = await resolveDates(req.query.as_on, req.query.compare);
-      const unitScope = String(req.query.unit_code || '').trim() || null;
+      const _scope = await callerScope(req);
+      const _asked = String(req.query.unit_code || '').trim() || null;
+      const unitScope = narrow(_asked, _scope);
+      if (Array.isArray(unitScope) && !unitScope.length) return res.status(403).json({ detail: 'Outside your branch scope' });
       res.json(await quarterlyCached(asOn, unitScope));
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });
 
   // Collection receipts + field visits over an arbitrary window, all-India.
   async function rangeTotals(win, unitScope) {
-    const uC = unitScope ? ' AND unit_code = ?' : '';
-    const uD = unitScope ? ' AND unit_code = ?' : '';
-    const uP = unitScope ? [unitScope] : [];
+    const _uf = uFilter('unit_code', unitScope);
+    const uC = _uf.cl, uD = _uf.cl, uP = _uf.p;
     const [coll, visits, any] = await Promise.all([
       q(`SELECT -COALESCE(SUM(amount),0) amt, COUNT(*) txn, COUNT(DISTINCT ag_code) agencies
          FROM agency_collection WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uC}`, [win.from, win.to, ...uP]),
@@ -381,9 +421,9 @@ module.exports = function installCommandCentre({ app, q }) {
        through the day: the same date held 541,970 copies at 06:04 and 597,616 by
        midday. Trimming both moved the agent figure away from the ERP for no reason. */
     const cashWin = trimPartialDay(win);
-    const uCl = unitScope ? ' AND s.unit_code = ?' : '';
-    const uP  = unitScope ? [unitScope] : [];
-    const hCl = unitScope ? ' AND h.loc_id = ?' : '';
+    const _uf = uFilter('s.unit_code', unitScope);
+    const uCl = _uf.cl, uP = _uf.p;
+    const hCl = uFilter('h.loc_id', unitScope).cl;
     const agentSql =
       `SELECT COALESCE(NULLIF(s.state_name,''),'OTHER') st, SUM(s.sup_copy) tot,
               COUNT(DISTINCT s.supply_date) days
@@ -407,7 +447,7 @@ module.exports = function installCommandCentre({ app, q }) {
       q(`SELECT COALESCE(NULLIF(s.state_name,''),'OTHER') st, SUM(s.sup_copy) credit_tot,
                 (SELECT SUM(s2.sup_copy) FROM supply_data s2
                   WHERE s2.supply_date = s.supply_date AND s2.state_name = s.state_name
-                    AND s2.sup_type_code='S01' AND COALESCE(s2.publ,'') NOT IN ('P14')${unitScope ? ' AND s2.unit_code = ?' : ''}) all_tot
+                    AND s2.sup_type_code='S01' AND COALESCE(s2.publ,'') NOT IN ('P14')${uFilter('s2.unit_code', unitScope).cl}) all_tot
          FROM supply_data s
          JOIN (SELECT DISTINCT unit, agcd FROM agency_master
                WHERE ag_class_name = 'CREDIT SALE') cm
@@ -415,7 +455,7 @@ module.exports = function installCommandCentre({ app, q }) {
          WHERE s.supply_date = ? AND s.sup_type_code = 'S01'
            AND COALESCE(s.publ,'') NOT IN ('P14')${uCl}
          GROUP BY st, s.supply_date, s.state_name`,
-        [...(unitScope ? [unitScope] : []), win.to, ...uP]),
+        [...uP, win.to, ...uP]),
       unitHomeState(),
     ]);
     // Share of each state's supply that is credit sale, measured on one day (cheap) and
@@ -506,8 +546,8 @@ module.exports = function installCommandCentre({ app, q }) {
     const yStart = asOn.slice(0, 4) + '-01-01';
     const lyStart = (Number(asOn.slice(0, 4)) - 1) + '-01-01';
     const lyAsOn  = (Number(asOn.slice(0, 4)) - 1) + asOn.slice(4);
-    const uCl = unitScope ? ' AND unit_code = ?' : '';
-    const uP  = unitScope ? [unitScope] : [];
+    const _uf = uFilter('unit_code', unitScope);
+    const uCl = _uf.cl, uP = _uf.p;
 
     const [mtd, prevDay, ytd, lyYtd, billing] = await Promise.all([
       q(`SELECT state_name st, -COALESCE(SUM(amount),0) amt, COUNT(*) txn, COUNT(DISTINCT ag_code) agencies
@@ -526,7 +566,7 @@ module.exports = function installCommandCentre({ app, q }) {
         const labels = [...need];
         if (!labels.length) return { rows: [] };
         return q(`SELECT period_label, group_unit_name st, SUM(bill_amt) amt FROM agency_outstanding
-           WHERE period_label IN (${labels.map(() => '?').join(',')})${unitScope ? ' AND unit_code = ?' : ''}
+           WHERE period_label IN (${labels.map(() => '?').join(',')})${uFilter('unit_code', unitScope).cl}
            GROUP BY period_label, group_unit_name`, [...labels, ...uP]);
       })(),
     ]);
@@ -571,8 +611,8 @@ module.exports = function installCommandCentre({ app, q }) {
 
   // ── Outstanding: live balance now vs the last month-end snapshot ───────────
   async function osByState(unitScope) {
-    const uCl = unitScope ? ' AND unit_code = ?' : '';
-    const uP  = unitScope ? [unitScope] : [];
+    const _uf = uFilter('unit_code', unitScope);
+    const uCl = _uf.cl, uP = _uf.p;
     const { rows: labels } = await q(
       `SELECT DISTINCT period_label FROM agency_outstanding
        WHERE period_label <> 'CURRENT' AND period_label NOT LIKE 'BILL-%' ORDER BY period_label DESC LIMIT 1`);
@@ -595,8 +635,8 @@ module.exports = function installCommandCentre({ app, q }) {
 
   // ── DCR: agency visits recorded, and how much of the book they cover ───────
   async function dcrByState(asOn, prev, unitScope) {
-    const uCl = unitScope ? ' AND v.unit_code = ?' : '';
-    const uP  = unitScope ? [unitScope] : [];
+    const _uf = uFilter('v.unit_code', unitScope);
+    const uCl = _uf.cl, uP = _uf.p;
     const monthStart = asOn.slice(0, 7) + '-01';
     // dcr_agency_visit is utf8mb4_unicode_ci while agency_master is
     // utf8mb4_0900_ai_ci, so joining them in SQL throws "Illegal mix of
@@ -618,7 +658,7 @@ module.exports = function installCommandCentre({ app, q }) {
          FROM supply_data s
          JOIN (SELECT DISTINCT unit, agcd, unit_state_nm FROM agency_master
                WHERE CAST(dpcd AS UNSIGNED)=1
-                 AND ag_class_name = 'CREDIT SALE'${unitScope ? ' AND unit = ?' : ''}) am
+                 AND ag_class_name = 'CREDIT SALE'${uFilter('unit', unitScope).cl}) am
            ON am.unit = s.unit_code AND am.agcd = s.agcd
          WHERE s.supply_date BETWEEN ? AND ?
            AND s.sup_type_code = 'S01'
@@ -686,7 +726,12 @@ module.exports = function installCommandCentre({ app, q }) {
 
   app.get('/api/command/state-performance', cacheFor(CACHE_TTL_MS), async (req, res) => {
     try {
-      const unitScope = (req.query.unit_code || '').trim() || null;
+      /* The national strip is only national for someone entitled to the nation. A VP of
+         Rajasthan asking for no particular unit gets their own units, not every unit. */
+      const _scope = await callerScope(req);
+      const _asked = (req.query.unit_code || '').trim() || null;
+      const unitScope = narrow(_asked, _scope);
+      if (Array.isArray(unitScope) && !unitScope.length) return res.status(403).json({ detail: 'Outside your branch scope' });
       const { asOn, prev, label, mode } = await resolveDates(req.query.as_on, req.query.compare);
       const _spRqRange = req.query.range, _spFrom = req.query.range_from, _spTo = req.query.range_to;
       const win = (_spRqRange === 'custom' && /^\d{4}-\d{2}-\d{2}$/.test(_spFrom || '') && /^\d{4}-\d{2}-\d{2}$/.test(_spTo || ''))
@@ -897,7 +942,13 @@ module.exports = function installCommandCentre({ app, q }) {
       const unitScope = String(req.query.unit_code || '').trim();
       const isBranch = !!unitScope && allUnits.some(u => u.unit_code === unitScope);
       if (unitScope && !isBranch) return res.status(400).json({ detail: 'Branch is not in this state' });
-      const units = isBranch ? allUnits.filter(u => u.unit_code === unitScope) : allUnits;
+      /* Narrow the state's branches to the ones this caller may read. Without it, any
+         signed-in user could name any state and receive it in full. */
+      const _scope = await callerScope(req);
+      const _allowed = _scope == null ? null : new Set(_scope);
+      const units = (isBranch ? allUnits.filter(u => u.unit_code === unitScope) : allUnits)
+        .filter(u => !_allowed || _allowed.has(u.unit_code));
+      if (!units.length) return res.status(403).json({ detail: 'Outside your branch scope' });
       const codes = units.map(u => u.unit_code);
       const groupBy = isBranch ? 'exec' : 'unit';
       if (!codes.length) return res.json({ state: stateKey, state_name: meta.name, branches: [] });
@@ -2010,7 +2061,11 @@ module.exports = function installCommandCentre({ app, q }) {
       const allUnits = await unitsOfState(stateKey);
       const unitName = {}; allUnits.forEach(u => { unitName[u.unit_code] = u.unit_name; });
       const unitScope = String(req.query.unit_code || '').trim();
-      const units = unitScope ? allUnits.filter(u => u.unit_code === unitScope) : allUnits;
+      // Same ceiling as the dashboard this list sits under.
+      const _scope = await callerScope(req);
+      const _allowed = _scope == null ? null : new Set(_scope);
+      const units = (unitScope ? allUnits.filter(u => u.unit_code === unitScope) : allUnits)
+        .filter(u => !_allowed || _allowed.has(u.unit_code));
       const codes = units.map(u => u.unit_code);
       if (!codes.length) return res.json({ growing: [], declining: [], growing_total: 0, declining_total: 0 });
       const IN = codes.map(() => '?').join(',');
