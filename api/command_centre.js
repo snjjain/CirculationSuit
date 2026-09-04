@@ -137,10 +137,6 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
     'RA2', // RAJGARH RP
   ]);
   const bucketOf = s => { const u = String(s || '').trim().toUpperCase(); return CORE.has(u) ? u : 'NATIONAL'; };
-  const bucketOfOs = s => {
-    const u = String(s || '').trim().toUpperCase();
-    return u === 'RPPL' ? 'RAJASTHAN' : u === 'MP' ? 'MADHYA PRADESH' : u === 'CG' ? 'CHHATTISGARH' : 'NATIONAL';
-  };
   const blank = () => Object.fromEntries(STATES.map(s => [s.key, 0]));
 
   /* agency_master's unit -> home-state tally and the VP-per-state rollup are the same
@@ -424,13 +420,20 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
     const _uf = uFilter('s.unit_code', unitScope);
     const uCl = _uf.cl, uP = _uf.p;
     const hCl = uFilter('h.loc_id', unitScope).cl;
+    /* Bucketed by the UNIT's home state, not the agency's own state_name.
+       An agency across a state border is still supplied by that unit and belongs to
+       that unit's state — management's words: the agency's state does not matter, it
+       receives its copies from that unit. Tagging by agency put 780 copies a day of
+       Rajasthan supply under Haryana, Punjab and MP, and split a branch's figures
+       across state cards that no one manages. Cash supply already bucketed this way;
+       agent did not, so the two halves of the same branch disagreed. */
     const agentSql =
-      `SELECT COALESCE(NULLIF(s.state_name,''),'OTHER') st, SUM(s.sup_copy) tot,
+      `SELECT s.unit_code unit, SUM(s.sup_copy) tot,
               COUNT(DISTINCT s.supply_date) days
        FROM supply_data s FORCE INDEX (idx_sd_cover_range)
        WHERE s.supply_date BETWEEN ? AND ?
          AND s.sup_type_code = 'S01' AND COALESCE(s.publ,'') NOT IN ('P14')${uCl}
-       GROUP BY st`;
+       GROUP BY s.unit_code`;
     const hawkSql =
       `SELECT h.loc_id unit, SUM(h.sup_copies) tot, COUNT(DISTINCT h.supply_date) days
        FROM hawker_supply h FORCE INDEX (idx_hs_cover_range)
@@ -444,39 +447,44 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
       q(hawkSql,  [prevWin.from, prevWin.to, ...uP]),
       // The credit-sale filter is applied per agency, so it cannot ride on the
       // state-level aggregate above; agent copies are corrected by its share below.
-      q(`SELECT COALESCE(NULLIF(s.state_name,''),'OTHER') st, SUM(s.sup_copy) credit_tot,
+      q(`SELECT s.unit_code unit, SUM(s.sup_copy) credit_tot,
                 (SELECT SUM(s2.sup_copy) FROM supply_data s2
-                  WHERE s2.supply_date = s.supply_date AND s2.state_name = s.state_name
-                    AND s2.sup_type_code='S01' AND COALESCE(s2.publ,'') NOT IN ('P14')${uFilter('s2.unit_code', unitScope).cl}) all_tot
+                  WHERE s2.supply_date = s.supply_date AND s2.unit_code = s.unit_code
+                    AND s2.sup_type_code='S01' AND COALESCE(s2.publ,'') NOT IN ('P14')) all_tot
          FROM supply_data s
          JOIN (SELECT DISTINCT unit, agcd FROM agency_master
                WHERE ag_class_name = 'CREDIT SALE') cm
            ON cm.unit = s.unit_code AND cm.agcd = s.agcd
          WHERE s.supply_date = ? AND s.sup_type_code = 'S01'
            AND COALESCE(s.publ,'') NOT IN ('P14')${uCl}
-         GROUP BY st, s.supply_date, s.state_name`,
-        [...uP, win.to, ...uP]),
+         GROUP BY s.unit_code, s.supply_date`,
+        // The correlated sub-select no longer carries a unit filter of its own, so the
+        // only parameters are the date and the outer scope. Leaving the old leading
+        // ...uP in place shifted every placeholder by one and a scoped caller read a
+        // larger figure than the unscoped admin.
+        [win.to, ...uP]),
       unitHomeState(),
     ]);
     // Share of each state's supply that is credit sale, measured on one day (cheap) and
     // applied across the window — the mix moves slowly, the volume is what changes.
+    // Credit share per UNIT now, matching how supply itself is keyed.
     const creditShare = {};
     credit.rows.forEach(r => {
       const all = N(r.all_tot);
-      if (all > 0) creditShare[r.st] = N(r.credit_tot) / all;
+      if (all > 0) creditShare[r.unit] = N(r.credit_tot) / all;
     });
     const avg = (tot, days) => (days > 0 ? Math.round(N(tot) / days) : 0);
-    const agent = { rows: agentC.rows.map(r => ({ st: r.st,
-      cur: Math.round(avg(r.tot, r.days) * (creditShare[r.st] ?? 1)), prv: 0 })) };
-    const agentPrevRows = agentP.rows.map(r => ({ st: r.st,
-      prv: Math.round(avg(r.tot, r.days) * (creditShare[r.st] ?? 1)) }));
+    const agent = { rows: agentC.rows.map(r => ({ unit: r.unit,
+      cur: Math.round(avg(r.tot, r.days) * (creditShare[r.unit] ?? 1)), prv: 0 })) };
+    const agentPrevRows = agentP.rows.map(r => ({ unit: r.unit,
+      prv: Math.round(avg(r.tot, r.days) * (creditShare[r.unit] ?? 1)) }));
     const cash = { rows: cashC.rows.map(r => ({ unit: r.unit, cur: avg(r.tot, r.days), prv: 0 })) };
     const cashPrevRows = cashP.rows.map(r => ({ unit: r.unit, prv: avg(r.tot, r.days) }));
     const home = uhs;
 
     const agentCur = blank(), agentPrev = blank(), cashCur = blank(), cashPrev = blank();
-    agent.rows.forEach(r => { agentCur[bucketOf(r.st)] += N(r.cur); });
-    agentPrevRows.forEach(r => { agentPrev[bucketOf(r.st)] += N(r.prv); });
+    agent.rows.forEach(r => { agentCur[bucketOf(home[r.unit]?.st)] += N(r.cur); });
+    agentPrevRows.forEach(r => { agentPrev[bucketOf(home[r.unit]?.st)] += N(r.prv); });
     cash.rows.forEach(r => { cashCur[bucketOf(home[r.unit]?.st)] += N(r.cur); });
     cashPrevRows.forEach(r => { cashPrev[bucketOf(home[r.unit]?.st)] += N(r.prv); });
     return { agentCur, agentPrev, cashCur, cashPrev };
@@ -550,14 +558,15 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
     const uCl = _uf.cl, uP = _uf.p;
 
     const [mtd, prevDay, ytd, lyYtd, billing] = await Promise.all([
-      q(`SELECT state_name st, -COALESCE(SUM(amount),0) amt, COUNT(*) txn, COUNT(DISTINCT ag_code) agencies
-         FROM agency_collection WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY state_name`, [mStart, mEnd, ...uP]),
-      q(`SELECT state_name st, -COALESCE(SUM(amount),0) amt FROM agency_collection
-         WHERE is_valid=1 AND coll_date = ?${uCl} GROUP BY state_name`, [prev, ...uP]),
-      q(`SELECT state_name st, -COALESCE(SUM(amount),0) amt FROM agency_collection
-         WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY state_name`, [yStart, asOn, ...uP]),
-      q(`SELECT state_name st, -COALESCE(SUM(amount),0) amt FROM agency_collection
-         WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY state_name`, [lyStart, lyAsOn, ...uP]),
+      // Keyed by unit, then bucketed by the unit's home state — same rule as supply.
+      q(`SELECT unit_code unit, -COALESCE(SUM(amount),0) amt, COUNT(*) txn, COUNT(DISTINCT ag_code) agencies
+         FROM agency_collection WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY unit_code`, [mStart, mEnd, ...uP]),
+      q(`SELECT unit_code unit, -COALESCE(SUM(amount),0) amt FROM agency_collection
+         WHERE is_valid=1 AND coll_date = ?${uCl} GROUP BY unit_code`, [prev, ...uP]),
+      q(`SELECT unit_code unit, -COALESCE(SUM(amount),0) amt FROM agency_collection
+         WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY unit_code`, [yStart, asOn, ...uP]),
+      q(`SELECT unit_code unit, -COALESCE(SUM(amount),0) amt FROM agency_collection
+         WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY unit_code`, [lyStart, lyAsOn, ...uP]),
       /* Every label the shifted months could need: the ERP monthly bill, the month's
          own cumulative snapshot, and the one before it to difference against. */
       (() => {
@@ -565,22 +574,25 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
         billMonths.forEach(m => { need.add('BILL-' + m.label); need.add(m.label); need.add(m.prev); });
         const labels = [...need];
         if (!labels.length) return { rows: [] };
-        return q(`SELECT period_label, group_unit_name st, SUM(bill_amt) amt FROM agency_outstanding
+        return q(`SELECT period_label, unit_code unit, SUM(bill_amt) amt FROM agency_outstanding
            WHERE period_label IN (${labels.map(() => '?').join(',')})${uFilter('unit_code', unitScope).cl}
-           GROUP BY period_label, group_unit_name`, [...labels, ...uP]);
+           GROUP BY period_label, unit_code`, [...labels, ...uP]);
       })(),
     ]);
     const mk = () => blank();
     const out = { mtd: mk(), prevDay: mk(), ytd: mk(), lyYtd: mk(), billing: mk(), txn: mk(), agencies: mk() };
-    mtd.rows.forEach(r => { const b = bucketOf(r.st); out.mtd[b] += N(r.amt); out.txn[b] += N(r.txn); out.agencies[b] += N(r.agencies); });
-    prevDay.rows.forEach(r => { out.prevDay[bucketOf(r.st)] += N(r.amt); });
-    ytd.rows.forEach(r => { out.ytd[bucketOf(r.st)] += N(r.amt); });
-    lyYtd.rows.forEach(r => { out.lyYtd[bucketOf(r.st)] += N(r.amt); });
+    // Declared before every use below; a unit's home state keys all of these.
+    const homeSt = await unitHomeState();
+    const stOf = u => bucketOf(homeSt[u]?.st);
+    mtd.rows.forEach(r => { const b = stOf(r.unit); out.mtd[b] += N(r.amt); out.txn[b] += N(r.txn); out.agencies[b] += N(r.agencies); });
+    prevDay.rows.forEach(r => { out.prevDay[stOf(r.unit)] += N(r.amt); });
+    ytd.rows.forEach(r => { out.ytd[stOf(r.unit)] += N(r.amt); });
+    lyYtd.rows.forEach(r => { out.lyYtd[stOf(r.unit)] += N(r.amt); });
     /* Fold the snapshots into per-label, per-state sums, then resolve each shifted
        month on its own and add up what resolved. */
     const byLabel = new Map();                       // label -> {stateKey: amount}
     billing.rows.forEach(r => {
-      const b = bucketOfOs(r.st);
+      const b = bucketOf(homeSt[r.unit]?.st);
       if (!byLabel.has(r.period_label)) byLabel.set(r.period_label, blank());
       byLabel.get(r.period_label)[b] += N(r.amt);
     });
@@ -618,18 +630,23 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
        WHERE period_label <> 'CURRENT' AND period_label NOT LIKE 'BILL-%' ORDER BY period_label DESC LIMIT 1`);
     const prevLabel = labels[0]?.period_label || null;
     const [cur, prv] = await Promise.all([
-      q(`SELECT group_unit_name st, SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) os,
+      q(`SELECT unit_code unit, SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) os,
                 SUM(CASE WHEN CAST(dp_code AS UNSIGNED)=1 AND cl_amt>=100000 THEN 1 ELSE 0 END) critical,
                 SUM(CASE WHEN CAST(dp_code AS UNSIGNED)=1 THEN 1 ELSE 0 END) agencies
-         FROM agency_outstanding WHERE period_label='CURRENT'${uCl} GROUP BY group_unit_name`, uP),
+         FROM agency_outstanding WHERE period_label='CURRENT'${uCl} GROUP BY unit_code`, uP),
       prevLabel
-        ? q(`SELECT group_unit_name st, SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) os
-             FROM agency_outstanding WHERE period_label=?${uCl} GROUP BY group_unit_name`, [prevLabel, ...uP])
+        ? q(`SELECT unit_code unit, SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) os
+             FROM agency_outstanding WHERE period_label=?${uCl} GROUP BY unit_code`, [prevLabel, ...uP])
         : Promise.resolve({ rows: [] }),
     ]);
     const out = { cur: blank(), prev: blank(), critical: blank(), agencies: blank(), prev_label: prevLabel };
-    cur.rows.forEach(r => { const b = bucketOfOs(r.st); out.cur[b] += N(r.os); out.critical[b] += N(r.critical); out.agencies[b] += N(r.agencies); });
-    prv.rows.forEach(r => { out.prev[bucketOfOs(r.st)] += N(r.os); });
+    /* Was bucketed on group_unit_name (the ERP's RPPL / MP / CG grouping); now on the
+       unit's home state like everything else, so outstanding lands on the same card as
+       the supply and collection it belongs to. */
+    const homeOs = await unitHomeState();
+    const osSt = u => bucketOf(homeOs[u]?.st);
+    cur.rows.forEach(r => { const b = osSt(r.unit); out.cur[b] += N(r.os); out.critical[b] += N(r.critical); out.agencies[b] += N(r.agencies); });
+    prv.rows.forEach(r => { out.prev[osSt(r.unit)] += N(r.os); });
     return out;
   }
 
