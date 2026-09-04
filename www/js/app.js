@@ -4409,24 +4409,36 @@ function _ccFlyPush(panel, url, key) {
       p.err = String(e && e.message || e); p.loading = false; if (_ccFlyLive()) render();
     });
 }
+/* The flyouts opened from a Command Centre table must cover the range that table is
+   showing. They sent no dates, so the API fell back to month-to-date: with the page on
+   Last Month, an executive panel opened over August reported 1-3 September instead.
+   Poonam Parivar Media Group read 7,158 — three days at 2,386 — where August's total was
+   71,580 and its daily average 2,386. */
+function _ccFlyRange() {
+  const st = S.screen === 'cc_state' ? _csState() : _ccState();
+  const d = st && st.data;
+  const from = d && d.range_from, to = d && d.range_to;
+  return (from && to) ? `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` : '';
+}
+
 window.ccFlyAgency = (unitCode, agcd, name) => {
   if (!_ccState().fly) return;
   if (!unitCode || !agcd) { toast('Cannot open profile — agency code or unit missing'); return; }
   _ccFlyPush({ kind: 'agency', unitCode, agcd, name: name || agcd, data: null, loading: true, err: null },
-    `${api.base}/api/agency-profile/${encodeURIComponent(unitCode)}/${encodeURIComponent(agcd)}`, 'agcd');
+    `${api.base}/api/agency-profile/${encodeURIComponent(unitCode)}/${encodeURIComponent(agcd)}${_ccFlyRange()}`, 'agcd');
 };
 window.ccFlyExec = (execCode, name, unitCode) => {
   if (!_ccState().fly) return;
   if (!execCode) { toast('Cannot open performance — executive code missing'); return; }
   _ccFlyPush({ kind: 'exec', execCode, name: name || execCode, unitCode: unitCode || '', data: null, loading: true, err: null },
-    `${api.base}/api/exec-perf/executive/${encodeURIComponent(execCode)}`, 'execCode');
+    `${api.base}/api/exec-perf/executive/${encodeURIComponent(execCode)}${_ccFlyRange()}`, 'execCode');
 };
 // Cash-sale counterpart to ccFlyAgency — every hawker name in the app routes here.
 window.ccFlyHawker = (unitCode, hawkerId, name) => {
   if (!_ccState().fly) return;
   if (!unitCode || !hawkerId) { toast('Cannot open hawker — code or branch missing'); return; }
   _ccFlyPush({ kind: 'hawker', unitCode, hawkerId, name: name || hawkerId, data: null, loading: true, err: null },
-    `${api.base}/api/hawker-profile/${encodeURIComponent(unitCode)}/${encodeURIComponent(hawkerId)}`, 'hawkerId');
+    `${api.base}/api/hawker-profile/${encodeURIComponent(unitCode)}/${encodeURIComponent(hawkerId)}${_ccFlyRange()}`, 'hawkerId');
 };
 /* Opened from a table with no alert behind it — start a fresh stack so the last
    Back closes, the same way ccOpenAgencyPanel works. */
@@ -4552,12 +4564,24 @@ function _ccFlyExecDrillBody(x, e, ags) {
     return wrap(`${unseen.length} active agencies NOT visited`, tbl(th('Agency') + th('Supply', 1) + th('Outstanding', 1),
       unseen.slice(0, 60).map(a => `${agRow(a)}
         <td style="padding:5px 8px"><b style="color:#1e3a8a">${esc_(a.ag_name || a.ag_code)}</b>
-          <div style="color:#94a3b8;font-size:10px">${esc_(a.city_name || a.unit_name || '')}</div></td>
+          <div style="color:#94a3b8;font-size:10px">${esc_(_apPlace(a))}</div></td>
         <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">${_apFmtN(a.total_supply)}</td>
         <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums;color:${(a.total_outstanding||0)>0?'#b91c1c':'#0f172a'}">${_apFmtC(a.total_outstanding)}</td></tr>`).join('')));
   }
 
-  // Money and book cards all list agencies, ranked by whichever number was clicked.
+/* Where an agency actually is. Branch, district and city each answer a different
+     question — which unit owns it, which district it sits in, which town it delivers to —
+     and the list showed only whichever of city/branch happened to be filled. Duplicates
+     are dropped because a city and district often carry the same name. */
+  function _apPlace(a) {
+    const seen = new Set();
+    const parts = [a.unit_name, a.dist_name, a.city_name]
+      .map(x => String(x || '').trim())
+      .filter(x => x && !seen.has(x.toUpperCase()) && seen.add(x.toUpperCase()));
+    return parts.join(' · ');
+  }
+  
+    // Money and book cards all list agencies, ranked by whichever number was clicked.
   const spec = {
     agencies:    ['All agencies',        a => a.total_supply,      _apFmtN, 'Supply'],
     supply:      ['Agencies by supply',  a => a.total_supply,      _apFmtN, 'Supply'],
@@ -4572,7 +4596,7 @@ function _ccFlyExecDrillBody(x, e, ags) {
   return wrap(`${title} · ${list.length}`, tbl(th('Agency') + th(colLabel, 1) + th('Coll %', 1) + th('Outstanding', 1),
     list.slice(0, 60).map(a => `${agRow(a)}
       <td style="padding:5px 8px"><b style="color:#1e3a8a">${esc_(a.ag_name || a.ag_code)}</b>
-        <div style="color:#94a3b8;font-size:10px">${esc_(a.city_name || a.unit_name || '')}${a.status && a.status !== 'Active' ? ' · ' + esc_(a.status) : ''}</div></td>
+        <div style="color:#94a3b8;font-size:10px">${esc_(_apPlace(a))}${a.status && a.status !== 'Active' ? ' · ' + esc_(a.status) : ''}</div></td>
       <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">${fmt ? fmt(sortBy(a)) : (a.collection_pct == null ? '—' : a.collection_pct + '%')}</td>
       <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">${a.collection_pct == null ? '—' : a.collection_pct + '%'}</td>
       <td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums;color:${(a.total_outstanding||0)>0?'#b91c1c':'#0f172a'}">${_apFmtC(a.total_outstanding)}</td></tr>`).join('')));
@@ -6521,11 +6545,6 @@ function _csInsights(st, d) {
       style="padding:5px 12px;border:1px solid ${st.insightTab===k?'#1e3a8a':'#e2e8f0'};border-radius:20px;background:${st.insightTab===k?'#1e3a8a':'#f8fafc'};color:${st.insightTab===k?'#fff':'#475569'};font-size:11.5px;font-weight:${st.insightTab===k?700:500};cursor:pointer;white-space:nowrap">${l}${k==='risk'&&atRisk.length?` <span style="background:#ef4444;color:#fff;border-radius:9px;padding:0 5px;font-size:10px">${atRisk.length}</span>`:k==='all'?` <span style="background:#64748b;color:#fff;border-radius:9px;padding:0 5px;font-size:10px">${rows.length}</span>`:''}</button>`).join('')}
   </div>`;
 
-  const scoreBar = (val, max) => {
-    const pct = max ? Math.min(100, (val / max) * 100) : 0;
-    return `<div style="height:4px;background:#eef2f7;border-radius:3px;width:80px;display:inline-block;vertical-align:middle;margin-left:6px"><div style="height:4px;width:${pct}%;background:#3b82f6;border-radius:3px"></div></div>`;
-  };
-
   let list = [], emptyMsg = '';
   const gLabel = d.group_label;
 
@@ -6551,35 +6570,58 @@ function _csInsights(st, d) {
     ? (r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}')` : '')
     : `ccOpenBranch('${_csQ(d.state)}','${_csQ(r.key)}')`;
 
+  /* A table, because every figure here answers a different question and the row was
+     showing them unlabelled: 24,378 then "Coll 52.8%" then "-5.5%" then "OS ₹1.76 Cr"
+     with nothing to say which was supply, which was recovery and which was growth.
+     Columns carry the question; the cells only answer it. */
+  const supHead = st.seg === 'agent' ? 'Agent sale' : st.seg === 'cash' ? 'Cash sale' : 'Supply';
+  const th = (t, extra) => `<th style="text-align:${extra || 'left'};padding:6px 8px;font-size:10px;font-weight:700;
+    letter-spacing:.04em;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0;white-space:nowrap">${t}</th>`;
+
   const items = !list.length ? `<div style="font-size:12.5px;color:#94a3b8;padding:8px 0">${emptyMsg}</div>` :
+    `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        ${th('#')}
+        ${th(esc(gLabel || 'Name'))}
+        ${th(supHead + ' (cp/day)', 'right')}
+        ${th('Growth', 'right')}
+        ${th('Collection', 'right')}
+        ${th('Outstanding', 'right')}
+        ${th('Status')}
+      </tr></thead>
+      <tbody>` +
     list.map((r, i) => {
-      const g = st.insightTab !== 'top' && st.insightTab !== 'bottom' ? r.supply.growth_pct : null;
+      const g = r.supply.growth_pct;
       const supVal = st.seg === 'agent' ? r.supply.agent : st.seg === 'cash' ? r.supply.cash : r.supply.current;
-      const badge = (st.insightTab === 'top' || st.insightTab === 'all') ? `<span style="font-size:10px;font-weight:800;color:#94a3b8;min-width:16px;display:inline-block">${i + 1}</span>` : '';
-      const collBadge = r.collection.pct != null ? `<span style="font-size:11px;font-weight:700;color:${r.collection.pct<60?'#b91c1c':r.collection.pct<80?'#b45309':'#15803d'};margin-left:8px">Coll ${r.collection.pct}%</span>` : '';
-      const growBadge = g != null ? `<span style="font-size:11px;font-weight:700;color:${g<0?'#b91c1c':'#15803d'};margin-left:8px">${g>0?'+':''}${g}%</span>` : '';
-      const osBadge = r.outstanding.amount > 1000000 ? `<span style="font-size:10px;color:#b91c1c;margin-left:6px">OS ${_ccINR(r.outstanding.amount)}</span>` : '';
+      const pct = maxSupply ? Math.min(100, (supVal / maxSupply) * 100) : 0;
+      const cp = r.collection.pct;
       const _isCi = r.is_ci || (!r.supply.agent && r.supply.cash > 0);
       const subInfo = _isCi
         ? (r.hawker_cent_name
-            ? `<span style="font-size:10px;color:#0ea5e9">${esc(r.hawker_cent_name)}${(r.hawker_centres || r.hawker_count) ? ` · ${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk` : ''}</span>`
+            ? `${esc(r.hawker_cent_name)}${(r.hawker_centres || r.hawker_count) ? ` · ${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk` : ''}`
             : (r.hawker_centres || r.hawker_count
-                ? `<span style="font-size:10px;color:#0ea5e9">${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk</span>`
-                : `<span style="font-size:10px;color:#0ea5e9">Centre Incharge</span>`))
-        : (r.unit_name ? `<span style="font-size:10px;color:#94a3b8">${esc(r.unit_name)}</span>` : '');
+                ? `${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk`
+                : 'Centre Incharge'))
+        : (r.unit_name ? esc(r.unit_name) : '');
       const stClass = _csStatusClass(r, st.seg);
       const stReason = _csStatusReason(r, st.seg);
-      const stBadge = `<div title="${esc(stReason)}" style="text-align:center">${_csStatusBadge[stClass]}<div style="font-size:9.5px;color:#94a3b8;margin-top:2px;max-width:80px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(stReason)}</div></div>`;
-      return `<div onclick="${rowClick(r)}" style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:9px;background:#f8fafc;margin-bottom:5px;cursor:pointer" onmouseenter="this.style.background='#eff6ff'" onmouseleave="this.style.background='#f8fafc'">
-        ${badge}
-        <div style="flex:1;overflow:hidden">
+      const num = 'font-size:12.5px;font-variant-numeric:tabular-nums;text-align:right;padding:7px 8px;white-space:nowrap';
+      return `<tr onclick="${rowClick(r)}" style="cursor:pointer;border-bottom:1px solid #f1f5f9"
+        onmouseenter="this.style.background='#eff6ff'" onmouseleave="this.style.background=''">
+        <td style="padding:7px 8px;font-size:11px;color:#94a3b8;text-align:right;width:26px">${i + 1}</td>
+        <td style="padding:7px 8px;max-width:230px">
           <div style="font-size:12.5px;font-weight:700;color:#1e3a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</div>
-          ${subInfo}
-        </div>
-        <div style="font-size:12.5px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums">${_ccN(supVal)}</div>
-        ${scoreBar(supVal, maxSupply)}${collBadge}${growBadge}${osBadge}${stBadge}
-      </div>`;
-    }).join('');
+          ${subInfo ? `<div style="font-size:10px;color:${_isCi ? '#0ea5e9' : '#94a3b8'}">${subInfo}</div>` : ''}
+        </td>
+        <td style="${num};font-weight:700;color:#0f172a">${_ccN(supVal)}
+          <div style="height:3px;background:#eef2f7;border-radius:3px;margin-top:3px"><div style="height:3px;width:${pct}%;background:#3b82f6;border-radius:3px"></div></div></td>
+        <td style="${num};font-weight:700;color:${g == null ? '#cbd5e1' : g < 0 ? '#b91c1c' : '#15803d'}">${g == null ? '—' : (g > 0 ? '+' : '') + g + '%'}</td>
+        <td style="${num};font-weight:700;color:${cp == null ? '#cbd5e1' : cp < 60 ? '#b91c1c' : cp < 80 ? '#b45309' : '#15803d'}">${cp == null ? '—' : cp + '%'}</td>
+        <td style="${num};color:${r.outstanding.amount > 1000000 ? '#b91c1c' : '#475569'}">${r.outstanding.amount ? _ccINR(r.outstanding.amount) : '—'}</td>
+        <td style="padding:7px 8px;white-space:nowrap">${_csStatusBadge[stClass]}
+          ${stReason ? `<div style="font-size:9.5px;color:#94a3b8;margin-top:2px;max-width:150px;overflow:hidden;text-overflow:ellipsis">${esc(stReason)}</div>` : ''}</td>
+      </tr>`;
+    }).join('') + `</tbody></table></div>`;
 
   const aiBlock = st.insightTab === 'all' ? _csAIInsights(rows, st.seg) : '';
 
