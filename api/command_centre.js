@@ -930,6 +930,24 @@ module.exports = function installCommandCentre({ app, q }) {
       const rangeBillMonths = _billMonthsFor(win);
       const billLabelSet = new Set();
       rangeBillMonths.forEach(m => { billLabelSet.add('BILL-' + m.label); billLabelSet.add(m.label); billLabelSet.add(m.prev); });
+      /* Receipts telescope from the range's OWN months, not the shifted ones. Money
+         banked during August shows up as the movement between the July and August
+         cumulative snapshots — the same pair whose bill movement is the bill raised on
+         1 August. Both halves of the ratio then come from one ledger. */
+      const pad2 = n => String(n).padStart(2, '0');
+      const rangeOwnMonths = (() => {
+        const f = new Date(win.from + 'T00:00:00'), t = new Date(win.to + 'T00:00:00');
+        const out = []; let cur = new Date(f.getFullYear(), f.getMonth(), 1);
+        const end = new Date(t.getFullYear(), t.getMonth(), 1);
+        while (cur <= end && out.length < 36) {
+          const p = new Date(cur.getFullYear(), cur.getMonth() - 1, 1);
+          out.push({ label: `${cur.getFullYear()}-${pad2(cur.getMonth() + 1)}`,
+                     prev:  `${p.getFullYear()}-${pad2(p.getMonth() + 1)}` });
+          cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+        }
+        return out;
+      })();
+      rangeOwnMonths.forEach(m => { billLabelSet.add(m.label); billLabelSet.add(m.prev); });
       const rangeBillLabels = [...billLabelSet];
 
       const [agentSup, cashSup, coll, os, billing, master, hier, visits, execActive, execBilling, monthSup, collPrevYr] = await Promise.all([
@@ -1064,7 +1082,8 @@ module.exports = function installCommandCentre({ app, q }) {
            FROM agency_outstanding
            WHERE period_label='CURRENT' AND unit_code IN (${IN})
            GROUP BY unit_code, ag_code`, codes),
-        q(`SELECT period_label, unit_code, SUM(bill_amt) amt FROM agency_outstanding
+        q(`SELECT period_label, unit_code, SUM(bill_amt) amt,
+                  SUM(rec_amt) rec, SUM(other_cr) ocr FROM agency_outstanding
            WHERE period_label IN (${[prevMonthLabel, prevPrevLabel, ...rangeBillLabels].map(() => '?').join(',')})
              AND unit_code IN (${IN})
            GROUP BY period_label, unit_code`,
@@ -1100,8 +1119,15 @@ module.exports = function installCommandCentre({ app, q }) {
         // Exec-level billing: agency-level snapshots matched to executives via execOf in JS.
         // Avoid SQL join to agency_master — older snapshots may differ in dp_code/agcd format,
         // causing the June row to vanish (makes the diff return the full cumulative instead of delta).
+        /* Receipts come from the same two snapshots as the bill, not from
+           agency_collection. The ERP's "net receipt" is rec_amt + other_cr — money
+           banked plus credit notes and adjustments — and agency_collection holds only
+           the cash transactions. For SHAKIR KHAN in August that was 13.56 L against the
+           ERP's 18.78 L, so his recovery showed as 53% where the ERP says 73%. Taking
+           both halves of the ratio from one ledger also means they cannot drift apart. */
         q(`SELECT ao.period_label, ao.unit_code, ao.ag_code,
-                  MAX(ao.exec_code) exec_code, SUM(ao.bill_amt) amt
+                  MAX(ao.exec_code) exec_code, SUM(ao.bill_amt) amt,
+                  SUM(ao.rec_amt) rec, SUM(ao.other_cr) ocr
            FROM agency_outstanding ao
            WHERE ao.period_label IN (?, ?) AND ao.unit_code IN (${IN})
            GROUP BY ao.period_label, ao.unit_code, ao.ag_code`,
@@ -1233,20 +1259,40 @@ module.exports = function installCommandCentre({ app, q }) {
         else billMonthsMissing.push(m.label);
       });
       const rangeBilledKnown = billMonthsUsed.length > 0;
+
+      /* Net receipt for the range, from the same ledger as the bill: rec_amt + other_cr,
+         telescoped across the range's own months. This is the ERP's recovery figure;
+         agency_collection holds only banked cash and runs materially lower. */
+      const recTot = lbl => billing.rows.filter(r => r.period_label === lbl)
+        .reduce((a, r) => a + N(r.rec) + N(r.ocr), 0);
+      let rangeNetReceipt = 0, netReceiptKnown = false;
+      rangeOwnMonths.forEach(m => {
+        if (haveLabel(m.label) && haveLabel(m.prev)) {
+          rangeNetReceipt += Math.max(0, recTot(m.label) - recTot(m.prev));
+          netReceiptKnown = true;
+        }
+      });
       // Exec-level billing: use exec_code from agency_outstanding (covers closed/suspended agencies).
       // Falls back to execOf for agencies where exec_code is missing in the snapshot.
-      const exBillThis = {}, exBillPrev = {};
+      const exBillThis = {}, exBillPrev = {}, exRecThis = {}, exRecPrev = {};
       (execBilling.rows || []).forEach(r => {
         const k = `${r.unit_code}|${r.ag_code}`;
         const execCode = r.exec_code || (execOf[k] && execOf[k].code);
         if (!execCode) return;
-        const t = r.period_label === prevMonthLabel ? exBillThis : exBillPrev;
-        t[execCode] = (t[execCode] || 0) + N(r.amt);
+        const isThis = r.period_label === prevMonthLabel;
+        const tb = isThis ? exBillThis : exBillPrev;
+        const tr = isThis ? exRecThis  : exRecPrev;
+        tb[execCode] = (tb[execCode] || 0) + N(r.amt);
+        tr[execCode] = (tr[execCode] || 0) + N(r.rec) + N(r.ocr);
       });
       Object.keys(E).forEach(code => {
         E[code].billed = havePrev
           ? Math.max(0, (exBillThis[code] || 0) - (exBillPrev[code] || 0))
           : (exBillThis[code] || 0);
+        // Movement between the same two snapshots the bill came from.
+        E[code].net_receipt = havePrev
+          ? Math.max(0, (exRecThis[code] || 0) - (exRecPrev[code] || 0))
+          : null;
       });
       /* DCR and circulation identify the same person differently: dcr_agency_visit stores
          the Oracle HR employee code (R09838, FF06002, VN02303…) while E is keyed by the
@@ -1285,6 +1331,7 @@ module.exports = function installCommandCentre({ app, q }) {
           supply: { current: supCur, previous: supPrev, diff: supCur - supPrev,
                     growth_pct: r1(pct(supCur, supPrev)), agent: a.agent_cur, cash: a.cash_cur },
           collection: { collected: a.collection, billed: a.billed, gap: Math.max(0, a.billed - a.collection),
+                        collection_cash: a.collection_cash != null ? a.collection_cash : a.collection,
                         pct: a.billed ? r1((a.collection / a.billed) * 100) : null,
                         txn: a.txn, agencies_paid: a.agencies_paid },
           outstanding: { amount: a.os, agencies: a.os_agencies, critical: a.critical,
@@ -1323,7 +1370,13 @@ module.exports = function installCommandCentre({ app, q }) {
               exec_code: e.exec_code,
               supply_cur: e.supply_cur, supply_prev: e.supply_prev,
               agent_cur: e.supply_cur - e.cash_cur, cash_cur: e.cash_cur,
-              collection: e.collection, billed: e.billed > 0 ? e.billed : (e.collection + e.os),
+              /* Ledger net receipt against the ledger's own bill — the ERP's recovery
+                 figure. agency_collection holds only banked cash and understated it:
+                 SHAKIR KHAN read 13.5 L against the ERP's 18.8 L, so 53% where the ERP
+                 says 73%. Falls back to the cash figure when no snapshot pair exists. */
+              collection: e.net_receipt != null ? e.net_receipt : e.collection,
+              collection_cash: e.collection,
+              billed: e.billed > 0 ? e.billed : (e.collection + e.os),
               txn: e.txn, agencies_paid: e.agencies_paid,
               os: e.os, os_agencies: e.os_agencies, critical: e.critical,
               visits: e.visits, agencies_visited: e.agencies_visited, book: e.agencies, execs: 1,
@@ -1359,8 +1412,15 @@ module.exports = function installCommandCentre({ app, q }) {
           agencies: e.agencies, supply: e.supply_cur, supply_prev: e.supply_prev,
           agent_supply: e.supply_cur - e.cash_cur, cash_supply: e.cash_cur,
           growth_pct: r1(pct(e.supply_cur, e.supply_prev)),
-          collection: e.collection, outstanding: e.os,
-          collection_pct: e.billed > 0 ? r1((e.collection / e.billed) * 100) : null,
+          /* Recovery is the ledger's net receipt over the ledger's own bill, which is
+             what the ERP reports. e.collection stays as the banked cash from
+             agency_collection — a real figure, just a narrower one — and is kept
+             alongside so the two are never confused for each other. */
+          collection: e.net_receipt != null ? e.net_receipt : e.collection,
+          collection_cash: e.collection, billed: e.billed, outstanding: e.os,
+          collection_pct: e.billed > 0
+            ? r1(((e.net_receipt != null ? e.net_receipt : e.collection) / e.billed) * 100)
+            : null,
           visits: e.visits, agencies_visited: e.agencies_visited,
           coverage_pct: e.agencies ? r1((e.agencies_visited / e.agencies) * 100) : null,
         };
@@ -1523,11 +1583,13 @@ module.exports = function installCommandCentre({ app, q }) {
                Falling back to `billed` (last month's, anchored on as-on) silently
                measured the range's collection against a different period's billing. */
             const denom = rangeBilledKnown ? rangeBilledAmt : null;
-            return { collected, billed,
+            // Ledger recovery where the snapshots allow it; banked cash otherwise.
+            const recovered = netReceiptKnown ? rangeNetReceipt : collected;
+            return { collected: recovered, collection_cash: collected, billed,
                         range_billed: denom,
                         bill_months: billMonthsUsed, bill_missing: billMonthsMissing,
-                        pct: denom ? r1((collected / denom) * 100) : null,
-                        gap: denom ? Math.max(0, denom - collected) : null, txn: bsum(b => b.txn),
+                        pct: denom ? r1((recovered / denom) * 100) : null,
+                        gap: denom ? Math.max(0, denom - recovered) : null, txn: bsum(b => b.txn),
                         agencies_paid: bsum(b => b.agencies_paid),
                         prev_yr: collected_prev_yr,
                         growth_pct: collected_prev_yr ? r1((collected / collected_prev_yr - 1) * 100) : null }; })(),
