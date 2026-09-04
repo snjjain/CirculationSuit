@@ -2034,8 +2034,10 @@ module.exports = function installCommandCentre({ app, q }) {
            GROUP BY s.unit_code, s.agcd`,
           [mFrom, mTo, mFrom, mTo, mPrevFrom, mPrevTo, mPrevFrom, mPrevTo, mPrevFrom, mTo, ...codes]),
         q(`SELECT unit, agcd, MAX(ag_name) ag_name, MAX(executive_name) exec_name,
-                  MAX(executive_code) exec_code, MAX(dist_name) dist_name
-           FROM agency_master WHERE unit IN (${IN}) GROUP BY unit, agcd`, codes),
+                  MAX(executive_code) exec_code, MAX(dist_name) dist_name,
+                  MAX(ag_class_name) ag_class
+           FROM agency_master WHERE CAST(dpcd AS UNSIGNED)=1 AND unit IN (${IN})
+           GROUP BY unit, agcd`, codes),
         q(`SELECT unit_code, ag_code, SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) os
            FROM agency_outstanding WHERE period_label='CURRENT' AND unit_code IN (${IN})
            GROUP BY unit_code, ag_code`, codes),
@@ -2043,6 +2045,7 @@ module.exports = function installCommandCentre({ app, q }) {
       const M = {}; master.rows.forEach(r => { M[`${r.unit}|${r.agcd}`] = r; });
       const O = {}; os.rows.forEach(r => { O[`${r.unit_code}|${r.ag_code}`] = N(r.os); });
 
+      const movSeg = ['agent', 'cash', 'all'].includes(req.query.seg) ? req.query.seg : 'all';
       const movers = mov.rows.map(r => {
         const k = `${r.unit_code}|${r.agcd}`, m = M[k] || {};
         const cur = N(r.cur_days) ? Math.round(N(r.cur_sum) / N(r.cur_days)) : 0;
@@ -2051,13 +2054,20 @@ module.exports = function installCommandCentre({ app, q }) {
           unit_code: r.unit_code, unit_name: unitName[r.unit_code] || r.unit_code, agcd: r.agcd,
           ag_name: m.ag_name || r.agcd, dist_name: m.dist_name || null,
           exec: m.exec_name || null, exec_code: m.exec_code || null,
+          ag_class: m.ag_class || null,
           current: cur, previous: prv, diff: cur - prv, growth_pct: r1(pct(cur, prv)),
           outstanding: O[k] || 0,
         };
-      }).filter(m => m.diff !== 0);
+      }).filter(m => m.diff !== 0)
+        /* Respect the Agent / Cash toggle, as every other panel on this page does. The
+           list mixed both, so RLY STATION CENTER and VATIKA CENTER — DIRECT SALE I,
+           city sale — appeared while the page was filtered to Agent Sale (Credit). */
+        .filter(m => movSeg === 'all' ? true
+                   : movSeg === 'cash'  ? m.ag_class === 'DIRECT SALE I'
+                   : m.ag_class === 'CREDIT SALE');
 
       res.json({
-        state: stateKey, unit_code: unitScope || null,
+        state: stateKey, unit_code: unitScope || null, seg: movSeg,
         window: { from: mFrom, to: mTo, prev_from: mPrevFrom, prev_to: mPrevTo, days: mLen, capped: mLen < rawLen },
         growing: movers.filter(m => m.diff > 0).sort((a, b) => b.diff - a.diff).slice(0, 300),
         declining: movers.filter(m => m.diff < 0).sort((a, b) => a.diff - b.diff).slice(0, 300),

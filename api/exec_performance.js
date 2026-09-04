@@ -393,7 +393,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const empCodes = await dcrEmpCodes(execCode);
       const empIn    = empCodes.map(() => '?').join(',');
 
-      const [execInfo, supR, colR, ouR, agencies, hierR, dcrVisitsR, dcrSummR, dcrLogR] = await Promise.all([
+      const [execInfo, supR, colR, ouR, agRecovery, agencies, hierR, dcrVisitsR, dcrSummR, dcrLogR] = await Promise.all([
         q(`SELECT executive_code, MAX(executive_name) exec_name, MAX(unit_state_nm) state_name,
                   GROUP_CONCAT(DISTINCT unit_name ORDER BY unit_name SEPARATOR ' / ') units,
                   GROUP_CONCAT(DISTINCT unit ORDER BY unit) unit_codes,
@@ -418,6 +418,12 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
         q(`SELECT SUM(ao.cl_amt) total FROM agency_outstanding ao
            WHERE ao.exec_code = ? AND ao.period_label = 'CURRENT'`, [execCode]),
 
+        /* Per-agency recovery on the same basis as every other collection figure.
+           The SQL below still computes collected / (collected + outstanding), which
+           answers "what share of all dues is cleared" — a different question, and the
+           one that made this column disagree with the row the panel was opened from. */
+        collBasis({ from, to, groupBy: 'agency' }),
+
         // Agency list: one row per AGCD (GROUP BY unit+agcd) — DPCDs are aggregated, not expanded
         q(`SELECT am.agcd ag_code, am.unit unit_code,
                   MAX(am.unit_name) unit_name, MAX(am.ag_name) ag_name,
@@ -426,6 +432,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
                   MAX(am.supply_stop_flag) supply_stop_flag, MAX(am.suspend_date) suspend_date,
                   MAX(am.mobile_no1) mobile_no1,
                   MAX(COALESCE(s.total_supply, 0)) total_supply,
+                  MAX(COALESCE(s.supply_days, 0)) supply_days,
                   MAX(COALESCE(c.total_collection, 0)) total_collection,
                   MAX(COALESCE(o.total_outstanding, 0)) total_outstanding,
                   CASE WHEN (MAX(COALESCE(c.total_collection, 0)) + MAX(COALESCE(o.total_outstanding, 0))) > 0
@@ -486,9 +493,19 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       ]);
 
       const ei         = execInfo.rows[0] || {};
-      const totalColl  = N(colR.rows[0]?.total);
+      const totalCash  = N(colR.rows[0]?.total);
       const totalOu    = N(ouR.rows[0]?.total);
-      const collPct    = (totalColl + totalOu) > 0 ? R1(totalColl / (totalColl + totalOu) * 100) : 0;
+      /* Recovery on the shared basis, summed from this executive's own agencies so the
+         header cannot disagree with the rows beneath it. The header was still using
+         collected / (collected + outstanding) and read 7.2% while its own agency list
+         summed to the ERP's 73.4%. */
+      const agRecTot   = [...agRecovery.by.entries()]
+        .filter(([k]) => (agencies.rows || []).some(a => `${a.unit_code}|${a.ag_code}` === k))
+        .reduce((acc, [, e]) => ({ billed: acc.billed + e.billed, net: acc.net + e.net_receipt }),
+                { billed: 0, net: 0 });
+      const totalColl  = agRecTot.billed > 0 ? agRecTot.net : totalCash;
+      const totalBill  = agRecTot.billed || null;
+      const collPct    = agRecTot.billed > 0 ? R1((agRecTot.net / agRecTot.billed) * 100) : null;
       const hier       = hierR.rows[0] || {};
 
       // Build per-agency visit map from DCR data
@@ -533,6 +550,8 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
           total_supply:         N(supR.rows[0]?.total),
           daily_supply:         N(supR.rows[0]?.supply_days) > 0 ? Math.round(N(supR.rows[0]?.total) / N(supR.rows[0]?.supply_days)) : N(supR.rows[0]?.total),
           total_collection:     totalColl,
+          collection_cash:      totalCash,
+          total_billed:         totalBill,
           total_outstanding:    totalOu,
           collection_pct:       collPct,
           total_visits:         N(dcrSumm.total_visits),
@@ -569,7 +588,14 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
           avg_supply:        N(r.supply_days) > 0 ? Math.round(N(r.total_supply) / N(r.supply_days)) : 0,
           total_collection:  N(r.total_collection),
           total_outstanding: N(r.total_outstanding),
-          collection_pct:    R1(r.collection_pct),
+          /* Ledger recovery where the snapshots allow it; the SQL's dues-cleared ratio
+             only as a fallback, so this column agrees with the executive row above it. */
+          collection_pct:    (() => {
+            const e = agRecovery.by.get(`${r.unit_code}|${r.ag_code}`);
+            return e && e.billed > 0 ? pctOf(e) : R1(r.collection_pct);
+          })(),
+          billed:            (agRecovery.by.get(`${r.unit_code}|${r.ag_code}`) || {}).billed || null,
+          net_receipt:       (agRecovery.by.get(`${r.unit_code}|${r.ag_code}`) || {}).net_receipt || null,
           visit_count:      (visitMap.get(`${r.unit_code}|${r.ag_code}`) || {}).visit_count || 0,
           last_visit:       (visitMap.get(`${r.unit_code}|${r.ag_code}`) || {}).last_visit  || null,
           status: r.suspend_date ? 'Suspended' : (r.supply_stop_flag === 'Y' ? 'Stopped' : 'Active'),

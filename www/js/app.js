@@ -6171,7 +6171,9 @@ window.csExecAll      = () => { const st = _csState(); st.execAll = !st.execAll;
 window.csSpPage       = p => { const st = _csState(); st.spPage = Math.max(1, p); st.sp = null; st._spLoading = false; render(); };
 window.csSpStatus     = v => { const st = _csState(); st.spStatus = v; st.spPage = 1; st.sp = null; st._spLoading = false; render(); };
 window.csBackToState  = () => { const st = _csState(); _csReset(st); st.unit = ''; render(); };
-window.csSetSeg       = v => { _csState().seg = v; render(); };
+/* Switching segment must refetch the movers, not just repaint. They are filtered
+   server-side now, so the cached list belongs to the previous segment. */
+window.csSetSeg       = v => { const st = _csState(); st.seg = v; st.movers = null; st._movLoading = false; render(); };
 window.csSetSort      = col => { const st = _csState(); st.sort = st.sort && st.sort.col === col ? { col, dir: st.sort.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'desc' }; render(); };
 window.csToggleActive = () => { const st = _csState(); st.activeOnly = !st.activeOnly; render(); };
 window.csSearch       = v => { _csState().search = v; render(); };
@@ -6262,6 +6264,8 @@ window.ccOpenExecPanel = (execCode, name, unitCode) => {
 
 function _csParams(st) {
   const p = new URLSearchParams({ state: st.state, range: st.range, compare: 'prev_year' });
+  // The Agent / Cash toggle applies to the movers list too, not just the cards.
+  if (st.seg) p.set('seg', st.seg);
   if (st.unit) p.set('unit_code', st.unit);
   if (st.range === 'custom' && st.rangeFrom && st.rangeTo) {
     p.set('range_from', st.rangeFrom);
@@ -6317,10 +6321,18 @@ function _csLoad() {
 function _csLoadMovers() {
   const st = _csState();
   if (st._movLoading || st.movers) return;
+  const movStamp = _csParams(st).toString();
+  st._movStamp = movStamp;
   st._movLoading = true;
-  dashJson(`${api.base}/api/command/state-movers?${_csParams(st)}`)
-    .then(d => { st.movers = d; st._movLoading = false; if (S.screen === 'cc_state') render(); })
-    .catch(e => { st.movers = { _err: String(e && e.message || e) }; st._movLoading = false; if (S.screen === 'cc_state') render(); });
+  dashJson(`${api.base}/api/command/state-movers?${movStamp}`)
+    .then(d => {
+      if (st._movStamp !== movStamp) return;      // segment or range moved on
+      st.movers = d; st._movLoading = false; if (S.screen === 'cc_state') render();
+    })
+    .catch(e => {
+      if (st._movStamp !== movStamp) return;
+      st.movers = { _err: String(e && e.message || e) }; st._movLoading = false; if (S.screen === 'cc_state') render();
+    });
 }
 function _csLoadShortPay() {
   const st = _csState();
