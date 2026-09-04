@@ -1233,14 +1233,25 @@ module.exports = function installCommandCentre({ app, q }) {
         const e = exec(r.exec_code || (execOf[k] && execOf[k].code), r.exec_name || (execOf[k] && execOf[k].name), r.unit_code);
         if (e) { e.os += N(r.os); e.os_agencies += N(r.is_main); e.critical += N(r.critical); }
       });
-      const cumThis = {}, cumPrev = {};
+      /* Match the two labels exactly. This used to treat "not the current month" as the
+         previous one, which was harmless while the query fetched exactly two labels. It
+         now fetches several — the BILL- labels and the range's own months — and every
+         one of them landed in cumPrev, so the subtraction went negative, clamped to
+         zero, and every branch showed a blank collection percentage. */
+      const cumThis = {}, cumPrev = {}, recThis = {}, recPrev = {};
       billing.rows.forEach(r => {
-        (r.period_label === prevMonthLabel ? cumThis : cumPrev)[r.unit_code] =
-          ((r.period_label === prevMonthLabel ? cumThis : cumPrev)[r.unit_code] || 0) + N(r.amt);
+        const bucket = r.period_label === prevMonthLabel ? [cumThis, recThis]
+                     : r.period_label === prevPrevLabel  ? [cumPrev, recPrev] : null;
+        if (!bucket) return;
+        const [cb, rb] = bucket;
+        cb[r.unit_code] = (cb[r.unit_code] || 0) + N(r.amt);
+        rb[r.unit_code] = (rb[r.unit_code] || 0) + N(r.rec) + N(r.ocr);
       });
       const havePrev = billing.rows.some(r => r.period_label === prevPrevLabel);
       codes.forEach(c => {
         B[c].billed = havePrev ? Math.max(0, (cumThis[c] || 0) - (cumPrev[c] || 0)) : (cumThis[c] || 0);
+        // Ledger recovery for the branch, from the same snapshot pair as its bill.
+        B[c].net_receipt = havePrev ? Math.max(0, (recThis[c] || 0) - (recPrev[c] || 0)) : null;
       });
       // Range-appropriate billing denominator for the collection KPI card.
       // diff of two cumulative snapshots = billing for all complete months within the date range.
@@ -1349,7 +1360,8 @@ module.exports = function installCommandCentre({ app, q }) {
               unit_code: u.unit_code, unit_name: u.unit_name,
               supply_cur: b.agent_cur + b.cash_cur, supply_prev: b.agent_prev + b.cash_prev,
               agent_cur: b.agent_cur, cash_cur: b.cash_cur,
-              collection: b.collection, billed: b.billed, txn: b.txn, agencies_paid: b.agencies_paid,
+              collection: b.net_receipt != null ? b.net_receipt : b.collection,
+              collection_cash: b.collection, billed: b.billed, txn: b.txn, agencies_paid: b.agencies_paid,
               os: b.os, os_agencies: b.os_agencies, critical: b.critical,
               visits: b.visits, agencies_visited: b.agencies_visited, book: b.book, dcrBook: b.dcrBook, execs: b.execs.size,
             });

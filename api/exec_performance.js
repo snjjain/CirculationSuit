@@ -17,6 +17,8 @@
  */
 
 module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
+  // One definition of recovery for the whole suite — see api/collection_basis.js.
+  const { basis: collBasis, pctOf } = require('./collection_basis')({ q });
   const N  = v => { const n = Number(v); return isNaN(n) ? 0 : n; };
   const R1 = v => v == null ? null : Math.round(Number(v) * 10) / 10;
   const p2 = n => String(n).padStart(2, '0');
@@ -96,7 +98,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
     // derived-table JOIN forced a nested-loop plan that ran for minutes.
     const sdCl = unitCl('unit_code', unitList);
 
-    const [base, mapping, supply, collection, outstanding] = await Promise.all([
+    const [base, mapping, supply, collection, outstanding, recovery] = await Promise.all([
       // Base: EXEC executives only.
       // LEFT JOIN exec_master so the dashboard works even before the Oracle sync populates it.
       // When exec_master has data: only include is_active_pli='Y' + exec_designation='EXEC'.
@@ -138,6 +140,9 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
          WHERE period_label = 'CURRENT'
            AND exec_code IS NOT NULL AND exec_code != ''${ouCl.cl}
          GROUP BY exec_code`, ouCl.p),
+
+      // Recovery against billing, from the shared ledger basis.
+      collBasis({ from, to, unitCodes: unitList, groupBy: 'exec' }),
     ]);
 
     // Map (unit|agcd) → exec, then roll supply/collection up to executives in JS
@@ -159,7 +164,12 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const sup  = supMap[r.executive_code] || 0;
       const col  = colMap[r.executive_code] || 0;
       const ou   = ouMap[r.executive_code]  || 0;
-      const pct  = (col + ou) > 0 ? R1(col / (col + ou) * 100) : 0;
+      /* Recovery against billing, the same figure the Command Centre reports. This used
+         to be collected / (collected + outstanding) — a different question altogether
+         ("what share of all dues is cleared"), which put SHAKIR KHAN at about 7% here
+         while the Command Centre showed the ERP's 73% for the same month. */
+      const rec  = recovery.by.get(r.executive_code) || null;
+      const pct  = rec ? pctOf(rec) : null;
       return {
         executive_code:    r.executive_code,
         exec_name:         r.exec_name,
@@ -169,7 +179,10 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
         units:             r.units,
         agency_count:      N(r.agency_count),
         total_supply:      sup,
-        total_collection:  col,
+        // Banked cash kept beside the ledger figure; they measure different things.
+        total_collection:  rec ? rec.net_receipt : col,
+        collection_cash:   col,
+        total_billed:      rec ? rec.billed : null,
         total_outstanding: ou,
         collection_pct:    pct,
       };
@@ -234,6 +247,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const totalSup    = all.reduce((s, r) => s + r.total_supply, 0);
       const totalCol    = all.reduce((s, r) => s + r.total_collection, 0);
       const totalOu     = all.reduce((s, r) => s + r.total_outstanding, 0);
+      const totalBilled = all.reduce((s, r) => s + (r.total_billed || 0), 0);
 
       res.json({
         from, to,
@@ -241,6 +255,9 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
         agency_count:      agencyCount,
         total_supply:      totalSup,
         total_collection:  totalCol,
+        total_billed:      totalBilled || null,
+        // Recovery for the whole set, on the same basis as each row.
+        collection_pct:    totalBilled > 0 ? R1((totalCol / totalBilled) * 100) : null,
         total_outstanding: totalOu,
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
@@ -417,7 +434,8 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
                        ELSE 0 END collection_pct
            FROM agency_master am
            LEFT JOIN (
-             SELECT unit_code, agcd, SUM(sup_copy) total_supply
+             SELECT unit_code, agcd, SUM(sup_copy) total_supply,
+                    COUNT(DISTINCT supply_date) supply_days
              FROM supply_data WHERE supply_date BETWEEN ? AND ?
              GROUP BY unit_code, agcd
            ) s ON s.unit_code = am.unit AND s.agcd = am.agcd
@@ -543,6 +561,12 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
           suspend_date:      r.suspend_date,
           mobile_no1:        r.mobile_no1,
           total_supply:      N(r.total_supply),
+          /* Copies per day, as every other supply figure in the suite is expressed.
+             The panel was showing the window total beside averages elsewhere — 71,580
+             for POONAM PARIVAR where its daily supply is 2,386. Divided by the days
+             that agency actually supplied, so a mid-month start is not read as a slump. */
+          supply_days:       N(r.supply_days),
+          avg_supply:        N(r.supply_days) > 0 ? Math.round(N(r.total_supply) / N(r.supply_days)) : 0,
           total_collection:  N(r.total_collection),
           total_outstanding: N(r.total_outstanding),
           collection_pct:    R1(r.collection_pct),

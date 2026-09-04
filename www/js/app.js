@@ -5042,7 +5042,7 @@ function _ccFlyExecPanel(x) {
   const agTable = !top.length ? '' : `<table style="width:100%;border-collapse:collapse;font-size:11.5px">
     <thead><tr style="color:#94a3b8;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em">
       <th style="text-align:left;padding:4px 6px;font-weight:700">Agency</th>
-      <th style="text-align:right;padding:4px 6px;font-weight:700">Supply</th>
+      <th style="text-align:right;padding:4px 6px;font-weight:700">Avg. Supply</th>
       <th style="text-align:right;padding:4px 6px;font-weight:700">Coll %</th>
       <th style="text-align:right;padding:4px 6px;font-weight:700">Outstanding</th>
       <th style="text-align:right;padding:4px 6px;font-weight:700">Visits</th>
@@ -5050,8 +5050,9 @@ function _ccFlyExecPanel(x) {
       title="Open agency profile" style="cursor:pointer;border-top:1px solid #f1f5f9"
       onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
       <td style="padding:5px 6px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b style="color:#1e3a8a">${esc(a.ag_name || a.ag_code)}</b>
-        <div style="color:#94a3b8;font-size:10px">${esc(a.unit_name || a.unit_code || '')}${a.status && a.status !== 'Active' ? ' · ' + esc(a.status) : ''}</div></td>
-      <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums">${_apFmtN(a.total_supply)}</td>
+        <div style="color:#94a3b8;font-size:10px">${esc([a.unit_name || a.unit_code, a.dist_name, a.city_name].filter(Boolean).join(' · '))}${a.status && a.status !== 'Active' ? ' · ' + esc(a.status) : ''}</div></td>
+      <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums"
+        title="${_apFmtN(a.total_supply)} copies over ${a.supply_days || 0} supplying days">${_apFmtN(a.avg_supply != null ? a.avg_supply : a.total_supply)}</td>
       <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums">${a.collection_pct == null ? '—' : a.collection_pct + '%'}</td>
       <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums;color:${(a.total_outstanding || 0) > 0 ? '#b91c1c' : '#0f172a'}"><b>${_apFmtC(a.total_outstanding)}</b></td>
       <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums">${_apFmtN(a.visit_count)}</td>
