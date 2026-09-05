@@ -18360,6 +18360,28 @@ function sdvReportUrl(endpoint) {
   return location.origin + sdvQS('/api/survey/report/' + endpoint);
 }
 
+/* The download was a plain <a href download>. Every /api/* route requires a JWT, and a
+   link navigation carries no Authorization header — so the browser followed it, got 401
+   and either saved the error body or nothing at all. Fetched with the header and handed
+   to the user as a blob instead. */
+window.sdvDownloadCsv = async (btn) => {
+  const id = S.live.sdvReport || 'area-orders';
+  const label = btn && btn.textContent;
+  if (btn) { btn.textContent = '… preparing'; btn.style.pointerEvents = 'none'; }
+  try {
+    const r = await fetch(sdvReportUrl(id), { headers: api.h() });
+    if (!r.ok) throw new Error(r.status === 401 ? 'Your session has expired — sign in again.' : `Server returned ${r.status}`);
+    const blob = await r.blob();
+    const name = `${id}${S.live.sdvFrom ? '-' + S.live.sdvFrom : ''}${S.live.sdvTo ? '-to-' + S.live.sdvTo : ''}.csv`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) {
+    alert('Could not download the report. ' + (e && e.message ? e.message : e));
+  } finally { if (btn) { btn.textContent = label; btn.style.pointerEvents = ''; } }
+};
+
 function sdvFetchReport() {
   const id = S.live.sdvReport || 'area-orders';
   S.live._sdvRptLoad = true;
@@ -18433,10 +18455,10 @@ function sdvReportsTab() {
           <div class="sdv-sec-sub">${curMeta.desc}</div>
         </div>
       </div>
-      <a href="${sdvReportUrl(cur)}" download
-         style="background:var(--navy);color:#fff;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap">
+      <button onclick="sdvDownloadCsv(this)"
+         style="background:var(--navy);color:#fff;border:0;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">
          ⬇ Download CSV
-      </a>
+      </button>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">${pick}</div>
     ${body}

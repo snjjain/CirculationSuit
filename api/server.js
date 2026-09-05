@@ -2411,10 +2411,38 @@ function sendCsv(res, name, csv) {
   res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
   res.end('\uFEFF' + csv);
 }
+/* A report without a total makes the reader add the column up by hand, and they will
+   get it wrong. Every numeric column is summed; an average column is left blank because
+   a sum of averages is not an average and printing one would be worse than printing
+   nothing. Cells that are not numbers ('A' for absent, blank for not-yet-joined) are
+   skipped rather than coerced to zero. */
+function reportTotalsRow(hdr, rows) {
+  if (!rows.length) return null;
+  const numOf = v => {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    const t = String(v == null ? '' : v).replace(/,/g, '').trim();
+    return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : null;
+  };
+  return hdr.map((h, i) => {
+    if (i === 0) return 'Total';
+    if (/\bavg\b|average|%/i.test(String(h))) return '';
+    let sum = 0, any = false;
+    rows.forEach(r => { const n = numOf(r[i]); if (n !== null) { sum += n; any = true; } });
+    if (!any) return '';
+    return Number.isInteger(sum) ? sum : Math.round(sum * 10) / 10;
+  });
+}
+
 /** CSV download by default; ?format=json returns {header, rows} for on-screen tables */
-function sendReport(req, res, name, hdr, rows) {
-  if (req.query.format === 'json') return res.json({ header: hdr, rows });
-  sendCsv(res, name, toCsvStr(hdr, rows));
+function sendReport(req, res, name, hdr, rows, opts) {
+  const o = opts || {};
+  let out = rows;
+  if (o.totals !== false && rows.length) {
+    const t = o.totalsRow || reportTotalsRow(hdr, rows);
+    if (t) out = [...rows, t];
+  }
+  if (req.query.format === 'json') return res.json({ header: hdr, rows: out, has_totals: out !== rows });
+  sendCsv(res, name, toCsvStr(hdr, out));
 }
 
 // GET /api/survey/report/area-orders — Center Wise Survey Orders (area × date → orders)
@@ -2431,7 +2459,7 @@ app.get('/api/survey/report/area-orders', async (req, res) => {
       SELECT sd.locality_code,
              MAX(COALESCE(lm.l_name, CONCAT('Zone ', sd.locality_code))) AS area_name,
              DATE_FORMAT(sd.bookdate,'%Y-%m-%d') AS dt,
-             COUNT(DISTINCT CASE WHEN sd.order_id IS NOT NULL AND sd.order_id != '' THEN sd.order_id END) AS orders
+             COUNT(DISTINCT CASE WHEN sd.order_id IS NOT NULL AND sd.order_id != '' THEN COALESCE(NULLIF(TRIM(sd.mobile), ''), CONCAT('#', sd.order_id)) END) AS orders
       FROM survey_data sd
       LEFT JOIN locality_master  lm ON lm.loc_id = sd.unit_code AND lm.l_code = sd.locality_code
       WHERE 1=1 ${aC}
@@ -2471,7 +2499,7 @@ app.get('/api/survey/report/surveyor-performance', async (req, res) => {
              MAX(COALESCE(lm.l_name, sd.locality_code))    AS area_name,
              DATE_FORMAT(sd.bookdate,'%Y-%m-%d')            AS dt,
              COUNT(DISTINCT sd.r_id) AS surveys,
-             COUNT(DISTINCT CASE WHEN sd.order_id IS NOT NULL AND sd.order_id != '' THEN sd.order_id END) AS orders
+             COUNT(DISTINCT CASE WHEN sd.order_id IS NOT NULL AND sd.order_id != '' THEN COALESCE(NULLIF(TRIM(sd.mobile), ''), CONCAT('#', sd.order_id)) END) AS orders
       FROM survey_data sd
       ${TL_NAME_JOIN}
       ${SVR_NAME_JOINS}
@@ -2517,13 +2545,33 @@ app.get('/api/survey/report/surveyor-daily', async (req, res) => {
              MAX(COALESCE(lm.l_name, CONCAT('Zone ', sd.locality_code)))   AS area_name,
              DATE_FORMAT(sd.bookdate,'%Y-%m-%d')           AS dt,
              COUNT(DISTINCT sd.r_id) AS surveys,
-             COUNT(DISTINCT CASE WHEN sd.order_id IS NOT NULL AND sd.order_id != '' THEN sd.order_id END) AS orders
+             /* One order per mobile number. The same household booked twice is one
+                order, not two, and counting order_id counted it twice — 61,743 order
+                ids against 57,762 distinct mobiles across the table. An order with no
+                mobile recorded still counts on its own id rather than collapsing every
+                such order into a single blank. */
+             COUNT(DISTINCT CASE WHEN sd.order_id IS NOT NULL AND sd.order_id != ''
+                   THEN COALESCE(NULLIF(TRIM(sd.mobile), ''), CONCAT('#', sd.order_id)) END) AS orders
       FROM survey_data sd
       ${SVR_NAME_JOINS}
       LEFT JOIN locality_master  lm ON lm.loc_id = sd.unit_code AND lm.l_code = sd.locality_code
       WHERE 1=1 ${aC}
       GROUP BY sd.created_by, DATE_FORMAT(sd.bookdate,'%Y-%m-%d')
       ORDER BY area_name, svr_name, dt`, aP);
+
+    /* Totals are counted over the WHOLE range, not summed from the daily counts: a
+       mobile that ordered on two different days is still one order, and adding the
+       per-day figures would count it twice. */
+    const { rows: totRows } = await q(`
+      SELECT sd.created_by AS svr_id,
+             COUNT(DISTINCT sd.r_id) AS surveys,
+             COUNT(DISTINCT CASE WHEN sd.order_id IS NOT NULL AND sd.order_id != ''
+                   THEN COALESCE(NULLIF(TRIM(sd.mobile), ''), CONCAT('#', sd.order_id)) END) AS orders
+      FROM survey_data sd
+      ${SVR_NAME_JOINS}
+      WHERE 1=1 ${aC}
+      GROUP BY sd.created_by`, aP);
+    const totBy = new Map(totRows.map(x => [x.svr_id, x]));
     const firstDt = new Map();
     for (const row of rows) {
       const cur = firstDt.get(row.svr_id);
@@ -2538,24 +2586,41 @@ app.get('/api/survey/report/surveyor-daily', async (req, res) => {
       s.ord[row.dt] = Number(row.orders);
       if (row.area_name) s.area = row.area_name;
     }
+    /* Two columns per day rather than "11/11". One cell holding two different measures
+       cannot be sorted, summed or read at a glance, and the reader had no way to tell
+       which half was which. */
     const hdr = ['S.No.', 'Area of Survey', 'Surveyor Name', 'Designation',
-      ...dates.map(fmtDH), 'Total Surveys', 'Total Orders', 'Present Days', 'Avg Surveys/Day'];
+      ...dates.flatMap(d => [`${fmtDH(d)} Survey`, `${fmtDH(d)} Orders`]),
+      'Total Surveys', 'Total Orders', 'Present Days', 'Avg Surveys/Day'];
     let n = 1; const csvRows = [];
+    let sumS = 0, sumO = 0, sumP = 0;
     for (const [id, s] of sMap.entries()) {
       const desig = /^P\//i.test(id) ? 'Surveyor' : 'CI';
       const fd = firstDt.get(id) || r.from;
-      const dv = dates.map(d => {
-        if (d < fd) return '';
-        if (s.by[d] == null) return 'A';
-        return `${s.by[d]}/${s.ord[d] || 0}`;
+      let present = 0;
+      const dv = dates.flatMap(d => {
+        if (d < fd) return ['', ''];                        // had not joined yet
+        if (s.by[d] == null) return ['A', 'A'];             // absent
+        present++;
+        return [s.by[d], s.ord[d] || 0];
       });
-      const present = dv.filter(v => v !== 'A' && v !== '').length;
-      const totS = dates.reduce((acc, d) => acc + (s.by[d]  || 0), 0);
-      const totO = dates.reduce((acc, d) => acc + (s.ord[d] || 0), 0);
+      const t = totBy.get(id) || {};
+      const totS = Number(t.surveys || 0), totO = Number(t.orders || 0);
+      sumS += totS; sumO += totO; sumP += present;
       csvRows.push([n++, s.area, s.svr, desig, ...dv, totS, totO, present,
         present > 0 ? (totS / present).toFixed(1) : '0.0']);
     }
-    sendReport(req, res, `surveyor-daily-${r.from}-to-${r.to}.csv`, hdr, csvRows);
+    /* The total row's average is recomputed from the totals, not averaged from the
+       column — a mean of means weights a surveyor who worked two days the same as one
+       who worked twenty. */
+    const totalsRow = reportTotalsRow(hdr, csvRows);
+    if (totalsRow) {
+      totalsRow[hdr.length - 1] = sumP > 0 ? (sumS / sumP).toFixed(1) : '0.0';
+      totalsRow[hdr.length - 2] = sumP;
+      totalsRow[hdr.length - 3] = sumO;
+      totalsRow[hdr.length - 4] = sumS;
+    }
+    sendReport(req, res, `surveyor-daily-${r.from}-to-${r.to}.csv`, hdr, csvRows, { totalsRow });
   } catch (e) { res.status(500).json({ detail: String(e) }); }
 });
 
@@ -2574,7 +2639,7 @@ app.get('/api/survey/report/summary', async (req, res) => {
              MAX(COALESCE(lm.l_name, CONCAT('Zone ', sd.locality_code))) AS area_name,
              COUNT(DISTINCT sd.created_by)  AS surveyor_count,
              COUNT(DISTINCT sd.r_id)         AS total_surveys,
-             COUNT(DISTINCT CASE WHEN sd.order_id IS NOT NULL AND sd.order_id != '' THEN sd.order_id END) AS total_orders,
+             COUNT(DISTINCT CASE WHEN sd.order_id IS NOT NULL AND sd.order_id != '' THEN COALESCE(NULLIF(TRIM(sd.mobile), ''), CONCAT('#', sd.order_id)) END) AS total_orders,
              COUNT(DISTINCT DATE(sd.bookdate)) AS working_days
       FROM survey_data sd
       LEFT JOIN locality_master  lm  ON lm.loc_id = sd.unit_code AND lm.l_code = sd.locality_code
