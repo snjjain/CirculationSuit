@@ -4322,17 +4322,25 @@ const _ccDcrName = k => ({ 'RAJASTHAN': 'Rajasthan', 'MADHYA PRADESH': 'Madhya P
    charts show their own placeholder until it lands. */
 /* Both screens draw these charts now, so both must repaint when they arrive. */
 function _ccQtrRepaint() { if (S.screen === 'command' || S.screen === 'cc_state') render(); }
-function _ccLoadQuarterly() {
+/* Keyed by segment and scope, not fetched once and kept forever. The charts held the
+   first result they ever received, so switching Agent / Cash — or drilling into a
+   branch — redrew the same bars and the toggle looked broken. */
+function _ccLoadQuarterly(seg, unitCode) {
   const st = _ccState();
-  if (st._qtrLoading || st.qtr) return;
-  st._qtrLoading = true;
+  const key = `${st.asOn || ''}|${unitCode || st.unit || ''}|${seg || 'all'}`;
+  if (st._qtrKey === key && st.qtr) return;
+  if (st._qtrLoading === key) return;
+  st._qtrLoading = key;
   const p = new URLSearchParams();
   if (st.asOn) p.set('as_on', st.asOn);
-  if (st.unit) p.set('unit_code', st.unit);
+  if (unitCode || st.unit) p.set('unit_code', unitCode || st.unit);
+  if (seg && seg !== 'all') p.set('seg', seg);
   fetch(`${location.origin}/api/command/quarterly?${p}`, { headers: api.h() })
     .then(r => r.json())
-    .then(d => { st.qtr = d && d.detail ? { _err: d.detail } : d; st._qtrLoading = false; _ccQtrRepaint(); })
-    .catch(e => { st.qtr = { _err: String(e && e.message || e) }; st._qtrLoading = false; _ccQtrRepaint(); });
+    .then(d => { if (st._qtrLoading !== key) return;
+      st.qtr = d && d.detail ? { _err: d.detail } : d; st._qtrKey = key; st._qtrLoading = null; _ccQtrRepaint(); })
+    .catch(e => { if (st._qtrLoading !== key) return;
+      st.qtr = { _err: String(e && e.message || e) }; st._qtrKey = key; st._qtrLoading = null; _ccQtrRepaint(); });
 }
 function _ccLoad() {
   const st = _ccState();
@@ -5995,7 +6003,7 @@ function _cmdViewNew() {
      year (Q1 Apr-Jun) and supply on the calendar year (Q1 Jan-Mar), so each states its
      own basis under the title — otherwise the same "Q1" on two adjacent charts would be
      read as the same three months. */
-  const charts = _ccQuarterlyBlock(st);
+  const charts = _ccQuarterlyBlock(st, st.seg, st.unit);
 
   const cards = `<div style="font-size:11px;font-weight:800;letter-spacing:.06em;color:#64748b;text-transform:uppercase;margin:0 0 8px 2px">State-wise Performance</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:12px;margin-bottom:18px">
@@ -6620,9 +6628,13 @@ function _csPeriodLine(d, extra) {
    year (Q1 Apr-Jun) and supply on the calendar year (Q1 Jan-Mar), so each states its
    own basis under the title - otherwise the same "Q1" on two adjacent charts would be
    read as the same three months. */
-function _ccQuarterlyBlock(st) {
-  _ccLoadQuarterly();
-  const Q = st.qtr && !st.qtr._err ? st.qtr : null;
+function _ccQuarterlyBlock(st, seg, unitCode) {
+  _ccLoadQuarterly(seg, unitCode);
+  const cc = _ccState();
+  // Only draw what belongs to the segment on screen; a stale payload from the previous
+  // selection must not be shown as if it answered the current one.
+  const Q = cc.qtr && !cc.qtr._err && (cc.qtr.seg || 'all') === (seg || 'all') ? cc.qtr : null;
+  st = cc;
   const cBase = Q && (Q.collection_base || Q.fy_base), cCur = Q && (Q.collection_current || Q.fy_current);
   const sBase = Q && (Q.supply_base || Q.fy_base), sCur = Q && (Q.supply_current || Q.fy_current);
   const skel = title => `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
@@ -6635,6 +6647,7 @@ function _ccQuarterlyBlock(st) {
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
       <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Collection</div>
       <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(cBase)} (Base) vs ${esc(cCur)} · receipts banked · ${esc(Q.collection_basis || 'Financial year · Apr–Mar')}</div>
+      ${Q.collection_note ? `<div style="font-size:10.5px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:7px;padding:6px 9px;margin-bottom:9px">${esc(Q.collection_note)}</div>` : ''}
       ${_ccQuarterChart(Q.collection, cBase, cCur, _ccINR, '#22c55e', 'fy')}
     </div>
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
@@ -7361,7 +7374,7 @@ VIEWS.cc_state = () => {
      can read. */
   const ownPage = !(S.user && S.user.isAdmin);
   const extras = ownPage
-    ? _ccQuarterlyBlock(_ccState()) + _ccAlertsBlock(_csCcData(st), st.state)
+    ? _ccQuarterlyBlock(_ccState(), st.seg, st.unit) + _ccAlertsBlock(_csCcData(st), st.state)
     : '';
 
   return bar + cards + segBar
