@@ -98,6 +98,27 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
     // derived-table JOIN forced a nested-loop plan that ran for minutes.
     const sdCl = unitCl('unit_code', unitList);
 
+    /* Supply is copies per day everywhere in this suite; this list was the one place
+       still printing a window total, a figure that grows with the length of the range
+       and cannot be compared with anything. Days are counted per UNIT and every agency
+       inside a unit divides by that unit's days — the same rule the Command Centre
+       applies, so an executive's average rolls up into their branch's. */
+    const { rows: _sdays } = await q(
+      `SELECT unit_code, COUNT(DISTINCT supply_date) d
+         FROM supply_data
+        WHERE supply_date BETWEEN ? AND ?${sdCl.cl}
+        GROUP BY unit_code`, [from, to, ...sdCl.p]);
+    const unitDays = {}; _sdays.forEach(r => { unitDays[r.unit_code] = N(r.d); });
+
+    /* The month-end snapshot whose bill is held out of OVERDUE — that bill went out on
+       the 1st of this month and is collected across this month, so it is owed but not
+       late. Outstanding keeps its full meaning and both are reported. */
+    const { rows: _snap } = await q(
+      `SELECT DISTINCT period_label FROM agency_outstanding
+        WHERE period_label <> 'CURRENT' AND period_label NOT LIKE 'BILL-%'
+        ORDER BY period_label DESC LIMIT 1`);
+    const lastSnapL = _snap[0] ? _snap[0].period_label : null;
+
     const [base, mapping, supply, collection, outstanding, recovery] = await Promise.all([
       // Base: EXEC executives only.
       // LEFT JOIN exec_master so the dashboard works even before the Oracle sync populates it.
@@ -134,12 +155,24 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
          WHERE is_valid = 1 AND coll_date BETWEEN ? AND ?${sdCl.cl}
          GROUP BY unit_code, ag_code`, [from, to, ...sdCl.p]),
 
-      // Outstanding — always CURRENT period snapshot
-      q(`SELECT exec_code, SUM(cl_amt) total_outstanding
-         FROM agency_outstanding
-         WHERE period_label = 'CURRENT'
-           AND exec_code IS NOT NULL AND exec_code != ''${ouCl.cl}
-         GROUP BY exec_code`, ouCl.p),
+      // Outstanding — always the CURRENT snapshot — with overdue beside it.
+      lastSnapL
+        ? q(`SELECT o.exec_code, SUM(o.cl_amt) total_outstanding,
+                    SUM(GREATEST(0, o.cl_amt - GREATEST(0, o.bill_amt - COALESCE(pb.bill, 0)))) overdue
+               FROM (SELECT exec_code, unit_code, ag_code, cl_amt, bill_amt
+                       FROM agency_outstanding
+                      WHERE period_label = 'CURRENT'
+                        AND exec_code IS NOT NULL AND exec_code != ''${ouCl.cl}) o
+               LEFT JOIN (SELECT unit_code, ag_code, SUM(bill_amt) bill
+                            FROM agency_outstanding WHERE period_label = ?
+                           GROUP BY unit_code, ag_code) pb
+                 ON pb.unit_code = o.unit_code AND pb.ag_code = o.ag_code
+              GROUP BY o.exec_code`, [...ouCl.p, lastSnapL])
+        : q(`SELECT exec_code, SUM(cl_amt) total_outstanding, SUM(cl_amt) overdue
+               FROM agency_outstanding
+              WHERE period_label = 'CURRENT'
+                AND exec_code IS NOT NULL AND exec_code != ''${ouCl.cl}
+              GROUP BY exec_code`, ouCl.p),
 
       // Recovery against billing, from the shared ledger basis.
       collBasis({ from, to, unitCodes: unitList, groupBy: 'exec' }),
@@ -149,16 +182,24 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
     const agExecMap = new Map();
     for (const r of mapping.rows) agExecMap.set(`${r.unit}|${r.agcd}`, r.executive_code);
 
-    const supMap = {}, colMap = {}, ouMap = {};
+    const supMap = {}, colMap = {}, ouMap = {}, odMap = {}, avgMap = {};
+    const supByUnit = {};                     // exec -> unit -> copies
     for (const r of supply.rows) {
       const ex = agExecMap.get(`${r.unit_code}|${r.agcd}`);
-      if (ex) supMap[ex] = (supMap[ex] || 0) + N(r.total);
+      if (!ex) continue;
+      supMap[ex] = (supMap[ex] || 0) + N(r.total);
+      (supByUnit[ex] || (supByUnit[ex] = {}));
+      supByUnit[ex][r.unit_code] = (supByUnit[ex][r.unit_code] || 0) + N(r.total);
     }
+    Object.keys(supByUnit).forEach(ex => {
+      avgMap[ex] = Object.entries(supByUnit[ex]).reduce(
+        (a, [u, tot]) => a + (unitDays[u] > 0 ? Math.round(tot / unitDays[u]) : 0), 0);
+    });
     for (const r of collection.rows) {
       const ex = agExecMap.get(`${r.unit_code}|${r.ag_code}`);
       if (ex) colMap[ex] = (colMap[ex] || 0) + N(r.total);
     }
-    outstanding.rows.forEach(r => { ouMap[r.exec_code] = N(r.total_outstanding); });
+    outstanding.rows.forEach(r => { ouMap[r.exec_code] = N(r.total_outstanding); odMap[r.exec_code] = N(r.overdue); });
 
     const data = base.rows.map(r => {
       const sup  = supMap[r.executive_code] || 0;
@@ -179,11 +220,14 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
         units:             r.units,
         agency_count:      N(r.agency_count),
         total_supply:      sup,
+        avg_supply:        avgMap[r.executive_code] || 0,
         // Banked cash kept beside the ledger figure; they measure different things.
         total_collection:  rec ? rec.net_receipt : col,
         collection_cash:   col,
         total_billed:      rec ? rec.billed : null,
         total_outstanding: ou,
+        overdue:           odMap[r.executive_code] || 0,
+        overdue_excludes:  lastSnapL,
         collection_pct:    pct,
       };
     });
@@ -393,6 +437,30 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const empCodes = await dcrEmpCodes(execCode);
       const empIn    = empCodes.map(() => '?').join(',');
 
+      /* OVERDUE is shown beside OUTSTANDING, not instead of it.
+
+         Outstanding is every rupee owed. Overdue is what is actually late: the bill
+         raised on the 1st of this month is collected across this month, so it is owed
+         but not late, and it is held out. The not-yet-due part is whatever has been
+         billed since the last month-end snapshot, subtracted per AGENCY and floored at
+         zero so one agency fully covered by this month's bill cannot cancel another's
+         real arrears. Same rule as the Command Centre, so an executive's overdue rolls
+         up into their branch's. */
+      const { rows: _snapRows } = await q(
+        `SELECT DISTINCT period_label FROM agency_outstanding
+          WHERE period_label <> 'CURRENT' AND period_label NOT LIKE 'BILL-%'
+          ORDER BY period_label DESC LIMIT 1`);
+      const lastSnap = _snapRows[0] ? _snapRows[0].period_label : null;
+      const OD = lastSnap
+        ? `GREATEST(0, ao.cl_amt - GREATEST(0, ao.bill_amt - COALESCE(pb.bill, 0)))`
+        : `GREATEST(0, ao.cl_amt)`;
+      const OD_JOIN = lastSnap
+        ? `LEFT JOIN (SELECT unit_code, ag_code, SUM(bill_amt) bill FROM agency_outstanding
+                       WHERE period_label = ? GROUP BY unit_code, ag_code) pb
+             ON pb.unit_code = ao.unit_code AND pb.ag_code = ao.ag_code`
+        : '';
+      const OD_P = lastSnap ? [lastSnap] : [];
+
       const [execInfo, supR, colR, ouR, agRecovery, agencies, hierR, dcrVisitsR, dcrSummR, dcrLogR] = await Promise.all([
         q(`SELECT executive_code, MAX(executive_name) exec_name, MAX(unit_state_nm) state_name,
                   GROUP_CONCAT(DISTINCT unit_name ORDER BY unit_name SEPARATOR ' / ') units,
@@ -415,8 +483,10 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
            WHERE ac.is_valid = 1 AND ac.coll_date BETWEEN ? AND ?`,
           [execCode, from, to]),
 
-        q(`SELECT SUM(ao.cl_amt) total FROM agency_outstanding ao
-           WHERE ao.exec_code = ? AND ao.period_label = 'CURRENT'`, [execCode]),
+        q(`SELECT SUM(ao.cl_amt) total, SUM(${OD}) overdue
+             FROM agency_outstanding ao
+             ${OD_JOIN}
+            WHERE ao.exec_code = ? AND ao.period_label = 'CURRENT'`, [...OD_P, execCode]),
 
         /* Per-agency recovery on the same basis as every other collection figure.
            The SQL below still computes collected / (collected + outstanding), which
@@ -435,6 +505,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
                   MAX(COALESCE(s.supply_days, 0)) supply_days,
                   MAX(COALESCE(c.total_collection, 0)) total_collection,
                   MAX(COALESCE(o.total_outstanding, 0)) total_outstanding,
+                  MAX(COALESCE(o.overdue, 0)) overdue,
                   CASE WHEN (MAX(COALESCE(c.total_collection, 0)) + MAX(COALESCE(o.total_outstanding, 0))) > 0
                        THEN ROUND(MAX(COALESCE(c.total_collection,0)) /
                             (MAX(COALESCE(c.total_collection,0)) + MAX(COALESCE(o.total_outstanding,0))) * 100, 1)
@@ -453,13 +524,16 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
              GROUP BY unit_code, ag_code
            ) c ON c.unit_code = am.unit AND c.ag_code = am.agcd
            LEFT JOIN (
-             SELECT unit_code, ag_code, SUM(cl_amt) total_outstanding
-             FROM agency_outstanding WHERE period_label = 'CURRENT'
-             GROUP BY unit_code, ag_code
+             SELECT ao.unit_code, ao.ag_code, SUM(ao.cl_amt) total_outstanding,
+                    SUM(${OD}) overdue
+             FROM agency_outstanding ao
+             ${OD_JOIN}
+             WHERE ao.period_label = 'CURRENT'
+             GROUP BY ao.unit_code, ao.ag_code
            ) o ON o.unit_code = am.unit AND o.ag_code = am.agcd
            WHERE am.executive_code = ?
            GROUP BY am.unit, am.agcd
-           ORDER BY total_supply DESC`, [from, to, from, to, execCode]),
+           ORDER BY total_supply DESC`, [from, to, from, to, ...OD_P, execCode]),
 
         // Reporting chain from Oracle hierarchy
         q(`SELECT exec_desc, exec_desig,
@@ -495,6 +569,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
       const ei         = execInfo.rows[0] || {};
       const totalCash  = N(colR.rows[0]?.total);
       const totalOu    = N(ouR.rows[0]?.total);
+      const totalOd    = N(ouR.rows[0]?.overdue);
       /* Recovery on the shared basis, summed from this executive's own agencies so the
          header cannot disagree with the rows beneath it. The header was still using
          collected / (collected + outstanding) and read 7.2% while its own agency list
@@ -553,6 +628,8 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
           collection_cash:      totalCash,
           total_billed:         totalBill,
           total_outstanding:    totalOu,
+          total_overdue:        totalOd,
+          overdue_excludes:     lastSnap,
           collection_pct:       collPct,
           total_visits:         N(dcrSumm.total_visits),
           active_days:          N(dcrSumm.active_days),
@@ -588,6 +665,7 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
           avg_supply:        N(r.supply_days) > 0 ? Math.round(N(r.total_supply) / N(r.supply_days)) : 0,
           total_collection:  N(r.total_collection),
           total_outstanding: N(r.total_outstanding),
+          overdue:           N(r.overdue),
           /* Ledger recovery where the snapshots allow it; the SQL's dues-cleared ratio
              only as a fallback, so this column agrees with the executive row above it. */
           collection_pct:    (() => {

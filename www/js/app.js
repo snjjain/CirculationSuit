@@ -12442,7 +12442,7 @@ const epPctColor = v => {
   return n >= 80 ? 'var(--grn)' : n >= 50 ? 'var(--gold)' : 'var(--red)';
 };
 const epMetricLabel = m => ({ supply: 'Supply (Copies)', collection: 'Collection (₹)', collection_pct: 'Collection %', outstanding: 'Outstanding (₹)' }[m] || m);
-const epMetricVal = (r, m) => m === 'supply' ? epFmtN(r.total_supply) : m === 'collection' ? epFmtC(r.total_collection) : m === 'collection_pct' ? epPct(r.collection_pct) : epFmtC(r.total_outstanding);
+const epMetricVal = (r, m) => m === 'supply' ? epFmtN(r.avg_supply != null ? r.avg_supply : r.total_supply) : m === 'collection' ? epFmtC(r.total_collection) : m === 'collection_pct' ? epPct(r.collection_pct) : epFmtC(r.total_outstanding);
 const epMetricColor = (r, m) => m === 'collection_pct' ? epPctColor(r.collection_pct) : m === 'outstanding' ? 'var(--red)' : m === 'collection' ? 'var(--grn)' : 'var(--ink)';
 
 // ── Drill / navigation functions (window-scoped for inline onclick) ───────────
@@ -12628,7 +12628,7 @@ function epKpiGrid() {
   const k = st.kpis;
   return `<div class="vz-kgrid" style="margin-bottom:16px">
     ${vzKpi({ icon: '👤', label: 'Executives',       value: epFmtN(k.exec_count),        status: 'info', sub: `${epFmtN(k.agency_count)} agencies` })}
-    ${vzKpi({ icon: '📦', label: 'Supply (Copies)',  value: epFmtN(k.total_supply),       status: 'info', sub: `${esc(k.from)} – ${esc(k.to)}` })}
+    ${vzKpi({ icon: '📦', label: 'Avg. Supply / day', value: epFmtN(k.avg_supply != null ? k.avg_supply : k.total_supply), status: 'info', sub: `${epFmtN(k.total_supply)} copies · ${esc(k.from)} – ${esc(k.to)}` })}
     ${epGrowthCard()}
     ${vzKpi({ icon: '₹',  label: 'Collection',       value: epFmtC(k.total_collection),   status: 'good', sub: 'Period total' })}
     ${vzKpi({ icon: '⚠',  label: 'Outstanding',      value: epFmtC(k.total_outstanding),  status: 'bad',  sub: 'Current balance' })}
@@ -13190,9 +13190,10 @@ function epExecTable() {
             <th style="text-align:center;white-space:nowrap">Yesterday</th>
             <th class="r" style="white-space:nowrap">Visits</th>
             ${th('agencies',       'Agencies',    true)}
-            ${th('supply',         'Supply',      true)}
+            ${th('supply',         'Avg. Supply', true)}
             ${th('collection_pct', 'Coll %',      true)}
             ${th('outstanding',    'Outstanding', true)}
+            <th class="r" style="white-space:nowrap" title="Dues less this month's bill, which is collected across this month and is not yet late">Overdue</th>
             ${epMsAvail ? `<th class="r" style="white-space:nowrap" title="Patrika share of total market · competitor data ${esc(_ems.period || '')}">Mkt Share</th>` : ''}
           </tr>
         </thead>
@@ -13227,13 +13228,14 @@ function epExecTable() {
               ${todayCell}
               ${visitsCell}
               <td class="r">${epFmtN(r.agency_count)}</td>
-              <td class="r" style="font-weight:600">${epFmtN(r.total_supply)}</td>
+              <td class="r" style="font-weight:600" title="${epFmtN(r.total_supply)} copies over the period">${epFmtN(r.avg_supply != null ? r.avg_supply : r.total_supply)}</td>
               <td class="r" style="color:${epPctColor(r.collection_pct)};font-weight:700">${epPct(r.collection_pct)}</td>
-              <td class="r" style="color:var(--red);font-weight:600">${epFmtC(r.total_outstanding)}</td>
+              <td class="r" style="color:var(--muted);font-weight:600">${epFmtC(r.total_outstanding)}</td>
+              <td class="r" style="color:var(--red);font-weight:700">${epFmtC(r.overdue)}</td>
               ${epMsAvail ? (() => { const m = _ems.by_exec[r.executive_code]; return `<td class="r" title="${m ? `${epFmtN(m.our_copies)} of ${epFmtN(m.total_mkt)} mkt copies · ${m.n || 0} agencies with data` : 'No competitor data'}">${_msPct(m ? m.share_pct : null)}</td>`; })() : ''}
             </tr>`;
           }).join('')}
-          ${!rows.length ? `<tr><td colspan="11" style="text-align:center;padding:24px;color:var(--muted)">No executives found for this period / filter</td></tr>` : ''}
+          ${!rows.length ? `<tr><td colspan="12" style="text-align:center;padding:24px;color:var(--muted)">No executives found for this period / filter</td></tr>` : ''}
         </tbody>
       </table>
     </div>
@@ -13489,11 +13491,31 @@ function epExecDetailView() {
   const agencyCovPct    = exec.agency_count > 0 ? Math.round(agenciesVisited / exec.agency_count * 100) : 0;
   const covColor        = agencyCovPct >= 80 ? 'var(--grn)' : agencyCovPct >= 50 ? '#d97706' : 'var(--red)';
 
+  /* Supply is copies per day, as everywhere else in the suite. A window total moved
+     with the length of the range and could not be compared against anything — 7,31,626
+     for a month says nothing until you divide it. The window total is kept underneath,
+     so nothing is lost.
+
+     Outstanding and Overdue sit side by side: the first is every rupee owed, the second
+     only what is actually late once this month's bill — collected across this month —
+     is set aside. */
+  const _odMonth = (() => { const m = /^(\d{4})-(\d{2})$/.exec(String(exec.overdue_excludes || ''));
+    if (!m) return ''; const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${M[Number(m[2]) - 1]} ${m[1]}`; })();
+  const _avgSup = exec.daily_supply != null ? exec.daily_supply : exec.total_supply;
   const kpis = `<div class="vz-kgrid" style="margin-bottom:12px">
-    ${vzKpi({ icon: '🏢', label: 'Agencies',        value: epFmtN(exec.agency_count),       status: 'info', sub: esc(exec.units || '') })}
-    ${vzKpi({ icon: '📦', label: 'Supply (Period)', value: epFmtN(exec.total_supply),        status: 'info', sub: `${esc(data.from)} – ${esc(data.to)}` })}
-    ${vzKpi({ icon: '₹',  label: 'Collection',      value: epFmtC(exec.total_collection),    status: 'good', sub: 'Period total' })}
-    ${vzKpi({ icon: '⚠',  label: 'Outstanding',     value: epFmtC(exec.total_outstanding),   status: pct >= 80 ? 'good' : pct >= 50 ? 'warn' : 'bad', sub: `${epPct(pct)} recovery rate` })}
+    ${vzKpi({ icon: '🏢', label: 'Agencies', value: epFmtN(exec.agency_count), status: 'info', sub: esc(exec.units || '') })}
+    ${vzKpi({ icon: '📦', label: 'Avg. Supply / day', value: epFmtN(_avgSup), status: 'info',
+      sub: `${epFmtN(exec.total_supply)} copies over ${esc(data.from)} – ${esc(data.to)}` })}
+    ${vzKpi({ icon: '₹',  label: 'Collection', value: epFmtC(exec.total_collection), status: 'good',
+      sub: exec.total_billed ? `of ${epFmtC(exec.total_billed)} billed · ${epPct(pct)} recovered` : 'Period total' })}
+    ${vzKpi({ icon: '🧾', label: 'Bill Amount', value: epFmtC(exec.total_billed), status: 'info',
+      sub: 'Raised in this period' })}
+    ${vzKpi({ icon: '⚠',  label: 'Outstanding', value: epFmtC(exec.total_outstanding),
+      status: pct >= 80 ? 'good' : pct >= 50 ? 'warn' : 'bad', sub: 'Total dues on the ledger' })}
+    ${vzKpi({ icon: '⏰', label: 'Overdue', value: epFmtC(exec.total_overdue),
+      status: (exec.total_overdue || 0) > 0 ? 'bad' : 'good',
+      sub: _odMonth ? `${_odMonth} bill excluded — not yet due` : 'Last month\'s bill excluded' })}
   </div>`;
 
   // Field Activity Intelligence card
@@ -13531,7 +13553,7 @@ function epExecDetailView() {
   const agTable = `<div class="card" style="overflow:hidden">
     <div style="padding:12px 16px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;gap:8px">
       <div style="font-weight:700;font-size:13px">Agencies (${agencies.length})</div>
-      <div style="font-size:10.5px;color:var(--muted)">Visits = field visits in selected period · Click row for agency detail</div>
+      <div style="font-size:10.5px;color:var(--muted)">Visits = field visits in the selected period, 0 means none were recorded · Avg. Supply = copies per supplying day · Overdue excludes this month's bill · Click a row for agency detail</div>
     </div>
     <div style="overflow-x:auto">
       <table>
@@ -13542,9 +13564,12 @@ function epExecDetailView() {
             <th>City</th>
             <th class="r" style="white-space:nowrap">Visits</th>
             <th class="r" style="white-space:nowrap">Last Visit</th>
-            <th class="r">Supply</th>
+            <th class="r" style="white-space:nowrap">Avg. Supply</th>
+            <th class="r" style="white-space:nowrap">Bill Amt</th>
+            <th class="r" style="white-space:nowrap">Collection</th>
             <th class="r">Coll %</th>
             <th class="r">Outstanding</th>
+            <th class="r">Overdue</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -13561,15 +13586,18 @@ function epExecDetailView() {
                 <div style="font-size:10.5px;color:var(--muted)">${esc(a.ag_type_name || '')} · ${esc(a.ag_code)}</div>
               </td>
               <td style="font-size:11.5px;color:var(--muted)">${esc(a.city_name || '—')}</td>
-              <td class="r" style="font-weight:700;color:${visitColor}">${a.visit_count || (a.status === 'Active' ? '0' : '—')}</td>
+              <td class="r" style="font-weight:700;color:${visitColor}" title="Field visits recorded in the selected period">${a.visit_count || 0}</td>
               <td class="r" style="font-size:11px">${lastVisitText}</td>
-              <td class="r" style="font-weight:600">${epFmtN(a.total_supply)}</td>
+              <td class="r" style="font-weight:600" title="${epFmtN(a.total_supply)} copies over ${a.supply_days || 0} supplying days">${epFmtN(a.avg_supply != null ? a.avg_supply : a.total_supply)}</td>
+              <td class="r" style="font-size:11.5px;color:var(--muted)">${a.billed ? epFmtC(a.billed) : '—'}</td>
+              <td class="r" style="font-weight:600">${epFmtC(a.net_receipt != null ? a.net_receipt : a.total_collection)}</td>
               <td class="r" style="color:${epPctColor(a.collection_pct)};font-weight:700">${epPct(a.collection_pct)}</td>
-              <td class="r" style="color:var(--red);font-weight:600">${epFmtC(a.total_outstanding)}</td>
+              <td class="r" style="color:var(--muted);font-weight:600">${epFmtC(a.total_outstanding)}</td>
+              <td class="r" style="color:var(--red);font-weight:700">${epFmtC(a.overdue)}</td>
               <td><span class="chip ${a.status === 'Active' ? 'good' : a.status === 'Suspended' ? 'crit' : 'warn'}" style="font-size:9.5px">${esc(a.status)}</span></td>
             </tr>`;
           }).join('')}
-          ${!agencies.length ? `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--muted)">No agencies found</td></tr>` : ''}
+          ${!agencies.length ? `<tr><td colspan="12" style="text-align:center;padding:24px;color:var(--muted)">No agencies found</td></tr>` : ''}
         </tbody>
       </table>
     </div>
@@ -13623,7 +13651,7 @@ function epAgencyDetailView() {
   </div>`;
 
   const kpis = `<div class="vz-kgrid" style="margin-bottom:16px">
-    ${vzKpi({ icon: '📦', label: 'Supply (Period)',   value: epFmtN(m.total_supply),       status: 'info', sub: `Avg ${epFmtN(m.avg_daily_supply)} copies/day` })}
+    ${vzKpi({ icon: '📦', label: 'Avg. Supply / day',   value: epFmtN(m.avg_daily_supply),   status: 'info', sub: `${epFmtN(m.total_supply)} copies over ${epFmtN(m.supply_days)} supplying days` })}
     ${vzKpi({ icon: '₹',  label: 'Collection',        value: epFmtC(m.total_collection),   status: 'good', sub: `${epFmtN(m.txn_count)} txn · Last: ${m.last_coll_date || '—'}` })}
     ${vzKpi({ icon: '📊', label: 'Recovery %',        value: epPct(pct),                   status: pct >= 80 ? 'good' : pct >= 50 ? 'warn' : 'bad', sub: 'collection ÷ (collection + outstanding)' })}
     ${vzKpi({ icon: '⚠',  label: 'Outstanding (Net)', value: epFmtC(m.total_outstanding),  status: m.total_outstanding > 0 ? 'bad' : 'good', sub: `Bill: ${epFmtC(m.bill_amt)} · Rec: ${epFmtC(m.rec_amt)}` })}
