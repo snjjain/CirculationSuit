@@ -25,6 +25,14 @@
  */
 
 module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
+  /* One definition of recovery for the whole suite — see api/collection_basis.js.
+     The state cards used to answer a different question from the state page they link
+     to: the card summed agency_collection, which is banked cash only, while the page
+     below it reported the ERP's net receipt (rec_amt + other_cr) telescoped across the
+     range's own snapshots. Rajasthan read ₹3.97 Cr / 70% on the card and ₹4.97 Cr /
+     87.6% on its own dashboard, for the same month. Banked cash is still carried, as
+     collection_cash, because it is a real figure — just a narrower one. */
+  const { basis: collBasis } = require('./collection_basis')({ q });
   /* The caller's own rights, as a hard ceiling on every figure this file returns.
      null means unrestricted (level 1 / admin); an array is the exact set of units.
 
@@ -478,25 +486,36 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
        Closed branches are dropped here too. The drill-down already excludes them, so
        leaving them in nationally would reintroduce the same disagreement the moment a
        range reaches back to when they still supplied. */
-    /* Rounded once per BRANCH and then added, which is what the drill-down does, so a
-       state card and the branch list under it are the same arithmetic and not merely
-       close. Rounding per branch is safe now only because the divisor is shared; it was
-       the divisor, not the rounding, that put the two screens 16,382 copies apart. */
+    /* A branch is averaged over ITS OWN publishing days, and a state is the sum of its
+       branches. That is the figure the ERP reports — July hawker for Jaipur comes to
+       360,248 against the ERP's 360,239 on the branch's own days — and it is the only
+       rule under which the Rajasthan card, the Rajasthan page and the Jaipur page
+       underneath it can all show one number.
+
+       A shared state-wide divisor was tried and is wrong twice over. Kota and Udaipur
+       published on 16 August and the other six Rajasthan branches did not, so the state
+       window is 31 days while most branches ran 30; dividing all of them by 31 charged
+       six branches for a day they never printed and moved Rajasthan cash from 5,91,304
+       to 5,75,388. It also split Jaipur in two — 3,47,086 in the state's branch list
+       against 3,58,655 on Jaipur's own page, the same copies over a different divisor.
+
+       Inside a unit the rule inverts: agencies and centre incharges divide by the UNIT's
+       days, never their own. A centre changing incharge mid-month otherwise appears
+       under both codes, each averaged over its own short window, which double-counted
+       the centre and overstated cash sale by 17.8%. Units do not change hands, so they
+       carry no equivalent risk. */
     const roll = rows => {
-      const byUnit = {}, days = {};
+      const tot = {}, days = {};                    // unit -> copies / set of dates
       rows.forEach(r => {
         if (CLOSED_UNITS.has(r.unit)) return;
-        const st = bucketOf(home[r.unit]?.st);
-        (byUnit[st] || (byUnit[st] = {}));
-        byUnit[st][r.unit] = (byUnit[st][r.unit] || 0) + N(r.tot);
-        (days[st] || (days[st] = new Set())).add(String(r.d));
+        tot[r.unit] = (tot[r.unit] || 0) + N(r.tot);
+        (days[r.unit] || (days[r.unit] = new Set())).add(String(r.d));
       });
       const out = blank();
-      Object.keys(out).forEach(st => {
-        const n = days[st] ? days[st].size : 0;
-        out[st] = (n > 0 && byUnit[st])
-          ? Object.values(byUnit[st]).reduce((a, t) => a + Math.round(t / n), 0)
-          : 0;
+      Object.keys(tot).forEach(unit => {
+        const n = days[unit].size;
+        if (!n) return;
+        out[bucketOf(home[unit]?.st)] += Math.round(tot[unit] / n);
       });
       return out;
     };
@@ -598,11 +617,28 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
       })(),
     ]);
     const mk = () => blank();
-    const out = { mtd: mk(), prevDay: mk(), ytd: mk(), lyYtd: mk(), billing: mk(), txn: mk(), agencies: mk() };
+    const out = { mtd: mk(), prevDay: mk(), ytd: mk(), lyYtd: mk(), billing: mk(), txn: mk(),
+                  agencies: mk(), cash: mk(), recovery: mk() };
     // Declared before every use below; a unit's home state keys all of these.
     const homeSt = await unitHomeState();
     const stOf = u => bucketOf(homeSt[u]?.st);
-    mtd.rows.forEach(r => { const b = stOf(r.unit); out.mtd[b] += N(r.amt); out.txn[b] += N(r.txn); out.agencies[b] += N(r.agencies); });
+
+    /* The ERP's own net receipt, per unit, bucketed to the unit's home state — the same
+       figure and the same telescoping the state page and Executive Performance use, so
+       a card and the page it opens can no longer disagree. */
+    const rec = await collBasis({ from: win.from, to: win.to,
+                                  unitCodes: Array.isArray(unitScope) ? unitScope
+                                           : (unitScope ? [unitScope] : undefined),
+                                  groupBy: 'unit' });
+    rec.by.forEach((e, unit) => { out.recovery[stOf(unit)] += N(e.net_receipt); });
+    out.recovery_known  = rec.known;
+    out.recovery_months = rec.months_used;
+
+    mtd.rows.forEach(r => { const b = stOf(r.unit); out.cash[b] += N(r.amt); out.txn[b] += N(r.txn); out.agencies[b] += N(r.agencies); });
+    /* mtd stays the headline collection, but it is now the ledger recovery wherever the
+       snapshots allow it and banked cash only as a fallback — exactly the precedence
+       the branch rows already applied. */
+    STATES.forEach(s => { out.mtd[s.key] = rec.known ? out.recovery[s.key] : out.cash[s.key]; });
     prevDay.rows.forEach(r => { out.prevDay[stOf(r.unit)] += N(r.amt); });
     ytd.rows.forEach(r => { out.ytd[stOf(r.unit)] += N(r.amt); });
     lyYtd.rows.forEach(r => { out.lyYtd[stOf(r.unit)] += N(r.amt); });
@@ -825,6 +861,9 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
           },
           collection: {
             current: mtd, prev_month_billing: billing, collection_pct: r1(collPct),
+            // Banked cash kept alongside the ledger recovery so the two are never
+            // mistaken for each other — the same pairing the branch rows carry.
+            collection_cash: col.cash[k], recovery_known: col.recovery_known,
             gap: billing == null ? null : billing - mtd, previous_day: col.prevDay[k],
             ytd: col.ytd[k], last_year_ytd: col.lyYtd[k], ytd_growth_pct: r1(pct(col.ytd[k], col.lyYtd[k])),
             txn: col.txn[k], agencies_paid: col.agencies[k], prev_month_label: col.prev_month_label,
@@ -1059,16 +1098,27 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
              WHERE s.supply_date BETWEEN ? AND ? AND s.unit_code IN (${IN})
                AND s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')
              GROUP BY s.unit_code, s.agcd`, [from, to, ...codes]);
-          /* Copies per day must divide by the DAYS IN THE WINDOW, not by the days each
-             agency happened to supply. Dividing per-group inflates the total: an agency
-             that lifted on 3 days of a month reports its 3-day average as if it ran all
-             month, and the state total is the sum of those. Scope-wide divisor keeps
-             sum(group averages) equal to (total copies / days), which is what "average
-             daily supply" means. */
+          /* Per UNIT, not per agency and not across the whole state.
+
+             Per agency is wrong: one that lifted on 3 days of a month would report its
+             3-day rate as if it had run all month, and the branch total is the sum of
+             those.
+
+             State-wide is also wrong, and was the live bug: Kota and Udaipur published
+             on 16 August when the other six Rajasthan branches did not, so a single
+             state divisor of 31 charged those six for a day they never printed. Jaipur
+             then read 3,47,086 in this list and 3,58,655 on its own page — the same
+             copies over a different divisor — and the state drifted off the ERP.
+
+             A unit's own publishing days is what the ERP averages over, and every agency
+             inside a unit shares that unit's divisor, so a mid-month start still cannot
+             inflate anything. */
           const windowDays = (from, to) => q(
-            `SELECT COUNT(DISTINCT s.supply_date) d FROM supply_data s FORCE INDEX (idx_sd_cover_range)
+            `SELECT s.unit_code, COUNT(DISTINCT s.supply_date) d
+             FROM supply_data s FORCE INDEX (idx_sd_cover_range)
              WHERE s.supply_date BETWEEN ? AND ? AND s.unit_code IN (${IN})
-               AND s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')`,
+               AND s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')
+             GROUP BY s.unit_code`,
             [from, to, ...codes]);
           const [cur, prv, credit, curD, prvD] = await Promise.all([
             scan(win.from, win.to),
@@ -1086,8 +1136,8 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
             windowDays(win.from, win.to),
             windowDays(prevWin.from, prevWin.to),
           ]);
-          const curDays = N(curD.rows[0] && curD.rows[0].d) || 0;
-          const prvDays = N(prvD.rows[0] && prvD.rows[0].d) || 0;
+          const dayMap = rs => { const m = {}; rs.forEach(r => { m[r.unit_code] = N(r.d); }); return m; };
+          const curDays = dayMap(curD.rows), prvDays = dayMap(prvD.rows);
           const isCredit = new Set(credit.rows.map(r => `${r.unit}|${r.agcd}`));
           const merged = new Map();
           const put = (rows, prefix) => rows.forEach(r => {
@@ -1099,7 +1149,7 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
             });
             const m = merged.get(k);
             m[`${prefix}_total`] = N(r.total);
-            m[`${prefix}_days`]  = prefix === 'cur' ? curDays : prvDays;
+            m[`${prefix}_days`]  = (prefix === 'cur' ? curDays : prvDays)[r.unit_code] || 0;
           });
           put(cur.rows, 'cur');
           put(prv.rows, 'prv');
@@ -1107,25 +1157,56 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
         })(),
         // Cash (city) supply — same split, for the same reason.
         (async () => {
+          /* Keyed by CENTRE, not by whoever was stamped on the row at the time.
+
+             hawker_supply carries center_incharge per row, so a handover moves a
+             centre's copies from one code to another mid-window. Comparing a person's
+             two windows then compares two different sets of centres: GAJENDRA SHEKHAWAT
+             showed +7503.2% and PRAMOD SINGH +51053.8%, which is not growth, it is a
+             transfer against a near-zero base. Management's instruction was to compare
+             the centre, because incharges change and centres do not.
+
+             Both windows are therefore attributed to the incharge holding the centre
+             NOW, so a row reads "how are the centres this person runs today doing
+             against the same centres last year". Centres that have since closed keep
+             their previous holder, so nobody's history silently disappears and the
+             previous-window total still adds up. */
           const scan = (from, to) => q(
-            // center_incharge_name is not in the covering index, so it is looked up
-            // separately below rather than dragging every row into this scan.
-            `SELECT loc_id unit_code, center_incharge,
-                    SUM(sup_copies) total, COUNT(DISTINCT supply_date) days
+            `SELECT loc_id unit_code, hwk_cent_code cent, SUM(sup_copies) total
              FROM hawker_supply FORCE INDEX (idx_hs_cover_range)
              WHERE supply_date BETWEEN ? AND ? AND loc_id IN (${IN})
-             GROUP BY loc_id, center_incharge`, [from, to, ...codes]);
-          /* Same scope-wide divisor as agent supply, and it matters far more here: a
-             centre changing hands mid-month splits its days across two incharge codes,
-             so per-group averaging counted the same centre twice — once at each
-             incharge's short-window rate. That overstated cash sale by 17.8%. */
+             GROUP BY loc_id, hwk_cent_code`, [from, to, ...codes]);
+          // Who holds each centre on its most recent supplying day of a window.
+          const holders = (from, to) => q(
+            `SELECT h.loc_id unit_code, h.hwk_cent_code cent, h.center_incharge ci,
+                    MAX(h.center_incharge_name) ci_name
+             FROM hawker_supply h
+             JOIN (SELECT loc_id, hwk_cent_code, MAX(supply_date) d
+                     FROM hawker_supply
+                    WHERE supply_date BETWEEN ? AND ? AND loc_id IN (${IN})
+                    GROUP BY loc_id, hwk_cent_code) x
+               ON x.loc_id = h.loc_id AND x.hwk_cent_code = h.hwk_cent_code
+              AND x.d = h.supply_date
+             WHERE h.supply_date BETWEEN ? AND ? AND h.loc_id IN (${IN})
+             GROUP BY h.loc_id, h.hwk_cent_code, h.center_incharge`,
+            [from, to, ...codes, from, to, ...codes]);
+          /* Per unit, same as agent supply, and the per-UNIT part matters far more here:
+             a centre changing hands mid-month splits its days across two incharge codes,
+             so averaging per incharge counted the same centre twice — once at each
+             incharge's short-window rate — and overstated cash sale by 17.8%. Every
+             incharge in a branch divides by the branch's days, which removes that
+             entirely while still letting each branch keep its own calendar. */
           const windowDays = (from, to) => q(
-            `SELECT COUNT(DISTINCT supply_date) d FROM hawker_supply FORCE INDEX (idx_hs_cover_range)
-             WHERE supply_date BETWEEN ? AND ? AND loc_id IN (${IN})`, [from, to, ...codes]);
+            `SELECT loc_id unit_code, COUNT(DISTINCT supply_date) d
+             FROM hawker_supply FORCE INDEX (idx_hs_cover_range)
+             WHERE supply_date BETWEEN ? AND ? AND loc_id IN (${IN})
+             GROUP BY loc_id`, [from, to, ...codes]);
           // Centre and hawker counts are a point-in-time headcount, not a range total.
-          const [cur, prv, today, curD, prvD] = await Promise.all([
+          const [cur, prv, holdCur, holdPrv, today, curD, prvD] = await Promise.all([
             scan(supWin.from, supWin.to),
             scan(prevWin.from, prevWin.to),
+            holders(supWin.from, supWin.to),
+            holders(prevWin.from, prevWin.to),
             q(`SELECT loc_id unit_code, center_incharge,
                       MAX(center_incharge_name) center_incharge_name,
                       COUNT(DISTINCT hwk_cent_code) centres,
@@ -1137,23 +1218,38 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
             windowDays(supWin.from, supWin.to),
             windowDays(prevWin.from, prevWin.to),
           ]);
-          const curDays = N(curD.rows[0] && curD.rows[0].d) || 0;
-          const prvDays = N(prvD.rows[0] && prvD.rows[0].d) || 0;
+          const dayMap = rs => { const m = {}; rs.forEach(r => { m[r.unit_code] = N(r.d); }); return m; };
+          const curDays = dayMap(curD.rows), prvDays = dayMap(prvD.rows);
+
+          // centre -> the incharge it belongs to for BOTH windows: today's holder where
+          // the centre still runs, its last holder where it has since stopped.
+          const centKey = r => `${r.unit_code}|${r.cent || ''}`;
+          const owner = new Map(), ownerName = new Map();
+          holdPrv.rows.forEach(r => { owner.set(centKey(r), r.ci || ''); if (r.ci_name) ownerName.set(r.ci || '', r.ci_name); });
+          holdCur.rows.forEach(r => { owner.set(centKey(r), r.ci || ''); if (r.ci_name) ownerName.set(r.ci || '', r.ci_name); });
+
           const merged = new Map();
-          const key = r => `${r.unit_code}|${r.center_incharge || ''}`;
-          const seed = r => {
-            if (!merged.has(key(r))) merged.set(key(r), {
-              unit_code: r.unit_code, center_incharge: r.center_incharge,
-              center_incharge_name: null, cur_total: 0, cur_days: 0,
-              prv_total: 0, prv_days: 0, centres: 0, hawkers: 0, cent_name: null,
+          const seedCi = (unit, ci) => {
+            const k = `${unit}|${ci || ''}`;
+            if (!merged.has(k)) merged.set(k, {
+              unit_code: unit, center_incharge: ci || '',
+              center_incharge_name: ownerName.get(ci || '') || null,
+              cur_total: 0, cur_days: 0, prv_total: 0, prv_days: 0,
+              centres: 0, hawkers: 0, cent_name: null,
             });
-            return merged.get(key(r));
+            return merged.get(k);
           };
-          cur.rows.forEach(r => { const m = seed(r); m.cur_total = N(r.total); m.cur_days = curDays; });
-          prv.rows.forEach(r => { const m = seed(r); m.prv_total = N(r.total); m.prv_days = prvDays; });
-          today.rows.forEach(r => { const m = seed(r); m.centres = N(r.centres);
-            m.hawkers = N(r.hawkers); m.cent_name = r.cent_name;
-            m.center_incharge_name = r.center_incharge_name; });
+          cur.rows.forEach(r => {
+            const m = seedCi(r.unit_code, owner.get(centKey(r)));
+            m.cur_total += N(r.total); m.cur_days = curDays[r.unit_code] || 0;
+          });
+          prv.rows.forEach(r => {
+            const m = seedCi(r.unit_code, owner.get(centKey(r)));
+            m.prv_total += N(r.total); m.prv_days = prvDays[r.unit_code] || 0;
+          });
+          today.rows.forEach(r => { const m = seedCi(r.unit_code, r.center_incharge);
+            m.centres = N(r.centres); m.hawkers = N(r.hawkers); m.cent_name = r.cent_name;
+            if (r.center_incharge_name) m.center_incharge_name = r.center_incharge_name; });
           return { rows: [...merged.values()] };
         })(),
         q(`SELECT unit_code, ag_code, -COALESCE(SUM(amount),0) amt, COUNT(*) txn
