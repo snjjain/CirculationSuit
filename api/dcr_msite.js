@@ -186,7 +186,7 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       ['assigned_by', 'VARCHAR(20)'], ['assigned_by_name', 'VARCHAR(200)'],
       ['approved_by', 'VARCHAR(20)'], ['approved_by_name', 'VARCHAR(200)'],
       ['approved_at', 'DATETIME'], ['reject_reason', 'VARCHAR(500)'],
-      ['seq_no', 'INT'], ['expected_recovery', 'DECIMAL(14,2)'],
+      ['seq_no', 'INT'], ['expected_recovery', 'DECIMAL(14,2)'], ['growth_target', 'INT'],
       ['outstanding_snap', 'DECIMAL(14,2)'], ['visit_id', 'BIGINT'],
       ['staff_emp_code', 'VARCHAR(30)'],
     ]) await add('dcr_tour_plan', c, d);
@@ -966,6 +966,197 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
+  /* The approval board: one row per planned STOP, for the whole downline.
+
+     /tour/pending groups by person and date and returns a count — enough for a phone
+     notification, not enough to decide on. An approver asked to sign off a visit needs
+     to see where it goes, why, what it is expected to achieve and what the competition
+     is doing there. Shakir Khan's plan sat in 'submitted' with no screen anywhere that
+     could approve it.
+
+     Everything beyond the plan itself is joined, not copied: the district and station
+     from agency_master, the competitor's copies from the latest competitor_data period,
+     the balance from the outstanding ledger. A plan is a small record; the context
+     around it belongs to the agency and must not be frozen into the plan row.
+
+     Scope is subordinates(), the same recursive downline the mobile approval uses, so a
+     Zonal Head sees the Circulation Incharges, Dak Incharges and executives beneath him
+     and nobody else's team. */
+  app.get('/api/dcr-m/tour/board', async (req, res) => {
+    try {
+      /* Admin is not a person in hierarchy_master and has no downline, but must still be
+         able to see the board — otherwise the one account that can diagnose a stuck
+         approval is the one account locked out of the screen. Admin sees every plan in
+         scope and decides as themselves. */
+      const isAdmin = !!(req.auth && req.auth.isAdmin);
+      const staff = await staffOf(req);
+      if (!staff && !isAdmin) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const units = await scopeUnits(req);
+      const team = staff ? await subordinates(staff, units) : [];
+      if (!team.length && !isAdmin) return res.json({ rows: [], units: [], team_size: 0 });
+
+      const codes = team.map(t => t.person_code);
+      const lvlOf  = new Map(team.map(t => [t.person_code, Number(t.hierarchy_level)]));
+      const anyone = isAdmin && !codes.length;      // admin with no downline of their own
+      const status = ['submitted', 'approved', 'rejected', 'all'].includes(String(req.query.status || ''))
+        ? String(req.query.status) : 'submitted';
+      const unit = S(req.query.unit_code, 8) || null;
+
+      const where = anyone ? ['1=1'] : [`p.staff_person_code IN (${codes.map(() => '?').join(',')})`];
+      const args = anyone ? [] : [...codes];
+      if (anyone && Array.isArray(units) && units.length) {
+        where.push(`p.unit_code IN (${units.map(() => '?').join(',')})`); args.push(...units);
+      }
+      if (status !== 'all') { where.push('p.status = ?'); args.push(status); }
+      if (unit) { where.push('p.unit_code = ?'); args.push(unit); }
+      // Deliberately keeps past dates: a decision that was owed does not stop being owed
+      // at midnight, and dropping it would hide the backlog.
+      where.push('p.tour_date >= DATE_SUB(CURDATE(), INTERVAL 45 DAY)');
+
+      const { rows } = await q(
+        `SELECT p.id, p.tour_date, p.staff_person_code, p.staff_name, p.unit_code,
+                p.target_type, p.target_code, p.target_name, p.visit_time, p.purpose,
+                p.description, p.status, p.seq_no, p.growth_target, p.expected_recovery,
+                p.outstanding_snap, p.created_at, p.assigned_by_name,
+                p.approved_by_name, p.approved_at, p.reject_reason
+           FROM dcr_tour_plan p
+          WHERE ${where.join(' AND ')}
+          ORDER BY p.tour_date, p.staff_name, COALESCE(p.seq_no, 999)
+          LIMIT 500`, args);
+
+      // ── Context joined on, never copied into the plan row ──
+      const agKeys = [...new Set(rows.filter(r => r.target_code)
+        .map(r => `${r.unit_code}|${r.target_code}`))];
+      const agInfo = new Map(), compInfo = new Map(), osInfo = new Map();
+      if (agKeys.length) {
+        const pairs = agKeys.map(k => k.split('|'));
+        const ph = pairs.map(() => '(?,?)').join(',');
+        const flat = pairs.flat();
+        const { rows: am } = await q(
+          `SELECT unit, agcd, MAX(ag_name) ag_name, MAX(dist_name) dist_name,
+                  MAX(city_name) city_name, MAX(station_name) station_name
+             FROM agency_master WHERE (unit, agcd) IN (${ph}) GROUP BY unit, agcd`, flat);
+        am.forEach(r => agInfo.set(`${r.unit}|${r.agcd}`, r));
+
+        /* Latest period only. An older row is not "the competitor's copies", it is what
+           they were, and putting a stale figure in front of an approver is worse than
+           putting none. */
+        const { rows: cp } = await q(
+          `SELECT c.unit_code, c.agent_code,
+                  GREATEST(COALESCE(c.comp1_supply,0), COALESCE(c.comp2_supply,0),
+                           COALESCE(c.comp3_supply,0), COALESCE(c.comp4_supply,0),
+                           COALESCE(c.comp5_supply,0)) top_comp,
+                  COALESCE(c.comp1_supply,0) + COALESCE(c.comp2_supply,0) + COALESCE(c.comp3_supply,0)
+                  + COALESCE(c.comp4_supply,0) + COALESCE(c.comp5_supply,0) all_comp,
+                  c.our_supply, c.period
+             FROM competitor_data c
+             JOIN (SELECT unit_code, agent_code, MAX(period) mx FROM competitor_data
+                    WHERE comp_type = 'agency' GROUP BY unit_code, agent_code) l
+               ON l.unit_code = c.unit_code AND l.agent_code = c.agent_code AND l.mx = c.period
+            WHERE c.comp_type = 'agency' AND (c.unit_code, c.agent_code) IN (${ph})`, flat);
+        cp.forEach(r => compInfo.set(`${r.unit_code}|${r.agent_code}`, r));
+
+        const { rows: os } = await q(
+          `SELECT unit_code, ag_code, SUM(cl_amt) cl FROM agency_outstanding
+            WHERE period_label = 'CURRENT' AND (unit_code, ag_code) IN (${ph})
+            GROUP BY unit_code, ag_code`, flat);
+        os.forEach(r => osInfo.set(`${r.unit_code}|${r.ag_code}`, N(r.cl)));
+      }
+
+      const unitNames = {};
+      try {
+        const { rows: un } = await q(`SELECT unit_code, unit_name FROM units WHERE unit_name IS NOT NULL`);
+        un.forEach(r => { unitNames[r.unit_code] = r.unit_name; });
+      } catch (_) {}
+
+      const out = rows.map(r => {
+        const k = `${r.unit_code}|${r.target_code}`;
+        const a = agInfo.get(k) || {}, c = compInfo.get(k) || {};
+        return {
+          id: r.id, tour_date: r.tour_date, status: r.status,
+          person_code: r.staff_person_code, person_name: r.staff_name,
+          designation: LEVEL_ROLE[lvlOf.get(r.staff_person_code)] || null,
+          unit_code: r.unit_code, unit_name: unitNames[r.unit_code] || r.unit_code,
+          target_type: r.target_type, target_code: r.target_code,
+          agency_name: r.target_name || a.ag_name || null,
+          dist_name: a.dist_name || null,
+          station_name: a.station_name || a.city_name || null,
+          visit_time: r.visit_time,
+          reason: r.purpose || null,
+          remarks: r.description || null,
+          growth_target: r.growth_target == null ? null : N(r.growth_target),
+          expected_recovery: r.expected_recovery == null ? null : N(r.expected_recovery),
+          outstanding: osInfo.has(k) ? osInfo.get(k) : (r.outstanding_snap == null ? null : N(r.outstanding_snap)),
+          our_copies: c.our_supply == null ? null : N(c.our_supply),
+          competitor_copies: c.top_comp == null ? null : N(c.top_comp),
+          competitor_period: c.period || null,
+          assigned_by: r.assigned_by_name || null,
+          decided_by: r.approved_by_name || null,
+          decided_at: r.approved_at || null,
+          reject_reason: r.reject_reason || null,
+          overdue: String(r.tour_date) < today(),
+        };
+      });
+
+      /* The approver's OWN branches, from the scope the API enforces — not merely the
+         branches their team members happen to sit in. A Zonal Head covering Alwar and
+         Jaipur must be able to filter to Alwar even on a day when nobody there has
+         filed anything, or the dropdown quietly redefines his zone as wherever plans
+         exist. */
+      const unitSet = new Map();
+      (Array.isArray(units) ? units : []).forEach(u => unitSet.set(u, unitNames[u] || u));
+      team.forEach(t => { if (t.unit_code) unitSet.set(t.unit_code, unitNames[t.unit_code] || t.unit_code); });
+      out.forEach(r => { if (r.unit_code) unitSet.set(r.unit_code, r.unit_name); });
+      res.json({
+        rows: out, team_size: team.length, status,
+        approver: staff ? { person_code: staff.person_code, name: staff.name } : { person_code: 'ADMIN', name: 'Administrator' },
+        units: [...unitSet.entries()].map(([code, name]) => ({ unit_code: code, unit_name: name }))
+          .sort((a, b) => String(a.unit_name).localeCompare(String(b.unit_name))),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  /* Decide a set of stops by id, which is what a board with a tick box per row needs.
+     /tour/decide keys on person + date and cannot express "these three, not those two". */
+  app.post('/api/dcr-m/tour/decide-ids', async (req, res) => {
+    try {
+      const isAdmin2 = !!(req.auth && req.auth.isAdmin);
+      const staff = await staffOf(req) || (isAdmin2
+        ? { person_code: (req.auth && req.auth.personCode) || 'ADMIN', name: 'Administrator', level: 1 } : null);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const b = req.body || {};
+      const action = ['approve', 'reject'].includes(b.action) ? b.action : null;
+      if (!action) return res.status(400).json({ detail: 'action must be approve or reject' });
+      if (action === 'reject' && !S(b.reason, 500)) {
+        return res.status(400).json({ detail: 'A reason is required when rejecting a tour plan.' });
+      }
+      const ids = Array.isArray(b.ids) ? b.ids.map(Number).filter(Boolean) : [];
+      if (!ids.length) return res.status(400).json({ detail: 'Select at least one row.' });
+
+      /* Every id is re-checked against the caller's own downline. Ids come from the
+         browser, so a board row is a suggestion, not an authorisation. */
+      const units2 = await scopeUnits(req);
+      const team = staff ? await subordinates(staff, units2) : [];
+      const allowed = new Set(team.map(t => t.person_code));
+      const { rows: own } = await q(
+        `SELECT id, staff_person_code, unit_code FROM dcr_tour_plan WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+      // Admin decides on anything inside the branches they may read; everyone else only
+      // on their own downline.
+      const inScope = r => !units2 || !units2.length || units2.includes(r.unit_code);
+      const ok = own.filter(r => allowed.has(r.staff_person_code) || (isAdmin2 && inScope(r))).map(r => r.id);
+      if (!ok.length) return res.status(403).json({ detail: 'None of those plans belong to your team.' });
+
+      const r = await q(
+        `UPDATE dcr_tour_plan
+            SET status = ?, approved_by = ?, approved_by_name = ?, approved_at = NOW(), reject_reason = ?
+          WHERE id IN (${ok.map(() => '?').join(',')}) AND status = 'submitted'`,
+        [action === 'approve' ? 'approved' : 'rejected', staff.person_code, staff.name,
+         action === 'reject' ? S(b.reason, 500) : null, ...ok]);
+      const affected = N((r && r.rows && r.rows.affectedRows) || 0);
+      res.json({ ok: true, action, affected, skipped: ids.length - affected, by: staff.name });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
   /* Reschedule / cancel a planned stop. A plan an executive cannot change is one they
      work around — the visit still happens, the record does not, and the day's numbers
      stop matching reality. Moving keeps the approval (the incharge agreed to the visit,
@@ -1071,9 +1262,29 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
      Depth is capped because reporting_to is free-form data and a cycle would otherwise
      spin forever. */
   const DOWNLINE_MAX_DEPTH = 6;
+  const SUB_LEVEL_COL = { 2: 'edtn_incharge_code', 3: 'circ_incharge_code',
+                          4: 'zonal_head_code', 5: 'vp_circulation_code' };
+
+  /* Everyone below this person, from BOTH records of the hierarchy.
+
+     hierarchy_master.reporting_to is a chain of individuals; hierarchy_mapping names,
+     per executive, who their Dak incharge, Circulation incharge, Zonal Head and VP are.
+     The two disagree, and relying on the chain alone left real approvers with an empty
+     board: Ankit Bihari Sharma reports to Neeraj Jain (121), who is INACTIVE and whose
+     own reporting_to points past the zone, so the Zonal Head's recursive walk returned
+     nobody at all while the mapping named him over every Jaipur executive.
+
+     Taking the union is not a workaround for one bad row — the two tables are maintained
+     separately in the ERP and will drift again. A person is a subordinate if either
+     record says so, which fails towards someone being able to approve their team's
+     plans rather than towards nobody being able to. Scope is still intersected with the
+     caller's own branches, so a wider downline cannot widen what they may read. */
   async function subordinates(staff, units) {
     if (!staff.person_code) return [];
-    const { rows } = await q(
+    const uCl = units && units.length ? `AND unit_code IN (${units.map(() => '?').join(',')})` : '';
+    const uP  = units && units.length ? units : [];
+
+    const chain = q(
       `WITH RECURSIVE dl AS (
          SELECT person_code, person_name, employee_code, unit_code,
                 hierarchy_level, is_active, 0 AS depth
@@ -1088,10 +1299,34 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
        SELECT DISTINCT person_code, person_name, employee_code, unit_code, hierarchy_level
          FROM dl
         WHERE is_active = 1 AND person_code <> ?
-       ${units && units.length ? `AND unit_code IN (${units.map(() => '?').join(',')})` : ''}
+       ${uCl}
         ORDER BY hierarchy_level, person_name`,
-      [staff.person_code, staff.person_code, ...(units && units.length ? units : [])]);
-    return rows;
+      [staff.person_code, staff.person_code, ...uP]);
+
+    /* The mapping side. A Zonal Head owns the executives his column names AND the
+       incharges sitting between them, which is why the incharge codes on those same
+       rows are pulled in as people too. */
+    const col = SUB_LEVEL_COL[Number(staff.level != null ? staff.level : staff.hierarchy_level)];
+    const mapped = col ? q(
+      `SELECT DISTINCT hm.person_code, hm.person_name, hm.employee_code,
+              hm.unit_code, hm.hierarchy_level
+         FROM hierarchy_master hm
+         JOIN (SELECT exec_code AS c FROM hierarchy_mapping WHERE ${col} = ?
+               UNION SELECT edtn_incharge_code FROM hierarchy_mapping WHERE ${col} = ?
+               UNION SELECT circ_incharge_code FROM hierarchy_mapping WHERE ${col} = ?
+               UNION SELECT zonal_head_code    FROM hierarchy_mapping WHERE ${col} = ?) m
+           ON m.c = hm.person_code
+        WHERE hm.is_active = 1 AND hm.person_code <> ?
+        ${uCl}`,
+      [staff.person_code, staff.person_code, staff.person_code, staff.person_code,
+       staff.person_code, ...uP]) : Promise.resolve({ rows: [] });
+
+    const [a, b] = await Promise.all([chain, mapped]);
+    const seen = new Map();
+    [...a.rows, ...b.rows].forEach(r => { if (r.person_code && !seen.has(r.person_code)) seen.set(r.person_code, r); });
+    return [...seen.values()].sort((x, y) =>
+      (Number(x.hierarchy_level) - Number(y.hierarchy_level)) ||
+      String(x.person_name || '').localeCompare(String(y.person_name || '')));
   }
 
   /* Where a plan goes for approval: the nearest ACTIVE manager above the planner.

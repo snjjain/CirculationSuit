@@ -10,6 +10,7 @@ const DASH_MENU = [
   ["outstanding",      "Outstanding",                 "💰"],
   ["exec_perf",        "Executive Performance",       "👤"],
   ["dcr_analytics",    "DCR - Field Visit Analysis",  "📍"],
+  ["tour_approvals",   "Tour Approvals",              "✅"],
   ["agency_rating",    "Agency Rating Engine",        "⭐"],
   // "short_payment" is deliberately NOT listed here — it lives as a tab inside the
   // Collections dashboard, which renders the very same VIEWS.short_payment via
@@ -28,7 +29,7 @@ const DASH_MENU = [
 const DASH_SECTIONS = [
   ["⌂ Dashboard",             ["command", "ai_nexus"]],
   ["◈ Business Intelligence", ["supply_dash", "collections", "outstanding", "agency_rating"]],
-  ["◉ Field & Performance",   ["exec_perf", "dcr_analytics", "survey_dash", "transport"]],
+  ["◉ Field & Performance",   ["exec_perf", "dcr_analytics", "tour_approvals", "survey_dash", "transport"]],
 ];
 
 // Admin-gated screens — visible only to isAdmin users (see [[project auth]]).
@@ -7472,6 +7473,163 @@ function _csCcData(st) {
 }
 
 
+
+/* ══════════════════ Tour Approval board ══════════════════
+   A tour plan an approver cannot see is a tour plan nobody approves. The workflow and
+   the decide endpoint already existed, but only inside the mobile app — so Shakir Khan's
+   plan sat in 'submitted' with no screen a Dak Incharge, Circulation Incharge or Zonal
+   Head could act on from the dashboard.
+
+   One row per planned stop, because that is the unit of the decision: an approver may
+   want three of a day's five visits and not the other two. Every row carries where the
+   visit goes (agency, district, station), why (reason and remarks), what it is meant to
+   achieve (growth target, expected recovery, outstanding) and what the competition is
+   doing there — the things you would want in front of you before signing.
+
+   Scope comes from the server's own downline walk, never from the browser: the unit
+   dropdown lists only the approver's branches, and every id is re-checked against the
+   downline when the decision is posted. */
+function _taState() {
+  return S.tourAppr || (S.tourAppr = {
+    data: null, _loading: false, _key: '', unit: '', status: 'submitted',
+    sel: {}, busy: false, msg: null, err: null,
+  });
+}
+function _taLoad() {
+  const st = _taState();
+  const key = `${st.unit}|${st.status}`;
+  if (st._key === key && st.data) return;
+  if (st._loading === key) return;
+  st._loading = key;
+  const p = new URLSearchParams({ status: st.status });
+  if (st.unit) p.set('unit_code', st.unit);
+  fetch(`${location.origin}/api/dcr-m/tour/board?${p}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { if (st._loading !== key) return;
+      st.data = d && d.detail ? { _err: d.detail } : d; st._key = key; st._loading = null; render(); })
+    .catch(e => { if (st._loading !== key) return;
+      st.data = { _err: String(e && e.message || e) }; st._key = key; st._loading = null; render(); });
+}
+window.taSetUnit = v => { const st = _taState(); st.unit = v; st.data = null; st._key = ''; st.sel = {}; render(); };
+window.taSetStatus = v => { const st = _taState(); st.status = v; st.data = null; st._key = ''; st.sel = {}; render(); };
+window.taToggle = id => { const st = _taState(); st.sel[id] = !st.sel[id]; render(); };
+window.taToggleAll = on => {
+  const st = _taState(); const rows = (st.data && st.data.rows) || [];
+  rows.forEach(r => { if (r.status === 'submitted') st.sel[r.id] = !!on; });
+  render();
+};
+window.taDecide = async (action) => {
+  const st = _taState();
+  const ids = Object.keys(st.sel).filter(k => st.sel[k]).map(Number);
+  if (!ids.length) { st.err = 'Tick at least one row first.'; render(); return; }
+  let reason = null;
+  if (action === 'reject') {
+    // A rejection the planner cannot read is a dead end — the reason is what tells them
+    // what to change, so it is required here as well as on the server.
+    reason = window.prompt(`Reason for rejecting ${ids.length} tour${ids.length > 1 ? 's' : ''} — the planner will see this:`);
+    if (reason == null) return;
+    if (!String(reason).trim()) { st.err = 'A reason is required when rejecting.'; render(); return; }
+  }
+  st.busy = true; st.err = null; st.msg = null; render();
+  try {
+    const r = await fetch(`${location.origin}/api/dcr-m/tour/decide-ids`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ids, reason }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.detail) throw new Error(d.detail || 'Could not save the decision');
+    st.msg = `${d.affected} tour${d.affected === 1 ? '' : 's'} ${action === 'approve' ? 'approved' : 'rejected'}.`
+      + (d.skipped ? ` ${d.skipped} skipped — already decided.` : '');
+    st.sel = {}; st.data = null; st._key = '';
+  } catch (e) { st.err = String(e.message || e); }
+  st.busy = false; render();
+};
+
+VIEWS.tour_approvals = () => {
+  const st = _taState();
+  _taLoad();
+  const d = st.data;
+  const head = pagehead('Tour Approvals', 'Plans filed by your team — approve or reject with a reason');
+
+  if (!d) return head + `<div style="padding:26px;text-align:center;color:var(--muted);font-size:13px">Loading tour plans…</div>`;
+  if (d._err) return head + `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:16px;color:#b91c1c">
+    Could not load tour plans.<div style="font-size:11.5px;color:var(--muted);margin-top:4px">${esc(d._err)}</div></div>`;
+
+  const rows = d.rows || [];
+  const pend = rows.filter(r => r.status === 'submitted');
+  const selCount = Object.keys(st.sel).filter(k => st.sel[k]).length;
+
+  const sel = `<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+    <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Branch</div>
+      <select onchange="taSetUnit(this.value)" class="inp" style="min-width:200px;font-size:12.5px;padding:6px 10px">
+        <option value="">All my branches</option>
+        ${(d.units || []).map(u => `<option value="${esc(u.unit_code)}"${st.unit === u.unit_code ? ' selected' : ''}>${esc(u.unit_name)}</option>`).join('')}
+      </select></div>
+    <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Status</div>
+      <select onchange="taSetStatus(this.value)" class="inp" style="min-width:150px;font-size:12.5px;padding:6px 10px">
+        ${[['submitted', 'Awaiting approval'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']]
+          .map(([v, l]) => `<option value="${v}"${st.status === v ? ' selected' : ''}>${l}</option>`).join('')}
+      </select></div>
+    <div style="flex:1"></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      ${selCount ? `<span style="font-size:12px;color:var(--muted)">${selCount} selected</span>` : ''}
+      <button class="btn sm" ${st.busy || !selCount ? 'disabled' : ''} onclick="taDecide('reject')"
+        style="background:#fef2f2;color:#b91c1c;border-color:#fecaca">Reject…</button>
+      <button class="btn sm" ${st.busy || !selCount ? 'disabled' : ''} onclick="taDecide('approve')"
+        style="background:#16a34a;color:#fff;border-color:#16a34a">Approve</button>
+    </div>
+  </div>`;
+
+  const note = (st.msg ? `<div style="background:#f0fdf4;border:1px solid #dcfce7;color:#15803d;border-radius:9px;padding:9px 12px;font-size:12.5px;margin-bottom:10px">${esc(st.msg)}</div>` : '')
+    + (st.err ? `<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:9px;padding:9px 12px;font-size:12.5px;margin-bottom:10px">${esc(st.err)}</div>` : '');
+
+  const chip = s2 => s2 === 'approved' ? '<span class="chip good" style="font-size:9.5px">Approved</span>'
+    : s2 === 'rejected' ? '<span class="chip crit" style="font-size:9.5px">Rejected</span>'
+    : '<span class="chip warn" style="font-size:9.5px">Awaiting</span>';
+  const num = 'text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap';
+
+  const body = !rows.length
+    ? `<div style="padding:26px;text-align:center;color:var(--muted);font-size:13px">
+         ${st.status === 'submitted' ? 'Nothing is waiting for your approval.' : 'No tour plans for this selection.'}
+         ${d.team_size ? `<div style="font-size:11.5px;margin-top:5px">${d.team_size} people report to you.</div>` : ''}</div>`
+    : `<div style="overflow-x:auto"><table>
+      <thead><tr>
+        <th style="width:30px"><input type="checkbox" onclick="taToggleAll(this.checked)" title="Select every row awaiting approval"></th>
+        <th>Date</th><th>Who</th><th>Where</th><th>Reason &amp; remarks</th>
+        <th class="r">Growth target</th><th class="r">Outstanding</th><th class="r">Our / Comp copies</th><th>Status</th>
+      </tr></thead><tbody>
+      ${rows.map(r => `<tr style="${r.overdue && r.status === 'submitted' ? 'background:#fffbeb' : ''}">
+        <td>${r.status === 'submitted'
+          ? `<input type="checkbox" ${st.sel[r.id] ? 'checked' : ''} onclick="taToggle(${r.id})">`
+          : ''}</td>
+        <td style="white-space:nowrap;font-size:12px">${esc(r.tour_date)}
+          ${r.overdue && r.status === 'submitted' ? '<div style="font-size:9.5px;color:#b45309;font-weight:700">overdue</div>' : ''}
+          ${r.visit_time ? `<div style="font-size:9.5px;color:var(--muted)">${esc(r.visit_time)}</div>` : ''}</td>
+        <td style="font-size:12px"><b>${esc(r.person_name || r.person_code)}</b>
+          <div style="font-size:10px;color:var(--muted)">${esc([r.designation, r.unit_name].filter(Boolean).join(' · '))}</div>
+          ${r.assigned_by ? `<div style="font-size:9.5px;color:#0ea5e9">assigned by ${esc(r.assigned_by)}</div>` : ''}</td>
+        <td style="font-size:12px;max-width:210px"><b style="color:var(--chart-1)">${esc(r.agency_name || r.target_code || '—')}</b>
+          <div style="font-size:10px;color:var(--muted);white-space:normal">${esc([r.dist_name, r.station_name].filter(Boolean).join(' · ') || '—')}</div></td>
+        <td style="font-size:11.5px;max-width:280px;white-space:normal">${esc(r.reason || '—')}
+          ${r.remarks ? `<div style="font-size:10.5px;color:var(--muted);margin-top:2px">${esc(r.remarks)}</div>` : ''}</td>
+        <td style="${num}">${r.growth_target != null ? _apFmtN(r.growth_target) + ' cp' : '—'}
+          ${r.expected_recovery ? `<div style="font-size:9.5px;color:var(--muted)">rec ${_apFmtC(r.expected_recovery)}</div>` : ''}</td>
+        <td style="${num};color:${(r.outstanding || 0) > 0 ? '#b91c1c' : 'var(--ink)'}">${r.outstanding == null ? '—' : _apFmtC(r.outstanding)}</td>
+        <td style="${num}">${r.our_copies == null && r.competitor_copies == null ? '—'
+          : `${r.our_copies == null ? '—' : _apFmtN(r.our_copies)} / <b style="color:#b45309">${r.competitor_copies == null ? '—' : _apFmtN(r.competitor_copies)}</b>`}
+          ${r.competitor_period ? `<div style="font-size:9.5px;color:var(--muted)">${esc(r.competitor_period)}</div>` : ''}</td>
+        <td>${chip(r.status)}
+          ${r.reject_reason ? `<div style="font-size:9.5px;color:#b91c1c;white-space:normal;max-width:150px">${esc(r.reject_reason)}</div>` : ''}
+          ${r.decided_by ? `<div style="font-size:9.5px;color:var(--muted)">by ${esc(r.decided_by)}</div>` : ''}</td>
+      </tr>`).join('')}
+      </tbody></table></div>
+      <div style="font-size:10.5px;color:var(--muted);margin-top:8px">
+        ${rows.length} stop${rows.length === 1 ? '' : 's'}${pend.length ? ` · ${pend.length} awaiting your decision` : ''}
+        · Competitor copies are the largest single competitor at that agency, from the latest survey period.
+      </div>`;
+
+  return head + sel + note + `<div class="card" style="padding:12px 14px">${body}</div>`;
+};
 
 /* ═══════════ VZ — data-viz component library ═══════════
    Theme-aware (light/dark via CSS tokens --chart-1..5), CVD-validated palette,
