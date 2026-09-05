@@ -5658,7 +5658,26 @@ function _ccFlyout() {
 
 /* ── Grouped bar chart: base FY vs current FY, by quarter ──
    Inline SVG so it needs no chart library and prints/exports cleanly. */
-function _ccQuarterChart(rows, baseLabel, curLabel, fmt, color) {
+/* Q1 alone is ambiguous on this screen, because the two charts do not mean the same
+   three months by it: collection runs on the financial year, where Q1 is Apr-Jun, and
+   supply on the calendar year, where Q1 is Jan-Mar. Side by side, the same "Q1" on each
+   chart pointed at different quarters with nothing to say so. Each label now carries
+   its months — Q1 AMJ against Q1 JFM — so the two cannot be read as the same period. */
+const _QTR_MONTHS = {
+  fy: ['AMJ', 'JAS', 'OND', 'JFM'],     // financial year, Apr-Mar
+  cy: ['JFM', 'AMJ', 'JAS', 'OND'],     // calendar year, Jan-Dec
+};
+function _ccQtrLabel(q, yearBasis) {
+  const m = /^Q([1-4])$/.exec(String(q || ''));
+  const set = _QTR_MONTHS[yearBasis] || _QTR_MONTHS.cy;
+  return m ? `${q} <span style="font-weight:600;color:#64748b">${set[Number(m[1]) - 1]}</span>` : esc(q || '');
+}
+function _ccQtrPlain(q, yearBasis) {
+  const m = /^Q([1-4])$/.exec(String(q || ''));
+  const set = _QTR_MONTHS[yearBasis] || _QTR_MONTHS.cy;
+  return m ? `${q} ${set[Number(m[1]) - 1]}` : String(q || '');
+}
+function _ccQuarterChart(rows, baseLabel, curLabel, fmt, color, yearBasis) {
   const max = Math.max(1, ...rows.flatMap(r => [Number(r.base) || 0, Number(r.current) || 0]));
   const W = 100, gap = 3, bw = (W / rows.length - gap) / 2;
   const bars = rows.map((r, i) => {
@@ -5683,7 +5702,7 @@ function _ccQuarterChart(rows, baseLabel, curLabel, fmt, color) {
   };
   const cols = rows.map(r => `<div class="ccq-col">
     <div class="ccq-tip">
-      <div class="ccq-tip-q">${esc(r.q)}</div>
+      <div class="ccq-tip-q">${esc(_ccQtrPlain(r.q, yearBasis))}</div>
       <div class="ccq-tip-r"><i style="background:#cbd5e1"></i><span>${esc(baseLabel)}</span><b>${fmt(r.base)}</b></div>
       <div class="ccq-tip-r"><i style="background:${color}"></i><span>${esc(curLabel)}</span><b>${fmt(r.current)}</b></div>
       ${delta(r.base, r.current)}
@@ -5700,7 +5719,7 @@ function _ccQuarterChart(rows, baseLabel, curLabel, fmt, color) {
     </div>
     <div style="display:grid;grid-template-columns:repeat(${rows.length},1fr);margin-top:5px">
       ${rows.map(r => `<div style="text-align:center">
-        <div style="font-size:11px;font-weight:700;color:#0f172a">${r.q}</div>
+        <div style="font-size:11px;font-weight:700;color:#0f172a">${_ccQtrLabel(r.q, yearBasis)}</div>
         <div style="font-size:10px;color:#94a3b8">${fmt(r.current)}</div>
       </div>`).join('')}
     </div>
@@ -5788,8 +5807,9 @@ function _ccStateCard(s, d) {
       s.collection.collection_pct, s.collection.collection_pct >= 85 ? '#22c55e' : s.collection.collection_pct >= 60 ? '#f59e0b' : '#ef4444',
       `ccOpenState('${q(s.key)}')`)}
 
-    ${_ccKpiRow('OUTSTANDING', _ccINR(s.os.current),
-      `${_ccN(s.os.critical_agencies)} agencies above ₹1 L`,
+    ${_ccKpiRow('OVERDUE', _ccINR(s.os.current),
+      `${(() => { const mn = _ccMonthName(s.os.excluded_bill_label);
+          return mn ? `${mn} bill excluded` : "last month's bill excluded"; })()} · ${_ccN(s.os.critical_agencies)} of ${_ccN(s.os.agencies)} agencies with dues above ₹1 L`,
       _ccTrend(s.os.growth_pct, true),
       null, null, `ccOpenState('${q(s.key)}')`)}
 
@@ -5939,11 +5959,15 @@ function _cmdViewNew() {
       return _ccTopCard({ label: 'Collection vs Billing', color: '#10b981',
         value: (cp.value == null ? '—' : cp.value + '%'),
         sub, barPct: cp.value, onClick: `ccDrill('collections','${q(anyState)}')` }); })()}
-    ${_ccTopCard({ label: 'Outstanding', color: '#ef4444',
+    ${_ccTopCard({ label: 'Overdue', color: '#ef4444',
       value: _ccINR(t.outstanding.value), trend: _ccTrend(t.outstanding.growth_pct, true),
-      // Outstanding is a balance as on today, so it is always measured against the
-      // previous snapshot — the selected range never applies to it.
-      sub: `balance ${esc(t.outstanding.window)}${wasLine(t.outstanding.prev, _ccINR)}`,
+      /* A balance as on today, so it is always measured against the previous snapshot —
+         the selected range never applies to it. It is also OVERDUE rather than gross
+         dues: the bill raised on the 1st of this month is collected across this month
+         and is not late, so it is held out and the card names the month it belongs to. */
+      sub: `${(() => { const mn = _ccMonthName((d.states || []).map(x => x.os && x.os.excluded_bill_label).find(Boolean));
+          return mn ? `${mn} bill excluded — not yet due` : "last month's bill excluded"; })()}
+        · balance ${esc(t.outstanding.window)}${wasLine(t.outstanding.prev, _ccINR)}`,
       onClick: `ccDrill('outstanding','${q(anyState)}')` })}
     ${_ccTopCard({ label: 'Critical Agencies', color: '#dc2626',
       value: _ccN(t.critical.value), sub: `of ${_ccN(t.critical.of)} · ${esc(t.critical.window)}`,
@@ -6557,6 +6581,15 @@ function _csStatusReason(r, seg) {
    Management asked for this explicitly: a table headed only "Last Month" leaves the
    reader guessing whether a growth column compares last year, last month or yesterday.
    One helper so the wording cannot drift between tables. */
+/* "2026-08" -> "Aug 2026". The card names the month whose bill is held out instead of
+   saying "last month", which the reader would otherwise have to work out from a date
+   the screen does not show. */
+function _ccMonthName(lbl) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(lbl || ''));
+  if (!m) return '';
+  const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${M[Number(m[2]) - 1]} ${m[1]}`;
+}
 function _csDMY(iso) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso || ''))) return esc(iso || '');
   const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -6602,12 +6635,12 @@ function _ccQuarterlyBlock(st) {
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
       <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Collection</div>
       <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(cBase)} (Base) vs ${esc(cCur)} · receipts banked · ${esc(Q.collection_basis || 'Financial year · Apr–Mar')}</div>
-      ${_ccQuarterChart(Q.collection, cBase, cCur, _ccINR, '#22c55e')}
+      ${_ccQuarterChart(Q.collection, cBase, cCur, _ccINR, '#22c55e', 'fy')}
     </div>
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
       <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Supply (Net Paid)</div>
       <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(sBase)} (Base) vs ${esc(sCur)} · average copies per day · ${esc(Q.supply_basis || 'Calendar year · Jan–Dec')}</div>
-      ${_ccQuarterChart(Q.supply, sBase, sCur, v => _ccN(v) + ' cp', '#3b82f6')}
+      ${_ccQuarterChart(Q.supply, sBase, sCur, v => _ccN(v) + ' cp', '#3b82f6', 'cy')}
     </div>
   </div>`;
 }
@@ -6698,7 +6731,7 @@ function _csInsights(st, d) {
         ${th('Was', 'right')}
         ${th('Growth', 'right')}
         ${th('Collection', 'right')}
-        ${th('Outstanding', 'right')}
+        ${th('Overdue', 'right')}
         ${th('Status')}
       </tr></thead>
       <tbody>` +
@@ -7091,7 +7124,7 @@ function _csConsolidated(st, d) {
     ${thBtn('prevbill', 'Prev Bill')}
     ${thBtn('coll', 'Collection')}
     <th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">Coll %</th>
-    ${thBtn('os', 'Outstanding')}
+    ${thBtn('os', 'Overdue')}
     <th style="text-align:right;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;white-space:nowrap">Critical</th>
     ${thBtn('dcr', 'DCR %')}${msThT}
     <th style="text-align:center;padding:6px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th>
@@ -7300,9 +7333,11 @@ VIEWS.cc_state = () => {
           (cl.bill_months || []).length ? ' ' + esc(cl.bill_months.join(', ')) : ''} · ${yoy}${gap}`;
       })(),
       barPct: t.collection.pct })}`;})()}
-    ${_ccTopCard({ label: 'Outstanding', color: '#f59e0b',
+    ${_ccTopCard({ label: 'Overdue', color: '#f59e0b',
       value: _ccINR(t.outstanding.amount),
-      sub: `Overdue only · last month's bill excluded · ${_ccN(t.outstanding.critical)} of ${_ccN(t.outstanding.agencies)} agencies with dues are above ₹1 L` })}
+      sub: `${(() => { const mn = _ccMonthName(t.outstanding.excluded_bill_label);
+              return mn ? `${mn} bill excluded — not yet due` : 'Last month\'s bill excluded — not yet due'; })()}
+        · ${_ccN(t.outstanding.critical)} of ${_ccN(t.outstanding.agencies)} agencies with dues are above ₹1 L` })}
     ${_ccTopCard({ label: 'DCR activity', color: '#8b5cf6',
       value: t.dcr.coverage_pct == null ? '—' : t.dcr.coverage_pct + '%',
       sub: `${_ccN(t.dcr.agencies_visited)} of ${_ccN(t.dcr.book)} agencies · ${_ccN(t.dcr.visits)} visits · ${esc(d.range_label)}`,

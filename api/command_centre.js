@@ -777,7 +777,13 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
         ? q(overdueSql(prevLabel, prevPrev), [prevLabel, ...uP, prevPrev, ...uP])
         : Promise.resolve({ rows: [] }),
     ]);
-    const out = { cur: blank(), prev: blank(), critical: blank(), agencies: blank(), prev_label: prevLabel };
+    /* The month whose bill is being held out of the figure. It is the last month-end
+       snapshot: that bill was raised on the 1st of this month and is collected across
+       this month, so it is owed but not late. Named on the card rather than described,
+       because "last month's bill excluded" leaves the reader counting back from a date
+       they cannot see. */
+    const out = { cur: blank(), prev: blank(), critical: blank(), agencies: blank(),
+                  prev_label: prevLabel, excluded_bill_label: prevLabel };
     /* Was bucketed on group_unit_name (the ERP's RPPL / MP / CG grouping); now on the
        unit's home state like everything else, so outstanding lands on the same card as
        the supply and collection it belongs to. */
@@ -957,6 +963,7 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
           os: {
             current: osCur, previous: osPrev, diff: osCur - osPrev, growth_pct: r1(osPct),
             critical_agencies: os.critical[k], agencies: os.agencies[k], prev_label: os.prev_label,
+            excluded_bill_label: os.excluded_bill_label,
             // For outstanding, GROWTH is the bad direction — invert the ladder.
             status: osPct == null ? 'watch' : osPct >= 10 ? 'critical' : osPct >= 2 ? 'watch' : 'healthy',
           },
@@ -1925,7 +1932,9 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
                         prev_yr: collected_prev_yr,
                         growth_pct: collected_prev_yr ? r1((collected / collected_prev_yr - 1) * 100) : null }; })(),
           outstanding: { amount: osTot, agencies: bsum(b => b.os_agencies),
-                         critical: bsum(b => b.critical) },
+                         critical: bsum(b => b.critical),
+                         // Same month the state cards name — see osByState.
+                         excluded_bill_label: prevMonthLabel },
           dcr: { visits: bsum(b => b.visits), agencies_visited: seenTot, book: bookTot,
                  execs: bsum(b => b.execs.size), coverage_pct: bookTot ? r1((seenTot / bookTot) * 100) : null },
         },
