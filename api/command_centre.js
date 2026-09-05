@@ -306,14 +306,21 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
      settled here on the definitions the cards already use — agent is the CREDIT SALE
      agencies out of supply_data, cash is hawker_supply, and "all" is the two added.
 
+     ALL THREE SEGMENTS COME FROM ONE PASS. Scanning per segment meant the two-year
+     supply scan ran again every time the toggle moved — about 25 seconds each, three
+     times over, and the screen sat on skeletons for the whole of it. Agent and cash are
+     read once and the three views are derived in memory, so switching the toggle costs
+     nothing after the first load.
+
      Copies per day are averaged per UNIT per quarter and then summed, the same rule as
      everywhere else, so a branch that did not publish on a given day is not charged for
      it and the quarterly bars reconcile with the cards above them.
 
-     Collection splits by agency class. City sale is settled at the centre rather than
-     through an agency ledger, so the cash series is genuinely near-empty — a fact about
-     the business, which the chart states rather than leaving the reader to guess. */
-  async function quarterly(asOn, unitScope, seg) {
+     Collection splits by agency class in the same single pass. City sale is settled at
+     the centre rather than through an agency ledger, so the cash series is genuinely
+     near-empty — a fact about the business, which the chart states rather than leaving
+     the reader to guess. */
+  async function quarterly(asOn, unitScope) {
     const y = Number(asOn.slice(0, 4)), m = Number(asOn.slice(5, 7));
     const fy = m >= 4 ? y : y - 1;                 // current FY start year (Apr-Mar)
     const cy = y;                                  // current calendar year (Jan-Dec)
@@ -321,109 +328,120 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
     const cySpan = yy => ({ from: `${yy}-01-01`, to: `${yy}-12-31` });
     const fyCur = fySpan(fy), fyBase = fySpan(fy - 1);
     const cyCur = cySpan(cy), cyBase = cySpan(cy - 1);
-    const wantAgent = seg !== 'cash';
-    const wantCash  = seg !== 'agent';
 
     const _ufA = uFilter('s.unit_code', unitScope);
     const _ufC = uFilter('c.unit_code', unitScope);
     const _ufH = uFilter('h.loc_id',    unitScope);
-
-    const clsOf = cls => `JOIN (SELECT DISTINCT unit, agcd FROM agency_master
-                                 WHERE ag_class_name = '${cls}') cm`;
-
-    const noRows = Promise.resolve({ rows: [] });
+    const CRED = `(SELECT DISTINCT unit, agcd FROM agency_master WHERE ag_class_name = 'CREDIT SALE')`;
 
     const [coll, supA, supH] = await Promise.all([
-      // Receipts banked, restricted to the selected segment's agencies.
-      q(`SELECT YEAR(c.coll_date) y, QUARTER(c.coll_date) q, -COALESCE(SUM(c.amount),0) amt
+      /* Receipts banked, labelled by the class of the agency that paid, so agent and
+         cash can be told apart without a second scan. */
+      q(`SELECT YEAR(c.coll_date) y, QUARTER(c.coll_date) q,
+                CASE WHEN cm.agcd IS NULL THEN 'cash' ELSE 'agent' END seg,
+                -COALESCE(SUM(c.amount),0) amt
            FROM agency_collection c
-           ${seg === 'agent' ? clsOf('CREDIT SALE') + ' ON cm.unit = c.unit_code AND cm.agcd = c.ag_code'
-            : seg === 'cash' ? clsOf('DIRECT SALE I') + ' ON cm.unit = c.unit_code AND cm.agcd = c.ag_code' : ''}
+           LEFT JOIN ${CRED} cm ON cm.unit = c.unit_code AND cm.agcd = c.ag_code
           WHERE c.is_valid=1 AND c.coll_date BETWEEN ? AND ?${_ufC.cl}
-          GROUP BY y, q`, [fyBase.from, fyCur.to, ..._ufC.p]),
+          GROUP BY y, q, seg`, [fyBase.from, fyCur.to, ..._ufC.p]),
 
       // Agent (credit) copies, per unit per quarter so the divisor stays per-unit.
-      wantAgent
-        ? q(`SELECT YEAR(s.supply_date) y, QUARTER(s.supply_date) q, s.unit_code,
-                    SUM(s.sup_copy) copies, COUNT(DISTINCT s.supply_date) days
-               FROM supply_data s
-               ${clsOf('CREDIT SALE')} ON cm.unit = s.unit_code AND cm.agcd = s.agcd
-              WHERE s.supply_date BETWEEN ? AND ?
-                AND s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')${_ufA.cl}
-              GROUP BY y, q, s.unit_code`, [cyBase.from, cyCur.to, ..._ufA.p])
-        : noRows,
+      q(`SELECT YEAR(s.supply_date) y, QUARTER(s.supply_date) q, s.unit_code,
+                SUM(s.sup_copy) copies, COUNT(DISTINCT s.supply_date) days
+           FROM supply_data s
+           JOIN ${CRED} cm ON cm.unit = s.unit_code AND cm.agcd = s.agcd
+          WHERE s.supply_date BETWEEN ? AND ?
+            AND s.sup_type_code='S01' AND COALESCE(s.publ,'') NOT IN ('P14')${_ufA.cl}
+          GROUP BY y, q, s.unit_code`, [cyBase.from, cyCur.to, ..._ufA.p]),
 
       // Cash (city) copies from the hawker feed.
-      wantCash
-        ? q(`SELECT YEAR(h.supply_date) y, QUARTER(h.supply_date) q, h.loc_id unit_code,
-                    SUM(h.sup_copies) copies, COUNT(DISTINCT h.supply_date) days
-               FROM hawker_supply h
-              WHERE h.supply_date BETWEEN ? AND ?${_ufH.cl}
-              GROUP BY y, q, h.loc_id`, [cyBase.from, cyCur.to, ..._ufH.p])
-        : noRows,
+      q(`SELECT YEAR(h.supply_date) y, QUARTER(h.supply_date) q, h.loc_id unit_code,
+                SUM(h.sup_copies) copies, COUNT(DISTINCT h.supply_date) days
+           FROM hawker_supply h
+          WHERE h.supply_date BETWEEN ? AND ?${_ufH.cl}
+          GROUP BY y, q, h.loc_id`, [cyBase.from, cyCur.to, ..._ufH.p]),
     ]);
 
     // Calendar quarter -> FY quarter. Calendar Q2 (Apr-Jun) is FY Q1, and calendar
     // Q1 (Jan-Mar) belongs to the PREVIOUS financial year's Q4.
     const toFy = (yy, cq) => (cq === 1 ? { fy: yy - 1, q: 4 } : { fy: yy, q: cq - 1 });
     const mk = () => [1, 2, 3, 4].map(qq => ({ q: 'Q' + qq, base: 0, current: 0 }));
-    const collOut = mk(), supOut = mk();
 
+    const collBy = { all: mk(), agent: mk(), cash: mk() };
     coll.rows.forEach(r => {
       const f = toFy(N(r.y), N(r.q));
-      const slot = collOut[f.q - 1]; if (!slot) return;
-      if (f.fy === fy) slot.current += N(r.amt); else if (f.fy === fy - 1) slot.base += N(r.amt);
+      const put = which => {
+        const slot = collBy[which][f.q - 1]; if (!slot) return;
+        if (f.fy === fy) slot.current += N(r.amt); else if (f.fy === fy - 1) slot.base += N(r.amt);
+      };
+      put('all'); put(r.seg === 'cash' ? 'cash' : 'agent');
     });
 
-    // Calendar quarters map straight through for supply — no FY shift.
-    const addSup = rows => rows.forEach(r => {
-      const slot = supOut[N(r.q) - 1]; if (!slot) return;
+    const supBy = { all: mk(), agent: mk(), cash: mk() };
+    const addSup = (rows, which) => rows.forEach(r => {
       const avg = N(r.days) ? Math.round(N(r.copies) / N(r.days)) : 0;
-      if (N(r.y) === cy) slot.current += avg; else if (N(r.y) === cy - 1) slot.base += avg;
+      [which, 'all'].forEach(k => {
+        const slot = supBy[k][N(r.q) - 1]; if (!slot) return;
+        if (N(r.y) === cy) slot.current += avg; else if (N(r.y) === cy - 1) slot.base += avg;
+      });
     });
-    addSup(supA.rows); addSup(supH.rows);
+    addSup(supA.rows, 'agent'); addSup(supH.rows, 'cash');
 
-    const segLabel = seg === 'agent' ? 'Agent sale (credit)'
-                   : seg === 'cash'  ? 'Cash sale (city)' : 'Agent + cash';
-    return {
-      seg: seg || 'all',
-      collection: collOut, supply: supOut,
+    const label = { all: 'Agent + cash', agent: 'Agent sale (credit)', cash: 'Cash sale (city)' };
+    const view = seg => ({
+      seg,
+      collection: collBy[seg], supply: supBy[seg],
       collection_current: `FY ${fy}-${String(fy + 1).slice(2)}`,
       collection_base: `FY ${fy - 1}-${String(fy).slice(2)}`,
-      collection_basis: `${segLabel} · Financial year · Apr–Mar`,
+      collection_basis: `${label[seg]} · Financial year · Apr–Mar`,
       collection_note: seg === 'cash'
         ? 'City sale is settled at the centre, so little of it reaches the agency ledger'
         : null,
       supply_current: `CY ${cy}`,
       supply_base: `CY ${cy - 1}`,
-      supply_basis: `${segLabel} · Calendar year · Jan–Dec`,
+      supply_basis: `${label[seg]} · Calendar year · Jan–Dec`,
       // kept so anything still reading the old field names keeps working
       fy_current: `FY ${fy}-${String(fy + 1).slice(2)}`,
       fy_base: `FY ${fy - 1}-${String(fy).slice(2)}`,
-    };
+    });
+    return { all: view('all'), agent: view('agent'), cash: view('cash') };
   }
 
-  /* The quarterly supply figure is a two-year scan — several seconds on its own, which
-     was the whole reason the Command Centre sat on skeletons. It moves only when supply
-     syncs, so the result is cached per (as-on date, unit scope, segment): the first
-     caller after a sync pays for it and everyone else is served from memory. It is also
-     served from its own endpoint so the KPI cards never wait behind it. */
+  /* The quarterly figures are a two-year scan — about 25 seconds cold, which was the
+     whole reason the Command Centre sat on skeletons. They move only when supply syncs,
+     so the result is cached per (as-on date, unit scope) — no longer per segment, since
+     one pass now produces all three — and warmed in the background at boot so the first
+     person through the door is not the one who pays for it. */
   const QTR_CACHE = new Map();
   const QTR_TTL_MS = 60 * 60 * 1000;
   async function quarterlyCached(asOn, unitScope, seg) {
-    // A list scope must key distinctly, or one caller's slice is served to another —
-    // and so must the segment, or the Agent view is served the Cash bars.
-    const key = `${asOn}|${Array.isArray(unitScope) ? unitScope.join(',') : (unitScope || '')}|${seg || 'all'}`;
+    // A list scope must key distinctly, or one caller's slice is served to another.
+    const key = `${asOn}|${Array.isArray(unitScope) ? unitScope.join(',') : (unitScope || '')}`;
     const hit = QTR_CACHE.get(key);
-    if (hit && Date.now() - hit.at < QTR_TTL_MS) return hit.val;
-    const val = await quarterly(asOn, unitScope, seg);
+    if (hit && Date.now() - hit.at < QTR_TTL_MS) return hit.val[seg] || hit.val.all;
+    const val = await quarterly(asOn, unitScope);
     QTR_CACHE.set(key, { at: Date.now(), val });
+    if (seg && val[seg]) return val[seg];
     // Keyed by as-on date, so yesterday's entries are dead weight once supply syncs.
     if (QTR_CACHE.size > 40) {
       for (const k of QTR_CACHE.keys()) { if (!k.startsWith(asOn)) QTR_CACHE.delete(k); }
     }
-    return val;
+    return val.all;
   }
+
+  /* Warmed in the background so the first request of the day is served from memory.
+     Kicked off shortly after boot and refreshed just inside the cache's own lifetime;
+     a failure is swallowed on purpose, because a warm-up that cannot run must never
+     take the API down with it. */
+  async function warmCaches() {
+    try {
+      const { asOn } = await resolveDates(null, 'prev_year');
+      await Promise.all([unitHomeState(), unitCircIncharge(), stateHeads()]);
+      await quarterlyCached(asOn, null, 'all');
+    } catch (_) { /* the next request will pay for it instead */ }
+  }
+  setTimeout(warmCaches, 4000).unref?.();
+  setInterval(warmCaches, QTR_TTL_MS - 5 * 60 * 1000).unref?.();
 
   app.get('/api/command/quarterly', async (req, res) => {
     try {
@@ -693,10 +711,17 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
          FROM agency_collection WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY unit_code`, [mStart, mEnd, ...uP]),
       q(`SELECT unit_code unit, -COALESCE(SUM(amount),0) amt FROM agency_collection
          WHERE is_valid=1 AND coll_date = ?${uCl} GROUP BY unit_code`, [prev, ...uP]),
-      q(`SELECT unit_code unit, -COALESCE(SUM(amount),0) amt FROM agency_collection
-         WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY unit_code`, [yStart, asOn, ...uP]),
-      q(`SELECT unit_code unit, -COALESCE(SUM(amount),0) amt FROM agency_collection
-         WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY unit_code`, [lyStart, lyAsOn, ...uP]),
+      /* Year-to-date and the same period last year are anchored on the as-on date and
+         do not move with the selected range, yet they were re-scanned on every range
+         switch — 2.4s and 1.4s over 1.1M collection rows each time, for two figures
+         that cannot have changed. Memoised on (dates, scope) so switching This Month /
+         Last Month / FY no longer pays for them again. */
+      memo(`ytd|${yStart}|${asOn}|${JSON.stringify(unitScope || '')}`, () =>
+        q(`SELECT unit_code unit, -COALESCE(SUM(amount),0) amt FROM agency_collection
+           WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY unit_code`, [yStart, asOn, ...uP])),
+      memo(`lyytd|${lyStart}|${lyAsOn}|${JSON.stringify(unitScope || '')}`, () =>
+        q(`SELECT unit_code unit, -COALESCE(SUM(amount),0) amt FROM agency_collection
+           WHERE is_valid=1 AND coll_date BETWEEN ? AND ?${uCl} GROUP BY unit_code`, [lyStart, lyAsOn, ...uP])),
       /* Every label the shifted months could need: the ERP monthly bill, the month's
          own cumulative snapshot, and the one before it to difference against. */
       (() => {

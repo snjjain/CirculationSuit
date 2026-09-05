@@ -104,6 +104,12 @@ const DICT = [
   ['District', 'ज़िला'], ['City', 'शहर'], ['Station', 'स्टेशन'], ['Address', 'पता'],
   ['Contact', 'संपर्क'], ['Mobile', 'मोबाइल'], ['Executive', 'कार्यकारी'],
   ['Last collection', 'पिछली वसूली'], ['agency', 'एजेंसी'],
+  ['Bill vs collection — last 6 months', 'बिल बनाम वसूली — पिछले 6 माह'],
+  ['Average supply — last 6 months', 'औसत सप्लाई — पिछले 6 माह'],
+  ['Bill', 'बिल'], ['Net receipt', 'शुद्ध प्राप्ति'], ['Avg / day', 'औसत/दिन'],
+  ['Total copies', 'कुल प्रतियाँ'], ['Days', 'दिन'],
+  ['No billing snapshots for this agency yet.', 'इस एजेंसी का बिलिंग रिकॉर्ड अभी नहीं है।'],
+  ['No supply recorded in this period.', 'इस अवधि में कोई सप्लाई दर्ज नहीं है।'],
   // section heads
   ['Tour planning', 'टूर प्लानिंग'], ['Visit', 'विज़िट'], ['Growth commitment', 'ग्रोथ प्रतिबद्धता'],
   ['Outcome', 'परिणाम'], ['Agent feedback', 'एजेंट फ़ीडबैक'], ['Call report', 'कॉल रिपोर्ट'],
@@ -675,6 +681,26 @@ function _autoPanel() {
    form to fill. */
 window.dmAgencyCard = () => dmFly({ title: T('Agency detail'), body: _agencyCardBody });
 
+/* "2026-08" -> "Aug 2026". */
+function _mn(lbl) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(lbl || ''));
+  if (!m) return esc(lbl || '—');
+  return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(m[2]) - 1] + ' ' + m[1];
+}
+/* A month table sized for a phone: right-aligned figures, no horizontal scroll. */
+function _agMonthTable(title, head, rows, empty) {
+  return `<div style="margin-top:12px">
+    <div style="font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--d-mut);margin-bottom:5px">${esc(title)}</div>
+    ${!rows.length ? `<div style="font-size:12px;color:var(--d-mut)">${esc(empty)}</div>`
+      : `<table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr>${head.map((h, i) => `<th style="text-align:${i ? 'right' : 'left'};padding:4px 5px;font-size:9.5px;
+            font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--d-mut);border-bottom:1px solid var(--d-line)">${esc(h)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(r => `<tr>${r.map((cv, i) => `<td style="text-align:${i ? 'right' : 'left'};padding:5px;
+            border-bottom:1px solid var(--d-line);font-variant-numeric:tabular-nums;white-space:nowrap">${cv}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>`}
+  </div>`;
+}
+
 function _agencyCardBody() {
   const a = DM.agency;
   if (!a) return `<div style="font-size:12.5px;color:var(--d-mut)">${T('Choose an agency first.')}</div>`;
@@ -705,6 +731,15 @@ function _agencyCardBody() {
     </div>
     ${a.ag_status === 'Closed' || a.ag_status === 'Suspended' ? `<div class="dcr-closed" style="margin-top:10px">
       <b>${esc(a.ag_status)} ${T('agency')}.</b></div>` : ''}
+    ${_agMonthTable(T('Bill vs collection — last 6 months'),
+        ['Month', T('Bill'), T('Net receipt'), '%'],
+        (a.ledger_months || []).map(r => [_mn(r.month), _INR(r.bill), '<b>' + _INR(r.net_receipt) + '</b>',
+          r.pct == null ? '—' : `<span style="color:${r.pct < 60 ? 'var(--d-bad)' : r.pct < 85 ? 'var(--d-warn)' : 'var(--d-ok)'};font-weight:700">${r.pct}%</span>`]),
+        T('No billing snapshots for this agency yet.'))}
+    ${_agMonthTable(T('Average supply — last 6 months'),
+        ['Month', T('Avg / day'), T('Total copies'), T('Days')],
+        (a.supply_months || []).map(r => [_mn(r.month), '<b>' + _NN(r.avg_per_day) + '</b>', _NN(r.total_supply), _NN(r.supply_days)]),
+        T('No supply recorded in this period.'))}
     <div style="margin-top:12px;border-top:1px solid var(--d-line);padding-top:10px">
       ${fact(T('Agency'), esc(a.ag_name || ''))}
       ${fact(T('Code'), esc(a.target_code || ''))}

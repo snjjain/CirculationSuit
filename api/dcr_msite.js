@@ -584,7 +584,7 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       // Financial year starts in April.
       const fyStart = (d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1) + '-04-01';
 
-      const [master, cur, bills, coll, sup, trend, odR, compR, lastVisitR] = await Promise.all([
+      const [master, cur, bills, coll, sup, trend, odR, compR, lastVisitR, ledgerR, supHistR] = await Promise.all([
         q(`SELECT ag_name, agent_name, mobile_no1, email_id, city_name, station_name,
                   dist_name, address, ag_class_name, executive_name
            FROM agency_master WHERE unit = ? AND agcd = ? AND CAST(dpcd AS UNSIGNED) = 1 LIMIT 1`, [unit, code]),
@@ -660,7 +660,37 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         // When anyone last stood here.
         q(`SELECT MAX(visit_date) d FROM dcr_agency_visit
             WHERE unit_code = ? AND visit_to_main_code = ?`, [unit, code]),
+
+        /* Six months of ledger movement and six months of supply, the same two tables
+           the office sees in Agency 360. An executive discussing recovery needs the
+           pattern, not just this month's number — "you have been short three months
+           running" is a different conversation from "you owe money". */
+        q(`SELECT period_label, SUM(bill_amt) bill, SUM(rec_amt) + SUM(other_cr) rec
+             FROM agency_outstanding
+            WHERE unit_code = ? AND ag_code = ?
+              AND period_label REGEXP '^[0-9]{4}-[0-9]{2}$'
+            GROUP BY period_label ORDER BY period_label DESC LIMIT 8`, [unit, code]),
+
+        q(`SELECT DATE_FORMAT(supply_date,'%Y-%m') month,
+                  SUM(sup_copy) total_supply, COUNT(DISTINCT supply_date) supply_days
+             FROM supply_data
+            WHERE unit_code = ? AND agcd = ? AND sup_type_code = 'S01'
+              AND COALESCE(publ,'') NOT IN ('P14')
+              AND supply_date >= DATE_SUB(CURDATE(), INTERVAL 7 MONTH)
+            GROUP BY month ORDER BY month DESC LIMIT 6`, [unit, code]),
       ]);
+
+      /* Telescoped: agency_outstanding is cumulative for the financial year, so a
+         month's own bill and receipt are the difference between consecutive snapshots.
+         A month whose pair is incomplete is left out rather than shown as zero. */
+      const _sn = (ledgerR.rows || []).slice().sort((a, b) => (a.period_label < b.period_label ? 1 : -1));
+      const ledgerMonths = [];
+      for (let i = 0; i < _sn.length - 1 && ledgerMonths.length < 6; i++) {
+        const bill = Math.max(0, N(_sn[i].bill) - N(_sn[i + 1].bill));
+        const rec  = Math.max(0, N(_sn[i].rec)  - N(_sn[i + 1].rec));
+        ledgerMonths.push({ month: _sn[i].period_label, bill, net_receipt: rec,
+                            pct: bill > 0 ? Math.round((rec / bill) * 1000) / 10 : null });
+      }
 
       const m = master.rows[0] || {};
       /* A BILL-YYYY-MM snapshot is that month's billing as the ERP itself reports it,
@@ -745,6 +775,11 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         top_competitor_copies: compR.rows[0] ? N(compR.rows[0].top_cp) : null,
         competitor_period: (compR.rows[0] && compR.rows[0].period) || null,
         last_visit: iso(lastVisitR.rows[0] && lastVisitR.rows[0].d),
+        ledger_months: ledgerMonths,
+        supply_months: (supHistR.rows || []).map(r => ({
+          month: r.month, total_supply: N(r.total_supply), supply_days: N(r.supply_days),
+          avg_per_day: N(r.supply_days) > 0 ? Math.round(N(r.total_supply) / N(r.supply_days)) : 0,
+        })),
         last_visit_days_ago: (() => {
           const d0 = lastVisitR.rows[0] && lastVisitR.rows[0].d; if (!d0) return null;
           return Math.round((Date.now() - new Date(String(d0).slice(0, 10) + 'T00:00:00').getTime()) / 86400000);
