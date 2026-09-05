@@ -18544,13 +18544,26 @@ function sdvFetchReport() {
 function sdvReportTable(d) {
   if (!d.header || !d.header.length) return `<p class="muted" style="padding:16px;text-align:center">No data for this selection.</p>`;
   // First text columns stay left-aligned; date + number columns right-aligned
-  const numStart = d.header.findIndex(h => /^\d{2}\.\d{2}\.\d{2}$/.test(String(h)));
-  const textCols = numStart === -1 ? 2 : numStart;
-  const th = d.header.map((h, i) =>
-    `<th style="position:sticky;top:0;background:var(--navy);color:#fff;padding:6px 8px;font-size:10px;white-space:nowrap;z-index:2;
-        text-align:${i < textCols ? 'left' : 'right'};${i === 0 ? 'border-radius:6px 0 0 0' : ''}${i === d.header.length-1 ? 'border-radius:0 6px 0 0' : ''}">${esc(String(h))}</th>`).join('');
+  const numStart = d.header.findIndex(h => /^\d{2}\.\d{2}\.\d{2}/.test(String(h)));
+  const textCols = d.text_cols != null ? d.text_cols : (numStart === -1 ? 2 : numStart);
+  const HB = 'position:sticky;background:var(--navy);color:#fff;padding:6px 8px;font-size:10px;white-space:nowrap;z-index:2';
+  /* Banded header: the date sits once above its Survey / Order pair. Two stacked sticky
+     rows, so the second row's `top` has to clear the first — otherwise it rides over it
+     when the table scrolls. */
+  const th = (d.header_top && d.header_sub)
+    ? `<tr>${d.header_top.map((g, i) => `<th ${g.span > 1 ? `colspan="${g.span}"` : ''} ${g.rowspan ? `rowspan="${g.rowspan}"` : ''}
+          style="${HB};top:0;text-align:${g.span > 1 ? 'center' : (i < textCols ? 'left' : 'right')};
+          ${g.span > 1 ? 'border-left:1px solid rgba(255,255,255,.25);border-right:1px solid rgba(255,255,255,.25)' : ''}
+          ${i === 0 ? ';border-radius:6px 0 0 0' : ''}">${esc(String(g.label))}</th>`).join('')}</tr>
+       <tr>${d.header_sub.map((h, i) => h === '' ? '' :
+          `<th style="${HB};top:26px;text-align:center;font-weight:600;opacity:.92">${esc(String(h))}</th>`).join('')}</tr>`
+    : `<tr>${d.header.map((h, i) =>
+        `<th style="${HB};top:0;text-align:${i < textCols ? 'left' : 'right'};${i === 0 ? 'border-radius:6px 0 0 0' : ''}${i === d.header.length - 1 ? 'border-radius:0 6px 0 0' : ''}">${esc(String(h))}</th>`).join('')}</tr>`;
   const trs = d.rows.map(r => {
-    const isTotal = String(r[1] || '').includes('Total') || String(r[2] || '') === 'Total';
+    // The totals row labels itself in the FIRST cell; the old test looked at the second
+    // and third, so the row it was written for rendered as an ordinary one.
+    const isTotal = ['Total'].includes(String(r[0] || '').trim())
+      || String(r[1] || '').includes('Total') || String(r[2] || '') === 'Total';
     const tds = r.map((c, i) => {
       const v = c == null ? '' : String(c);
       const isAbsent = v === 'A';
@@ -18563,7 +18576,7 @@ function sdvReportTable(d) {
   }).join('');
   return `<div style="overflow:auto;max-height:65vh;border:1px solid var(--brd);border-radius:8px">
     <table style="border-collapse:collapse;width:max-content;min-width:100%">
-      <thead><tr>${th}</tr></thead><tbody>${trs}</tbody>
+      <thead>${th}</thead><tbody>${trs}</tbody>
     </table>
   </div>
   <div style="font-size:11px;color:var(--muted);margin-top:6px">${d.rows.length} rows · scroll table sideways for all dates</div>`;

@@ -2433,7 +2433,11 @@ function reportTotalsRow(hdr, rows) {
   });
 }
 
-/** CSV download by default; ?format=json returns {header, rows} for on-screen tables */
+/** CSV download by default; ?format=json returns {header, rows} for on-screen tables.
+    A report may also describe a BANDED header — a top row of spanning labels above the
+    column row, so a date can sit once over its Survey and Order pair instead of being
+    repeated in both. Only the on-screen table uses it; the CSV keeps one flat header
+    row, because a merged cell in a CSV is not a thing a spreadsheet can filter on. */
 function sendReport(req, res, name, hdr, rows, opts) {
   const o = opts || {};
   let out = rows;
@@ -2441,7 +2445,11 @@ function sendReport(req, res, name, hdr, rows, opts) {
     const t = o.totalsRow || reportTotalsRow(hdr, rows);
     if (t) out = [...rows, t];
   }
-  if (req.query.format === 'json') return res.json({ header: hdr, rows: out, has_totals: out !== rows });
+  if (req.query.format === 'json') return res.json({
+    header: hdr, rows: out, has_totals: out !== rows,
+    header_top: o.headerTop || null, header_sub: o.headerSub || null,
+    text_cols: o.textCols == null ? null : o.textCols,
+  });
   sendCsv(res, name, toCsvStr(hdr, out));
 }
 
@@ -2620,7 +2628,22 @@ app.get('/api/survey/report/surveyor-daily', async (req, res) => {
       totalsRow[hdr.length - 3] = sumO;
       totalsRow[hdr.length - 4] = sumS;
     }
-    sendReport(req, res, `surveyor-daily-${r.from}-to-${r.to}.csv`, hdr, csvRows, { totalsRow });
+    /* One date cell over its Survey and Order pair, rather than the date printed twice.
+       The flat header above is what the CSV keeps; this is what the screen draws. */
+    const FIXED_L = ['S.No.', 'Area of Survey', 'Surveyor Name', 'Designation'];
+    const FIXED_R = ['Total Surveys', 'Total Orders', 'Present Days', 'Avg Surveys/Day'];
+    const headerTop = [
+      ...FIXED_L.map(h => ({ label: h, span: 1, rowspan: 2 })),
+      ...dates.map(d => ({ label: fmtDH(d), span: 2 })),
+      ...FIXED_R.map(h => ({ label: h, span: 1, rowspan: 2 })),
+    ];
+    const headerSub = [
+      ...FIXED_L.map(() => ''),
+      ...dates.flatMap(() => ['Survey', 'Order']),
+      ...FIXED_R.map(() => ''),
+    ];
+    sendReport(req, res, `surveyor-daily-${r.from}-to-${r.to}.csv`, hdr, csvRows,
+      { totalsRow, headerTop, headerSub, textCols: FIXED_L.length });
   } catch (e) { res.status(500).json({ detail: String(e) }); }
 });
 
