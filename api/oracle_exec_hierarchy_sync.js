@@ -84,6 +84,19 @@ function runSqlplus(sqlFile) {
   if (_ora.driverAvailable()) return _ora.runViaDriver(sqlFile);
   return _runSqlplusSpawn(sqlFile);
 }
+/* Run the read and refuse to go further unless it actually produced this run's spool.
+   runSqlplus resolves -1 from the node-oracledb path when it gives up, and a spool left
+   behind by an earlier run still passes existsSync — that combination is what let a
+   dead read be parsed as good data elsewhere in this suite. Removing the target first
+   means a missing file is proof of failure rather than a guess. */
+async function runOrThrow(sqlFile, spoolFile, what) {
+  try { fs.unlinkSync(spoolFile); } catch (_) { /* not there yet */ }
+  const rc = await runSqlplus(sqlFile);
+  if (rc === -1) throw new Error(`${what}: Oracle read failed or timed out`);
+  if (!fs.existsSync(spoolFile)) throw new Error(`${what}: Oracle read produced no spool file`);
+  return rc;
+}
+
 function _runSqlplusSpawn(sqlFile) {
   return new Promise((resolve, reject) => {
     const connectStr =
@@ -204,21 +217,46 @@ async function ensureTables(conn) {
 }
 
 // ── Generic full-replace loader ───────────────────────────────────────────────
+/* Replace a table's contents without a window in which it is empty or half-loaded.
+   Two things went wrong on 5 Sep 2026 while the ERP team was bulk-loading the mapping
+   table, and both are guarded here:
+
+   TRUNCATE is DDL, so it commits immediately and cannot be rolled back. When the Oracle
+   read died with ECONNRESET partway through the inserts, exec_master was left holding
+   428 of its 1,050 rows and the sync reported an error but not what it had destroyed.
+   DELETE inside a transaction is fully reversible, and at ~1k rows costs nothing.
+
+   And a read that lands mid-bulk-load returns a real, well-formed, far too small result.
+   The first run that morning replaced 1,050 mapping rows with the 100 Oracle happened to
+   hold at that instant and logged it as success. A collapse to under half of what is
+   already stored is now refused outright — pass --force when the shrinkage is genuine,
+   which is the same rule oracle_tour_plan_sync.js already applies. */
+const FORCE = process.argv.includes('--force');
+
 async function fullReplace(conn, tableName, rows, insertSql, mapRow) {
   if (!rows.length) {
-    log(`  ${tableName}: 0 rows from Oracle — skipping truncate to preserve existing data`);
+    log(`  ${tableName}: 0 rows from Oracle — skipping replace to preserve existing data`);
     return 0;
   }
-  await conn.execute(`TRUNCATE TABLE ${tableName}`);
-  let count = 0;
-  for (let i = 0; i < rows.length; i += 200) {
-    for (const row of rows.slice(i, i + 200)) {
-      await conn.execute(insertSql, mapRow(row));
-      count++;
-    }
+  const [[{ have }]] = await conn.query(`SELECT COUNT(*) have FROM ${tableName}`);
+  if (have > 0 && rows.length < have * 0.5 && !FORCE) {
+    log(`  ${tableName}: REFUSED — Oracle returned ${rows.length} rows against ${have} stored ` +
+        `(under 50%). Existing data left untouched; re-run with --force if the drop is real.`);
+    return -1;
   }
-  log(`  ${tableName}: ${count} rows loaded`);
-  return count;
+  await conn.beginTransaction();
+  try {
+    await conn.execute(`DELETE FROM ${tableName}`);
+    let count = 0;
+    for (const row of rows) { await conn.execute(insertSql, mapRow(row)); count++; }
+    await conn.commit();
+    log(`  ${tableName}: ${count} rows loaded${have ? ` (was ${have})` : ''}`);
+    return count;
+  } catch (e) {
+    await conn.rollback();
+    log(`  ${tableName}: FAILED mid-load — rolled back, ${have} existing rows intact (${e.message})`);
+    throw e;
+  }
 }
 
 // ── Sync CIR_EXECUTIVE_MAST (14 fields) ──────────────────────────────────────
@@ -247,7 +285,7 @@ FROM CIR_EXECUTIVE_MAST
 ORDER BY EXECUTIVE_CODE;`;
 
   fs.writeFileSync(sqlFile, buildScript(spoolFile, selectSql), 'utf8');
-  await runSqlplus(sqlFile);
+  await runOrThrow(sqlFile, spoolFile, 'CIR_EXECUTIVE_MAST');
 
   const rows = parseSpoolFile(spoolFile, 14).filter(r => str(r[1]));
   return fullReplace(conn, 'exec_master',
@@ -289,7 +327,7 @@ FROM CIR_PLI_HIERARCHY_MAPPING
 ORDER BY UNIT_CODE, EXEC_CODE;`;
 
   fs.writeFileSync(sqlFile, buildScript(spoolFile, selectSql), 'utf8');
-  await runSqlplus(sqlFile);
+  await runOrThrow(sqlFile, spoolFile, 'CIR_PLI_HIERARCHY_MAPPING');
 
   const rows = parseSpoolFile(spoolFile, 13).filter(r => str(r[2]));
   return fullReplace(conn, 'exec_hierarchy_mapping',
@@ -326,7 +364,7 @@ FROM CIR_PLI_HIERARCHY_MAST
 ORDER BY UNIT_CODE, CODE;`;
 
   fs.writeFileSync(sqlFile, buildScript(spoolFile, selectSql), 'utf8');
-  await runSqlplus(sqlFile);
+  await runOrThrow(sqlFile, spoolFile, 'CIR_PLI_HIERARCHY_MAST');
 
   const rows = parseSpoolFile(spoolFile, 9).filter(r => str(r[2])); // CODE must exist
   return fullReplace(conn, 'exec_hierarchy_mast',
@@ -357,7 +395,7 @@ FROM CIR_PLI_HIERARCHY
 ORDER BY HIERARCHY_LEVEL;`;
 
   fs.writeFileSync(sqlFile, buildScript(spoolFile, selectSql), 'utf8');
-  await runSqlplus(sqlFile);
+  await runOrThrow(sqlFile, spoolFile, 'CIR_PLI_HIERARCHY');
 
   const rows = parseSpoolFile(spoolFile, 6).filter(r => str(r[1]));
   return fullReplace(conn, 'exec_hierarchy_level',
