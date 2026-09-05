@@ -30,6 +30,8 @@
  * Usage:
  *   node api/hierarchy_from_oracle.js            # apply
  *   node api/hierarchy_from_oracle.js --dry-run  # report what would change
+ *   node api/hierarchy_from_oracle.js --sync-logins  # also disable logins of people
+ *                                                    # the ERP has marked inactive
  */
 
 const mysql = require('mysql2/promise');
@@ -38,6 +40,7 @@ const fs    = require('fs');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const DRY = process.argv.includes('--dry-run');
+const SYNC_LOGINS = process.argv.includes('--sync-logins');
 const LOG_FILE = path.resolve(__dirname, '../logs/hierarchy_from_oracle.log');
 
 function log(msg) {
@@ -181,6 +184,30 @@ const s = v => { if (v == null) return null; const r = String(v).trim(); return 
       else            { await conn.execute(insMast, [...key, ...rest]); mi++; }
     }
     log(`  hierarchy_master: ${mi} inserted, ${mu} updated (was ${mastHave})`);
+
+    /* A login left enabled for someone the ERP has retired is an open door, and nothing
+       was closing it: is_active flows Oracle → hierarchy_master, but app_users kept its
+       own copy and never heard. Reported on every run; only changed when asked, because
+       a wrong is_active_pli in the ERP would otherwise lock real people out silently on
+       a nightly cron. */
+    const [stale] = await conn.query(`
+      SELECT au.id, au.person_code, au.name, au.hierarchy_level, au.last_login_at
+        FROM app_users au JOIN hierarchy_master hm ON hm.person_code = au.person_code
+       WHERE au.is_active = 1
+       GROUP BY au.id, au.person_code, au.name, au.hierarchy_level, au.last_login_at
+      HAVING MAX(hm.is_active) = 0`);
+    if (!stale.length) log('  logins: none enabled for an inactive person');
+    else {
+      log(`  logins: ${stale.length} enabled for people the ERP marks inactive` +
+          (SYNC_LOGINS ? ' — disabling' : ' — pass --sync-logins to disable'));
+      stale.forEach(u => log(`     ${u.person_code}  L${u.hierarchy_level}  ${u.name || ''}` +
+                             `  (last login: ${u.last_login_at || 'never'})`));
+      if (SYNC_LOGINS) {
+        await conn.query(`UPDATE app_users SET is_active = 0 WHERE id IN (${stale.map(() => '?').join(',')})`,
+          stale.map(u => u.id));
+        log(`     ${stale.length} login(s) disabled`);
+      }
+    }
 
     await conn.commit();
   } catch (e) {
