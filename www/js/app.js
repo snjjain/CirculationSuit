@@ -337,6 +337,20 @@ function defaultScreen(u) {
   if (!u || !u.dashboard) return "home";
   return (u.landing && u.landing.screen) ? u.landing.screen : "command";
 }
+/* Which lines of business this login may see. The server decides it from the desigs
+   the person actually supervises; null means unrestricted. A Dak incharge over agent
+   executives has no business being shown the city-sale half of his branch — he does not
+   run it and cannot act on it. */
+function _segAllowed(seg) {
+  const list = S.user && S.user.segments;
+  if (!Array.isArray(list) || !list.length) return true;
+  return seg === 'all' ? list.length > 1 : list.includes(seg);
+}
+function _segOnly() {
+  const list = S.user && S.user.segments;
+  return (Array.isArray(list) && list.length === 1) ? list[0] : null;
+}
+
 /* Seed the state page from the profile before its first render, so a scoped user does
    not see Rajasthan flash up before their own state loads. */
 function _applyLanding(u) {
@@ -345,6 +359,10 @@ function _applyLanding(u) {
   const st = _csState();
   if (L.state) st.state = L.state;
   st.unit = L.unit || '';
+  // Open on the only line of business this person runs, rather than a combined view
+  // half of which is somebody else's.
+  const only = _segOnly();
+  if (only) st.seg = only;
   st.data = null;
 }
 
@@ -7408,7 +7426,8 @@ VIEWS.cc_state = () => {
   const hasCash  = t.cash.current > 0 || t.cash.previous > 0;
   const segBar = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
     <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b">View:</div>
-    ${[['all','All'], ['agent','Agent Sale (Credit)'], ...(hasCash ? [['cash','Cash Sale (City)']] : [])].map(([v,l]) =>
+    ${[['all','All'], ['agent','Agent Sale (Credit)'], ...(hasCash ? [['cash','Cash Sale (City)']] : [])]
+        .filter(([v]) => _segAllowed(v)).map(([v,l]) =>
       `<button onclick="csSetSeg('${v}')" style="padding:6px 14px;border:1px solid ${st.seg===v?'#1e3a8a':'#e2e8f0'};border-radius:20px;background:${st.seg===v?'#1e3a8a':'#fff'};color:${st.seg===v?'#fff':'#475569'};font-size:12px;font-weight:${st.seg===v?700:500};cursor:pointer;white-space:nowrap">${l}</button>`).join('')}
   </div>`;
 
@@ -13230,7 +13249,8 @@ function epExecTable() {
     <div style="padding:12px 16px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <div>
         <div style="font-weight:700;font-size:13px">Executive Scorecard</div>
-        <div style="font-size:10.5px;color:var(--muted)">Direction = supply trend + collection % + field presence · Click row for detail</div>
+        <div>${epPeriodLine(data.from || (st.filters||{}).from, data.to || (st.filters||{}).to)}</div>
+        <div style="font-size:10.5px;color:var(--muted)">Direction = supply trend + collection % + field presence · Avg. Supply = copies per day · Overdue excludes this month's bill · Click row for detail</div>
       </div>
       <div style="flex:1;min-width:180px">
         <input class="inp" placeholder="Search executive or unit…" value="${esc(st.listSearch || '')}"
@@ -13299,6 +13319,17 @@ function epExecTable() {
     </div>
     ${pager}
   </div>`;
+}
+
+/* Every table on this page states the window it covers. A table headed only
+   "Agencies (116)" leaves the reader to assume which month the supply and collection
+   beside it belong to. */
+function epPeriodLine(from, to, extra) {
+  if (!from) return '';
+  const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const d = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || '')); 
+    return m ? `${Number(m[3])} ${M[Number(m[2]) - 1]} ${m[1]}` : esc(iso || ''); };
+  return `<span style="font-size:10.5px;color:var(--muted)">${extra ? extra + ' · ' : ''}Showing <b style="color:var(--ink)">${d(from)} – ${d(to)}</b></span>`;
 }
 
 // ── Main (list) view ──────────────────────────────────────────────────────────
@@ -13611,6 +13642,7 @@ function epExecDetailView() {
   const agTable = `<div class="card" style="overflow:hidden">
     <div style="padding:12px 16px;border-bottom:1px solid var(--brd2);display:flex;align-items:center;gap:8px">
       <div style="font-weight:700;font-size:13px">Agencies (${agencies.length})</div>
+      <div>${epPeriodLine(data.from, data.to)}</div>
       <div style="font-size:10.5px;color:var(--muted)">Visits = field visits in the selected period, 0 means none were recorded · Avg. Supply = copies per supplying day · Overdue excludes this month's bill · Click a row for agency detail</div>
     </div>
     <div style="overflow-x:auto">

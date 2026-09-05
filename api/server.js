@@ -185,6 +185,38 @@ async function getScopeUnitCodes(personCode, hierarchyLevel) {
   return row && row.unit_code ? [row.unit_code] : [];
 }
 
+/* Which line of business a person is entitled to see.
+
+   A branch carries two incharges who are not interchangeable: executives (exec_desig
+   'EXEC') sell through agencies, so their incharge owns AGENT sale, while centre
+   incharges (exec_desig 'CI') run the city centres, so theirs owns CASH sale. Jaipur is
+   the clear case — Neeraj Jain over 22 executives, Narendra Sharma over 101 centre
+   incharges. Both were being shown the whole branch, so a Dak incharge responsible for
+   agent sale opened the dashboard on city-sale figures he does not run and cannot act
+   on.
+
+   Derived from the desigs the person actually supervises rather than from their level,
+   because the same level means different things in different branches. Zonal heads and
+   above own the branch outright and are entitled to both; admin is unrestricted.
+   Returns null for "no restriction". */
+const SEG_LEVEL_COL = { 2: 'edtn_incharge_code', 3: 'circ_incharge_code',
+                        4: 'zonal_head_code', 5: 'vp_circulation_code' };
+async function getScopeSegments(personCode, hierarchyLevel) {
+  if (!personCode || hierarchyLevel === 1) return null;
+  if (hierarchyLevel === 4 || hierarchyLevel === 5 || hierarchyLevel === 6) return null;
+  try {
+    const col = SEG_LEVEL_COL[hierarchyLevel];
+    const { rows } = col
+      ? await q(`SELECT DISTINCT exec_desig FROM hierarchy_mapping WHERE ${col} = ?`, [String(personCode)])
+      : await q(`SELECT DISTINCT exec_desig FROM hierarchy_mapping WHERE exec_code = ?`, [String(personCode)]);
+    const segs = new Set();
+    rows.forEach(r => segs.add(String(r.exec_desig || '').toUpperCase() === 'CI' ? 'cash' : 'agent'));
+    if (!segs.size) return null;                 // unmapped — do not lock them out
+    if (segs.has('agent') && segs.has('cash')) return null;
+    return [...segs];
+  } catch (_) { return null; }
+}
+
 async function getOuScopeFilter(req) {
   const personCode = req.auth ? (req.auth.personCode || '') : (req.headers['x-person-code'] || '');
   const hl = req.auth ? req.auth.hierarchyLevel : parseInt(req.headers['x-hierarchy-level'] || '1', 10);
@@ -232,7 +264,7 @@ function inClause(arr) {
 // the requireAuth/requireAdmin middleware + helpers. Must be set up BEFORE the guard
 // so the login/auth routes match first.
 const installAuth = require('./auth');
-const auth = installAuth({ app, q, getConn, LEVEL_META, getScopeUnitCodes });
+const auth = installAuth({ app, q, getConn, LEVEL_META, getScopeUnitCodes, getScopeSegments });
 
 // Guard: every /api/* request must carry a valid JWT, except these public endpoints.
 // Identity/scope is taken from verified token claims (req.auth), never from client headers.

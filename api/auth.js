@@ -17,7 +17,7 @@ const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
 const crypto = require('crypto');
 
-module.exports = function installAuth({ app, q, LEVEL_META, getScopeUnitCodes }) {
+module.exports = function installAuth({ app, q, LEVEL_META, getScopeUnitCodes, getScopeSegments }) {
   const JWT_SECRET = process.env.JWT_SECRET || (() => {
     const s = crypto.randomBytes(48).toString('hex');
     console.warn('[auth] JWT_SECRET not set in .env — using an ephemeral secret (all sessions drop on restart). Set JWT_SECRET to persist logins.');
@@ -168,8 +168,16 @@ module.exports = function installAuth({ app, q, LEVEL_META, getScopeUnitCodes })
       } catch (_) { /* fall back to the Command Centre */ }
     }
 
+    /* null means no restriction. A Dak incharge who supervises only 'EXEC' rows gets
+       ['agent'] and never sees the city-sale half of the branch he does not run. */
+    let segments = null;
+    if (!isAdmin && u.person_code && typeof getScopeSegments === 'function') {
+      try { segments = await getScopeSegments(u.person_code, hl); } catch (_) {}
+    }
+
     return {
       landing,
+      segments,
       id: u.id,
       person_code: u.person_code,
       name,
