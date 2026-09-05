@@ -1334,6 +1334,18 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
              WHERE h.supply_date BETWEEN ? AND ? AND h.loc_id IN (${IN})
              GROUP BY h.loc_id, h.hwk_cent_code, h.center_incharge`,
             [from, to, ...codes, from, to, ...codes]);
+          /* Centre names and hawker counts over the WINDOW, not from a single day.
+             They used to come off the as-on snapshot alone, so an incharge whose centres
+             did not lift that morning showed a dash for both while still carrying a full
+             month of supply — JAGDISH PRASAD YADAV read "—" centres against 22,150
+             copies. Anything that supplied during the period counts. */
+          const centreInfo = (from, to) => q(
+            `SELECT loc_id unit_code, hwk_cent_code cent,
+                    MAX(COALESCE(hawker_center, hwk_cent_code)) cent_name,
+                    COUNT(DISTINCT hawker_id) hawkers
+             FROM hawker_supply
+             WHERE supply_date BETWEEN ? AND ? AND loc_id IN (${IN})
+             GROUP BY loc_id, hwk_cent_code`, [from, to, ...codes]);
           /* Per unit, same as agent supply, and the per-UNIT part matters far more here:
              a centre changing hands mid-month splits its days across two incharge codes,
              so averaging per incharge counted the same centre twice — once at each
@@ -1346,11 +1358,12 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
              WHERE supply_date BETWEEN ? AND ? AND loc_id IN (${IN})
              GROUP BY loc_id`, [from, to, ...codes]);
           // Centre and hawker counts are a point-in-time headcount, not a range total.
-          const [cur, prv, holdCur, holdPrv, today, curD, prvD] = await Promise.all([
+          const [cur, prv, holdCur, holdPrv, cents, today, curD, prvD] = await Promise.all([
             scan(supWin.from, supWin.to),
             scan(prevWin.from, prevWin.to),
             holders(supWin.from, supWin.to),
             holders(prevWin.from, prevWin.to),
+            centreInfo(supWin.from, supWin.to),
             q(`SELECT loc_id unit_code, center_incharge,
                       MAX(center_incharge_name) center_incharge_name,
                       COUNT(DISTINCT hwk_cent_code) centres,
@@ -1379,7 +1392,7 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
               unit_code: unit, center_incharge: ci || '',
               center_incharge_name: ownerName.get(ci || '') || null,
               cur_total: 0, cur_days: 0, prv_total: 0, prv_days: 0,
-              centres: 0, hawkers: 0, cent_name: null,
+              centres: 0, hawkers: 0, cent_name: null, cent_list: [], cent_names: '',
             });
             return merged.get(k);
           };
@@ -1391,9 +1404,23 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
             const m = seedCi(r.unit_code, owner.get(centKey(r)));
             m.prv_total += N(r.total); m.prv_days = prvDays[r.unit_code] || 0;
           });
+          /* Attributed to the same holder as the copies, so the centre list and the
+             supply beside it describe one person's ground. Names are carried in full and
+             comma-joined for display — an incharge running four centres was previously
+             shown only a count. */
+          cents.rows.forEach(r => {
+            const m = seedCi(r.unit_code, owner.get(centKey(r)));
+            m.centres += 1;
+            m.hawkers += N(r.hawkers);
+            if (r.cent_name) m.cent_list.push(String(r.cent_name).trim());
+          });
           today.rows.forEach(r => { const m = seedCi(r.unit_code, r.center_incharge);
-            m.centres = N(r.centres); m.hawkers = N(r.hawkers); m.cent_name = r.cent_name;
             if (r.center_incharge_name) m.center_incharge_name = r.center_incharge_name; });
+          merged.forEach(m => {
+            m.cent_list = [...new Set(m.cent_list)].sort();
+            m.cent_names = m.cent_list.join(', ');
+            m.cent_name  = m.cent_list[0] || null;   // kept for callers reading one name
+          });
           return { rows: [...merged.values()] };
         })(),
         q(`SELECT unit_code, ag_code, -COALESCE(SUM(amount),0) amt, COUNT(*) txn
@@ -1540,7 +1567,7 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
           _agc: 0, _agp: 0, _csc: 0, _csp: 0, _agdc: 0, _agdp: 0, _csdc: 0, _csdp: 0,
           txn: 0, agencies_paid: 0, os_agencies: 0, critical: 0,
           visits: 0, agencies_visited: 0,
-          hawker_centres: 0, hawker_count: 0, hawker_cent_name: null,
+          hawker_centres: 0, hawker_count: 0, hawker_cent_name: null, hawker_cent_names: '',
         };
         if (known && E[code].exec_name === code) E[code].exec_name = known;
         if (unit) E[code].units.add(unit);
@@ -1575,7 +1602,10 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
         const b = B[r.unit_code]; if (b) takeCs(b, r);
         // City sale belongs to the centre incharge, who is an executive in their own right.
         const e = exec(r.center_incharge, r.center_incharge_name, r.unit_code);
-        if (e) { takeCs(e, r); e.hawker_centres += N(r.centres); e.hawker_count += N(r.hawkers); if (r.cent_name && !e.hawker_cent_name) e.hawker_cent_name = r.cent_name; }
+        if (e) { takeCs(e, r); e.hawker_centres += N(r.centres); e.hawker_count += N(r.hawkers);
+                 if (r.cent_names) e.hawker_cent_names = e.hawker_cent_names
+                   ? e.hawker_cent_names + ', ' + r.cent_names : r.cent_names;
+                 if (r.cent_name && !e.hawker_cent_name) e.hawker_cent_name = r.cent_name; }
       });
       /* Both supply loops are done, so the average is taken here — once per branch and
          once per executive, from raw copies over the window's own days. Agent and cash
@@ -1783,6 +1813,11 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
             execRow.hawker_centres = e.hawker_centres;
             execRow.hawker_count = e.hawker_count;
             execRow.hawker_cent_name = e.hawker_cent_name || null;
+            /* Every centre this person runs, not just the first. An incharge with four
+               centres was described by one name and a count. */
+            execRow.hawker_cent_names = e.hawker_cent_names
+              ? [...new Set(e.hawker_cent_names.split(', ').filter(Boolean))].sort().join(', ')
+              : null;
             /* The executive's direct manager. exec_hierarchy_mapping calls the column
                edtn_incharge ("edition"), but it carries the DAK incharge — every JA0
                executive routes through Ankit Bihari Sharma (69) to Neeraj Jain, so the

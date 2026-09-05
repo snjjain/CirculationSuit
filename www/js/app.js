@@ -6743,7 +6743,9 @@ function _csInsights(st, d) {
         ${th(supHead + ' (Average)', 'right')}
         ${th('Was', 'right')}
         ${th('Growth', 'right')}
-        ${th('Collection', 'right')}
+        ${th('Bill Amt', 'right')}
+        ${th('Collected', 'right')}
+        ${th('Coll %', 'right')}
         ${th('Overdue', 'right')}
         ${th('Status')}
       </tr></thead>
@@ -6759,9 +6761,10 @@ function _csInsights(st, d) {
       const pct = maxSupply ? Math.min(100, (supVal / maxSupply) * 100) : 0;
       const cp = r.collection.pct;
       const _isCi = r.is_ci || (!r.supply.agent && r.supply.cash > 0);
+      const _cn = r.hawker_cent_names || r.hawker_cent_name;
       const subInfo = _isCi
-        ? (r.hawker_cent_name
-            ? `${esc(r.hawker_cent_name)}${(r.hawker_centres || r.hawker_count) ? ` · ${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk` : ''}`
+        ? (_cn
+            ? `${esc(_cn)}${(r.hawker_centres || r.hawker_count) ? ` · ${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk` : ''}`
             : (r.hawker_centres || r.hawker_count
                 ? `${r.hawker_centres || 0} ctr · ${r.hawker_count || 0} hwk`
                 : 'Centre Incharge'))
@@ -6774,12 +6777,14 @@ function _csInsights(st, d) {
         <td style="padding:7px 8px;font-size:11px;color:#94a3b8;text-align:right;width:26px">${i + 1}</td>
         <td style="padding:7px 8px;max-width:230px">
           <div style="font-size:12.5px;font-weight:700;color:#1e3a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</div>
-          ${subInfo ? `<div style="font-size:10px;color:${_isCi ? '#0ea5e9' : '#94a3b8'}">${subInfo}</div>` : ''}
+          ${subInfo ? `<div style="font-size:10px;color:${_isCi ? '#0ea5e9' : '#94a3b8'};white-space:normal;line-height:1.45">${subInfo}</div>` : ''}
         </td>
         <td style="${num};font-weight:700;color:#0f172a">${_ccN(supVal)}
           <div style="height:3px;background:#eef2f7;border-radius:3px;margin-top:3px"><div style="height:3px;width:${pct}%;background:#3b82f6;border-radius:3px"></div></div></td>
         <td style="${num};color:#64748b">${prevVal ? _ccN(prevVal) : '—'}</td>
         <td style="${num};font-weight:700;color:${g == null ? '#cbd5e1' : g < 0 ? '#b91c1c' : '#15803d'}">${g == null ? '—' : (g > 0 ? '+' : '') + g + '%'}</td>
+        <td style="${num};color:#64748b">${r.collection.billed ? _ccINR(r.collection.billed) : '—'}</td>
+        <td style="${num};font-weight:600;color:#0f172a">${r.collection.collected ? _ccINR(r.collection.collected) : '—'}</td>
         <td style="${num};font-weight:700;color:${cp == null ? '#cbd5e1' : cp < 60 ? '#b91c1c' : cp < 80 ? '#b45309' : '#15803d'}">${cp == null ? '—' : cp + '%'}</td>
         <td style="${num};color:${r.outstanding.amount > 1000000 ? '#b91c1c' : '#475569'}">${r.outstanding.amount ? _ccINR(r.outstanding.amount) : '—'}</td>
         <td style="padding:7px 8px">${_csStatusBadge[stClass]}
@@ -7009,12 +7014,17 @@ function _csCITable(st, d, rows) {
     const isInactive = r.is_active === false;
     const centres = r.hawker_centres || 0;
     const hawkers = r.hawker_count || 0;
+    const centreNames = r.hawker_cent_names || r.hawker_cent_name || '';
     const growth = r.supply.cash_growth_pct != null ? r.supply.cash_growth_pct : r.supply.growth_pct;
     const msEntry = ciMsAvail ? (_cms.by_ci[r.exec_code] || (_cms.by_exec || {})[r.exec_code]) : null;
     const msCellC = ciMsAvail ? `<td style="padding:8px 8px;text-align:right" title="${msEntry ? `${_ccN(msEntry.our_copies)} of ${_ccN(msEntry.total_mkt)} market copies · ${msEntry.n || 0} hawkers with data` : 'No competitor data'}">${_msPct(msEntry ? msEntry.share_pct : null)}</td>` : '';
     return `<tr onclick="${onClick}" style="cursor:pointer;border-top:1px solid #eef2f7;${isInactive?'opacity:.65':''}" onmouseenter="this.style.background='#f0f9ff'" onmouseleave="this.style.background=''">
       <td style="padding:8px 8px;text-align:left">
         <div><b style="color:#0ea5e9;font-size:12.5px">${esc(r.name)}</b></div>
+        ${/* The centres themselves, named. A count alone ("1 ctr") does not say which
+              centre a person runs, and someone holding several was described by a
+              number. Comma separated, and wrapped rather than clipped. */''}
+        ${centreNames ? `<div style="font-size:10.5px;color:#0f172a;line-height:1.45;max-width:280px;white-space:normal">${esc(centreNames)}</div>` : ''}
         ${centres || hawkers ? `<div style="font-size:10px;color:#0ea5e9">${centres} ctr · <span onclick="event.stopPropagation();csHwkPopup('${_csQ(r.exec_code||'')}','${_csQ(r.name||'')}','${_csQ(r.unit_code || ciUnit)}')" style="text-decoration:underline;cursor:pointer;color:#0284c7">${hawkers} hwk</span></div>` : ''}
       </td>
       <td style="padding:8px 8px;text-align:right;font-size:13px;font-weight:700">${centres || '—'}</td>
