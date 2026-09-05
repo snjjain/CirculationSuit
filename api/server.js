@@ -232,7 +232,7 @@ function inClause(arr) {
 // the requireAuth/requireAdmin middleware + helpers. Must be set up BEFORE the guard
 // so the login/auth routes match first.
 const installAuth = require('./auth');
-const auth = installAuth({ app, q, getConn, LEVEL_META });
+const auth = installAuth({ app, q, getConn, LEVEL_META, getScopeUnitCodes });
 
 // Guard: every /api/* request must carry a valid JWT, except these public endpoints.
 // Identity/scope is taken from verified token claims (req.auth), never from client headers.

@@ -298,7 +298,7 @@ function restoreSession() {
   const token = sessionStorage.getItem("patrika_token");
   const prof  = sessionStorage.getItem("patrika_profile");
   if (token && prof) {
-    try { S.user = JSON.parse(prof); AUTH_TOKEN = token; S.screen = defaultScreen(S.user); }
+    try { S.user = JSON.parse(prof); AUTH_TOKEN = token; S.screen = defaultScreen(S.user); _applyLanding(S.user); }
     catch { S.user = null; AUTH_TOKEN = null; }
   }
 }
@@ -326,11 +326,31 @@ function go(screen) {
   S.screen = screen; S.sideOpen = false; render();
   const m = $(".main"); if (m) m.scrollTop = 0;
 }
-/* Dashboard users land straight on Command Centre; field-app users on the launcher */
-function defaultScreen(u) { return u && u.dashboard ? "command" : "home"; }
+/* Where a session opens.
+
+   Admin still lands on the all-India Command Centre. A scoped user does not: for a VP
+   or a branch incharge that page is mostly other people's branches, with their own one
+   click away. The server works out their ground from the same scope it enforces and
+   hands it over as profile.landing, which is applied here. Field-app users are
+   unaffected and still get the launcher. */
+function defaultScreen(u) {
+  if (!u || !u.dashboard) return "home";
+  return (u.landing && u.landing.screen) ? u.landing.screen : "command";
+}
+/* Seed the state page from the profile before its first render, so a scoped user does
+   not see Rajasthan flash up before their own state loads. */
+function _applyLanding(u) {
+  const L = u && u.landing;
+  if (!L || L.screen !== 'cc_state') return;
+  const st = _csState();
+  if (L.state) st.state = L.state;
+  st.unit = L.unit || '';
+  st.data = null;
+}
 
 function setLoggedIn(profile, token) {
   S = { user: profile, screen: defaultScreen(profile), openGroups: {}, sideOpen: false, live: {}, range: null };
+  _applyLanding(profile);
   AUTH_TOKEN = token;
   saveSession(profile, token);
   render();
@@ -4242,6 +4262,27 @@ window.ccSetCustomRange = (field, val) => {
   if (st.rangeFrom && st.rangeTo && st.rangeFrom <= st.rangeTo) { st.data = null; st._loading = false; render(); }
   else render();
 };
+/* The comparison basis is a real choice, not a fixed assumption.
+
+   This control used to be a button that only opened two date boxes, and every preset
+   the backend supported was unreachable — the screen always compared the same window
+   one year earlier however it was labelled. Management asked to be able to say "last
+   month" or "today against yesterday" and see the growth column actually change. */
+const CMP_PRESETS = [
+  ['prev_year',  'Same window last year'],
+  ['prev_month', 'Same window last month'],
+  ['prev_week',  'Same window last week'],
+  ['prev_day',   'Previous day'],
+  ['custom',     'Custom dates…'],
+];
+function _cmpSelect(cur, custom, onChange) {
+  const val = custom ? 'custom' : (cur || 'prev_year');
+  return `<select onchange="${onChange}(this.value)"
+    style="padding:7px 32px 7px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%278%27 viewBox=%270 0 12 8%27%3E%3Cpath fill=%27%2364748b%27 d=%27M6 8L0 0h12z%27/%3E%3C/svg%3E') no-repeat right 10px center;color:#0f172a;font-size:12.5px;min-width:190px;appearance:none;-webkit-appearance:none;font-weight:500;cursor:pointer">
+    ${CMP_PRESETS.map(([k, l]) => `<option value="${k}"${val === k ? ' selected' : ''}>${l}</option>`).join('')}
+  </select>`;
+}
+
 // Which window the selection is measured against — see csSetCompare on the branch view.
 window.ccSetCompare = (field, val) => {
   const st = _ccState();
@@ -4254,6 +4295,12 @@ window.ccSetCompare = (field, val) => {
 window.ccClearCompare = () => {
   const st = _ccState();
   st.cmpFrom = ''; st.cmpTo = ''; st.data = null; st._loading = false; render();
+};
+window.ccSetCompareMode = (mode) => {
+  const st = _ccState();
+  if (mode === 'custom') { st.cmpCustom = true; render(); return; }
+  st.cmpCustom = false; st.cmpFrom = ''; st.cmpTo = '';
+  st.compare = mode; st.data = null; st._loading = false; render();
 };
 window.ccReset = () => { S.live.cc = null; render(); };
 window.ccDrill = (screen, stateKey) => {
@@ -4273,6 +4320,8 @@ const _ccDcrName = k => ({ 'RAJASTHAN': 'Rajasthan', 'MADHYA PRADESH': 'Madhya P
 /* Quarterly is fetched separately: it is a two-year scan of supply_data server-side, and
    holding the KPI cards behind it left the dashboard on skeletons for ~8 seconds. The
    charts show their own placeholder until it lands. */
+/* Both screens draw these charts now, so both must repaint when they arrive. */
+function _ccQtrRepaint() { if (S.screen === 'command' || S.screen === 'cc_state') render(); }
 function _ccLoadQuarterly() {
   const st = _ccState();
   if (st._qtrLoading || st.qtr) return;
@@ -4282,8 +4331,8 @@ function _ccLoadQuarterly() {
   if (st.unit) p.set('unit_code', st.unit);
   fetch(`${location.origin}/api/command/quarterly?${p}`, { headers: api.h() })
     .then(r => r.json())
-    .then(d => { st.qtr = d && d.detail ? { _err: d.detail } : d; st._qtrLoading = false; if (S.screen === 'command') render(); })
-    .catch(e => { st.qtr = { _err: String(e && e.message || e) }; st._qtrLoading = false; if (S.screen === 'command') render(); });
+    .then(d => { st.qtr = d && d.detail ? { _err: d.detail } : d; st._qtrLoading = false; _ccQtrRepaint(); })
+    .catch(e => { st.qtr = { _err: String(e && e.message || e) }; st._qtrLoading = false; _ccQtrRepaint(); });
 }
 function _ccLoad() {
   const st = _ccState();
@@ -5810,15 +5859,14 @@ function _cmdViewNew() {
            on COVID, where "vs one year earlier" would compare two 2019/2020 days and
            answer nothing — the useful question is COVID against today. */
         const set = !!(st.cmpFrom && st.cmpTo);
-        const open = set || st.range === 'covid';
+        const open = set || st.cmpCustom || st.range === 'covid';
         const dI = (v, f) => `<input type="date" value="${esc(v || '')}" onchange="ccSetCompare('${f}',this.value)" style="padding:6px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;color:#0f172a">`;
         return `<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">Compare with</div>
           ${open
             ? `<div style="display:flex;gap:5px;align-items:center">${dI(st.cmpFrom, 'from')}<span style="color:#94a3b8;font-size:12px">→</span>${dI(st.cmpTo, 'to')}
                  ${set ? `<a onclick="ccClearCompare()" title="Back to the same window last year" style="cursor:pointer;color:#64748b;font-size:11px;text-decoration:underline">reset</a>` : ''}</div>
                ${!set ? `<div style="font-size:10.5px;color:#b45309;margin-top:4px">Pick what to compare the COVID period against — today by default.</div>` : ''}`
-            : `<button onclick="ccSetCompare('from','')" title="By default this range is compared with the same window one year earlier"
-                 style="padding:7px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font-size:12px;cursor:pointer">Same window last year ▾</button>`}
+            : _cmpSelect(st.compare, false, 'ccSetCompareMode')}
         </div>`;
       })()}
       <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">Date range</div>
@@ -5923,52 +5971,14 @@ function _cmdViewNew() {
      year (Q1 Apr-Jun) and supply on the calendar year (Q1 Jan-Mar), so each states its
      own basis under the title — otherwise the same "Q1" on two adjacent charts would be
      read as the same three months. */
-  _ccLoadQuarterly();
-  const Q = st.qtr && !st.qtr._err ? st.qtr : null;
-  const cBase = Q && (Q.collection_base || Q.fy_base), cCur = Q && (Q.collection_current || Q.fy_current);
-  const sBase = Q && (Q.supply_base || Q.fy_base), sCur = Q && (Q.supply_current || Q.fy_current);
-  const chartSkel = title => `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
-    <div style="font-size:14.5px;font-weight:800;color:#0f172a">${title}</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:10px">${st.qtr && st.qtr._err ? 'Could not load.' : 'Loading…'}</div>
-    <div style="height:150px;background:#f1f5f9;border-radius:8px"></div></div>`;
-  const charts = !Q ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
-    ${chartSkel('Quarterly Collection')}${chartSkel('Quarterly Supply (Net Paid)')}</div>`
-    : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
-    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
-      <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Collection</div>
-      <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(cBase)} (Base) vs ${esc(cCur)} · receipts banked · ${esc(Q.collection_basis || 'Financial year · Apr–Mar')}</div>
-      ${_ccQuarterChart(Q.collection, cBase, cCur, _ccINR, '#22c55e')}
-    </div>
-    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
-      <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Supply (Net Paid)</div>
-      <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(sBase)} (Base) vs ${esc(sCur)} · average copies per day · ${esc(Q.supply_basis || 'Calendar year · Jan–Dec')}</div>
-      ${_ccQuarterChart(Q.supply, sBase, sCur, v => _ccN(v) + ' cp', '#3b82f6')}
-    </div>
-  </div>`;
+  const charts = _ccQuarterlyBlock(st);
 
   const cards = `<div style="font-size:11px;font-weight:800;letter-spacing:.06em;color:#64748b;text-transform:uppercase;margin:0 0 8px 2px">State-wise Performance</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:12px;margin-bottom:18px">
     ${shown.map(x => _ccStateCard(x, d)).join('')}
   </div>`;
 
-  const alerts = (d.alerts || []).filter(a => !st.state || a.state === st.state);
-  const opps   = (d.opportunities || []).filter(o => !st.state || o.state === st.state);
-
-  const twoCol = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
-    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
-      <div style="font-size:15px;font-weight:800;color:#b91c1c;margin-bottom:2px">Key Alerts &amp; Critical Risks</div>
-      <div style="font-size:11px;color:#64748b;margin-bottom:11px">Auto-derived from the ${esc(String(d.compare_label || '').toLowerCase())} comparison · click to drill down</div>
-      ${alerts.length ? alerts.map(_ccAlertCard).join('')
-        : `<div style="font-size:12.5px;color:#15803d;background:#f0fdf4;border-radius:8px;padding:14px">No alerts triggered for this selection.</div>`}
-    </div>
-    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
-      <div style="font-size:15px;font-weight:800;color:#15803d;margin-bottom:2px">Key Opportunities</div>
-      <div style="font-size:11px;color:#64748b;margin-bottom:11px">Growth and recovery with estimated impact · click to drill down</div>
-      ${opps.length ? opps.map(_ccOppCard).join('')
-        : `<div style="font-size:12.5px;color:#64748b;background:#f8fafc;border-radius:8px;padding:14px">No opportunities flagged for this selection.</div>`}
-    </div>
-  </div>
-  <style>@media(max-width:900px){.cc-two{grid-template-columns:1fr!important}}</style>`;
+  const twoCol = _ccAlertsBlock(d, st.state);
 
   const ms = (d.market_share || []).filter(m => !st.state || m.state === st.state);
   const topGain = ms.slice().sort((a, b) => (b.change_pp ?? -99) - (a.change_pp ?? -99))[0];
@@ -6124,6 +6134,7 @@ VIEWS.command = () => (cmdDesign() === 'new' ? _cmdViewNew() : _cmdViewLegacy())
 function _csState() {
   S.ccStateDash = S.ccStateDash || {
     state: 'RAJASTHAN', unit: '', range: _ccDefaultRange(), rangeFrom: '', rangeTo: '',
+    compare: 'prev_year', cmpCustom: false,
     data: null, _loading: false,
     movers: null, _movLoading: false, movTab: 'declining', movAll: false,
     sp: null, _spLoading: false, spPage: 1, spStatus: '',
@@ -6263,7 +6274,9 @@ window.ccOpenExecPanel = (execCode, name, unitCode) => {
 };
 
 function _csParams(st) {
-  const p = new URLSearchParams({ state: st.state, range: st.range, compare: 'prev_year' });
+  /* The chosen basis, not a hard-coded one. This literal 'prev_year' was why the
+     Compare With control did nothing on the state page. */
+  const p = new URLSearchParams({ state: st.state, range: st.range, compare: st.compare || 'prev_year' });
   // The Agent / Cash toggle applies to the movers list too, not just the cards.
   if (st.seg) p.set('seg', st.seg);
   if (st.unit) p.set('unit_code', st.unit);
@@ -6289,7 +6302,13 @@ window.csSetCompare = (field, val) => {
 window.csClearCompare = () => {
   const st = _csState();
   st.cmpFrom = ''; st.cmpTo = '';
-  _csReset(st); render();
+  st.cmpCustom = false; _csReset(st); render();
+};
+window.csSetCompareMode = (mode) => {
+  const st = _csState();
+  if (mode === 'custom') { st.cmpCustom = true; render(); return; }
+  st.cmpCustom = false; st.cmpFrom = ''; st.cmpTo = '';
+  st.compare = mode; _csReset(st); render();
 };
 /* Each request is stamped with the parameters it was made for, and a reply whose stamp
    no longer matches is dropped.
@@ -6534,6 +6553,85 @@ function _csStatusReason(r, seg) {
   return reasons.join(' · ') || 'No data';
 }
 
+/* Every table says which period it is showing and what it is measured against.
+   Management asked for this explicitly: a table headed only "Last Month" leaves the
+   reader guessing whether a growth column compares last year, last month or yesterday.
+   One helper so the wording cannot drift between tables. */
+function _csDMY(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso || ''))) return esc(iso || '');
+  const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const [y, m, d] = iso.split('-');
+  return `${Number(d)} ${M[Number(m) - 1]} ${y}`;
+}
+function _csSpan(from, to) {
+  if (!from) return '';
+  return from === to ? _csDMY(from) : `${_csDMY(from)} – ${_csDMY(to)}`;
+}
+function _csPeriodLine(d, extra) {
+  if (!d) return '';
+  const cur = _csSpan(d.range_from, d.range_to);
+  const cmp = _csSpan(d.prev_range_from, d.prev_range_to);
+  return `<div style="font-size:11px;color:#64748b;margin-bottom:10px;line-height:1.55">
+    ${extra ? `${extra} · ` : ''}Showing <b style="color:#0f172a">${esc(d.range_label || '')}</b>${cur ? ` · <b style="color:#0f172a">${cur}</b>` : ''}
+    ${cmp ? `<span style="color:#94a3b8">compared with</span> <b style="color:#0f172a">${cmp}</b>
+      <span style="color:#94a3b8">(${esc(d.compare_label || 'comparison')})</span>` : ''}
+  </div>`;
+}
+
+/* Quarterly charts and the alerts pair, lifted out of the Command Centre view so a
+   scoped user's own state page can show the same two blocks for their own ground. Both
+   take their data as arguments and hold no view state of their own, so the Admin screen
+   renders exactly as it did before.
+
+   The two charts do NOT share a quarter definition: collection runs on the financial
+   year (Q1 Apr-Jun) and supply on the calendar year (Q1 Jan-Mar), so each states its
+   own basis under the title - otherwise the same "Q1" on two adjacent charts would be
+   read as the same three months. */
+function _ccQuarterlyBlock(st) {
+  _ccLoadQuarterly();
+  const Q = st.qtr && !st.qtr._err ? st.qtr : null;
+  const cBase = Q && (Q.collection_base || Q.fy_base), cCur = Q && (Q.collection_current || Q.fy_current);
+  const sBase = Q && (Q.supply_base || Q.fy_base), sCur = Q && (Q.supply_current || Q.fy_current);
+  const skel = title => `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+    <div style="font-size:14.5px;font-weight:800;color:#0f172a">${title}</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:10px">${st.qtr && st.qtr._err ? 'Could not load.' : 'Loading…'}</div>
+    <div style="height:150px;background:#f1f5f9;border-radius:8px"></div></div>`;
+  if (!Q) return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
+    ${skel('Quarterly Collection')}${skel('Quarterly Supply (Net Paid)')}</div>`;
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+      <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Collection</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(cBase)} (Base) vs ${esc(cCur)} · receipts banked · ${esc(Q.collection_basis || 'Financial year · Apr–Mar')}</div>
+      ${_ccQuarterChart(Q.collection, cBase, cCur, _ccINR, '#22c55e')}
+    </div>
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+      <div style="font-size:14.5px;font-weight:800;color:#0f172a">Quarterly Supply (Net Paid)</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:10px">${esc(sBase)} (Base) vs ${esc(sCur)} · average copies per day · ${esc(Q.supply_basis || 'Calendar year · Jan–Dec')}</div>
+      ${_ccQuarterChart(Q.supply, sBase, sCur, v => _ccN(v) + ' cp', '#3b82f6')}
+    </div>
+  </div>`;
+}
+function _ccAlertsBlock(d, stateFilter) {
+  if (!d || d._err) return '';
+  const alerts = (d.alerts || []).filter(a => !stateFilter || a.state === stateFilter);
+  const opps   = (d.opportunities || []).filter(o => !stateFilter || o.state === stateFilter);
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px" class="cc-two">
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+      <div style="font-size:15px;font-weight:800;color:#b91c1c;margin-bottom:2px">Key Alerts &amp; Critical Risks</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:11px">Auto-derived from the ${esc(String(d.compare_label || '').toLowerCase())} comparison · click to drill down</div>
+      ${alerts.length ? alerts.map(_ccAlertCard).join('')
+        : `<div style="font-size:12.5px;color:#15803d;background:#f0fdf4;border-radius:8px;padding:14px">No alerts triggered for this selection.</div>`}
+    </div>
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+      <div style="font-size:15px;font-weight:800;color:#15803d;margin-bottom:2px">Key Opportunities</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:11px">Growth and recovery with estimated impact · click to drill down</div>
+      ${opps.length ? opps.map(_ccOppCard).join('')
+        : `<div style="font-size:12.5px;color:#64748b;background:#f8fafc;border-radius:8px;padding:14px">No opportunities flagged for this selection.</div>`}
+    </div>
+  </div>
+  <style>@media(max-width:900px){.cc-two{grid-template-columns:1fr!important}}</style>`;
+}
+
 /* ── Quick Insights panel ── */
 function _csInsights(st, d) {
   const rows = (d.branches || []).filter(r => {
@@ -6596,7 +6694,8 @@ function _csInsights(st, d) {
       <thead><tr>
         ${th('#')}
         ${th(esc(gLabel || 'Name'))}
-        ${th(supHead + ' (cp/day)', 'right')}
+        ${th(supHead + ' (Average)', 'right')}
+        ${th('Was', 'right')}
         ${th('Growth', 'right')}
         ${th('Collection', 'right')}
         ${th('Outstanding', 'right')}
@@ -6606,6 +6705,11 @@ function _csInsights(st, d) {
     list.map((r, i) => {
       const g = r.supply.growth_pct;
       const supVal = st.seg === 'agent' ? r.supply.agent : st.seg === 'cash' ? r.supply.cash : r.supply.current;
+      /* The figure the growth column divides by, shown rather than implied — a bare
+         "+0.5%" gave the reader no way to see what it was measured against. */
+      const prevVal = st.seg === 'agent' ? (r.supply.agent_prev != null ? r.supply.agent_prev : r.supply.agent_previous)
+                    : st.seg === 'cash'  ? (r.supply.cash_prev  != null ? r.supply.cash_prev  : r.supply.cash_previous)
+                    : r.supply.previous;
       const pct = maxSupply ? Math.min(100, (supVal / maxSupply) * 100) : 0;
       const cp = r.collection.pct;
       const _isCi = r.is_ci || (!r.supply.agent && r.supply.cash > 0);
@@ -6628,11 +6732,12 @@ function _csInsights(st, d) {
         </td>
         <td style="${num};font-weight:700;color:#0f172a">${_ccN(supVal)}
           <div style="height:3px;background:#eef2f7;border-radius:3px;margin-top:3px"><div style="height:3px;width:${pct}%;background:#3b82f6;border-radius:3px"></div></div></td>
+        <td style="${num};color:#64748b">${prevVal ? _ccN(prevVal) : '—'}</td>
         <td style="${num};font-weight:700;color:${g == null ? '#cbd5e1' : g < 0 ? '#b91c1c' : '#15803d'}">${g == null ? '—' : (g > 0 ? '+' : '') + g + '%'}</td>
         <td style="${num};font-weight:700;color:${cp == null ? '#cbd5e1' : cp < 60 ? '#b91c1c' : cp < 80 ? '#b45309' : '#15803d'}">${cp == null ? '—' : cp + '%'}</td>
         <td style="${num};color:${r.outstanding.amount > 1000000 ? '#b91c1c' : '#475569'}">${r.outstanding.amount ? _ccINR(r.outstanding.amount) : '—'}</td>
-        <td style="padding:7px 8px;white-space:nowrap">${_csStatusBadge[stClass]}
-          ${stReason ? `<div style="font-size:9.5px;color:#94a3b8;margin-top:2px;max-width:150px;overflow:hidden;text-overflow:ellipsis">${esc(stReason)}</div>` : ''}</td>
+        <td style="padding:7px 8px">${_csStatusBadge[stClass]}
+          ${stReason ? `<div style="font-size:9.5px;color:#94a3b8;margin-top:2px;max-width:210px;white-space:normal;line-height:1.45">${esc(stReason)}</div>` : ''}</td>
       </tr>`;
     }).join('') + `</tbody></table></div>`;
 
@@ -6640,7 +6745,7 @@ function _csInsights(st, d) {
 
   return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:16px">
     <div style="font-size:14px;font-weight:800;color:#1e3a8a;margin-bottom:2px">Quick Insights</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:10px">Click any row to drill down · ${esc(d.range_label)}</div>
+    ${_csPeriodLine(d, 'Click any row to drill down')}
     ${tabBar}${items}${aiBlock}
   </div>`;
 }
@@ -6822,7 +6927,7 @@ function _csZHPerformance(st, d) {
 
   return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:16px">
     <div style="font-size:14px;font-weight:800;color:#1e3a8a;margin-bottom:2px">Zonal Head Performance</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:10px">Click to expand · ZH → Circulation Incharge → Dak Incharge → Executive · ${esc(d.range_label||'')}</div>
+    ${_csPeriodLine(d, 'Click to expand · ZH → Circulation Incharge → Dak Incharge → Executive')}
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
       ${thead}<tbody id="zh-perf-tbody">${_csZHRows(st, d)}</tbody>
     </table></div>
@@ -6887,7 +6992,8 @@ function _csCITable(st, d, rows) {
     <thead>${thead}</thead><tbody>${trows}</tbody></table></div>`;
 
   return _csCard(`Centre Incharge Performance`,
-    `Cash sale, centre-managed supply · Collection is always 100% for city centres · ${esc(d.range_label)}`,
+    `Cash sale, centre-managed supply · Collection is always 100% for city centres`
+      + _csPeriodLine(d),
     inner, controls);
 }
 
@@ -7067,7 +7173,8 @@ function _csConsolidated(st, d) {
   </div>`;
 
   return _csCard(`${esc(gLabel)}-wise Performance`,
-    `Supply · Collection, Prev Bill & Outstanding in ₹ · ${esc(d.range_label)} · click any column header to sort`,
+    `Supply · Collection, Prev Bill & Outstanding in ₹ · click any column header to sort`
+      + _csPeriodLine(d),
     inner, controls);
 }
 
@@ -7097,7 +7204,7 @@ VIEWS.cc_state = () => {
      picker is always available and is opened by default on the COVID range, where the
      comparison is the entire point. */
   const cmpSet = !!(st.cmpFrom && st.cmpTo);
-  const cmpOpen = cmpSet || st.range === 'covid';
+  const cmpOpen = cmpSet || st.cmpCustom || st.range === 'covid';
   const cmpBox = `<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:5px">Compare with</div>
     ${cmpOpen ? `<div style="display:flex;gap:6px;align-items:center">
         <input type="date" value="${esc(st.cmpFrom || '')}" onchange="csSetCompare('from',this.value)"
@@ -7110,8 +7217,7 @@ VIEWS.cc_state = () => {
           style="cursor:pointer;color:#64748b;font-size:11px;text-decoration:underline">reset</a>` : ''}
       </div>
       ${!cmpSet ? `<div style="font-size:10.5px;color:#b45309;margin-top:4px">Pick the dates to compare the COVID period against — today by default.</div>` : ''}`
-    : `<button onclick="csSetCompare('from','')" style="padding:6px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font-size:12px;cursor:pointer"
-         title="By default this range is compared with the same window one year earlier">Same window last year ▾</button>`}
+    : _cmpSelect(st.compare, false, 'csSetCompareMode')}
   </div>`;
 
   const crumb = `<div style="font-size:12px;color:#64748b">
@@ -7159,7 +7265,12 @@ VIEWS.cc_state = () => {
 
   /* ── KPI cards ── */
   const cards = `<div class="cs-strip" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px;margin-bottom:18px">
-    ${(()=>{ const prevLbl = d.prev_range_from ? `Same window last year · ${esc(d.prev_range_from)} – ${esc(d.prev_range_to)}` : `${esc(d.compare_label)}`; return `
+    ${(()=>{ /* The caption must name the basis actually chosen. It said "Same window last
+         year" whatever the Compare With control was set to, which made a correct figure
+         look like the wrong one. */
+       const prevLbl = d.prev_range_from
+         ? `${esc(d.compare_label || 'Compared with')} · ${_csSpan(d.prev_range_from, d.prev_range_to)}`
+         : `${esc(d.compare_label || '')}`; return `
     ${_ccTopCard({ label: 'Total supply (avg/day)', color: '#1e3a8a',
       value: _ccN(t.supply.current) + ' cp', trend: _ccTrend(t.supply.growth_pct),
       sub: prevLbl })}
@@ -7191,7 +7302,7 @@ VIEWS.cc_state = () => {
       barPct: t.collection.pct })}`;})()}
     ${_ccTopCard({ label: 'Outstanding', color: '#f59e0b',
       value: _ccINR(t.outstanding.amount),
-      sub: `${_ccN(t.outstanding.critical)} of ${_ccN(t.outstanding.agencies)} agencies above ₹1 L` })}
+      sub: `Overdue only · last month's bill excluded · ${_ccN(t.outstanding.critical)} of ${_ccN(t.outstanding.agencies)} agencies with dues are above ₹1 L` })}
     ${_ccTopCard({ label: 'DCR activity', color: '#8b5cf6',
       value: t.dcr.coverage_pct == null ? '—' : t.dcr.coverage_pct + '%',
       sub: `${_ccN(t.dcr.agencies_visited)} of ${_ccN(t.dcr.book)} agencies · ${_ccN(t.dcr.visits)} visits · ${esc(d.range_label)}`,
@@ -7208,7 +7319,18 @@ VIEWS.cc_state = () => {
       `<button onclick="csSetSeg('${v}')" style="padding:6px 14px;border:1px solid ${st.seg===v?'#1e3a8a':'#e2e8f0'};border-radius:20px;background:${st.seg===v?'#1e3a8a':'#fff'};color:${st.seg===v?'#fff':'#475569'};font-size:12px;font-weight:${st.seg===v?700:500};cursor:pointer;white-space:nowrap">${l}</button>`).join('')}
   </div>`;
 
+  /* A scoped user's landing page carries what Admin gets on the Command Centre: the
+     two quarterly trends and the alerts pair, for their own ground. Admin still sees
+     them on the Command Centre and does not get them again here, so that view is
+     unchanged. Both feeds are scoped server-side, so this cannot widen what the user
+     can read. */
+  const ownPage = !(S.user && S.user.isAdmin);
+  const extras = ownPage
+    ? _ccQuarterlyBlock(_ccState()) + _ccAlertsBlock(_csCcData(st), st.state)
+    : '';
+
   return bar + cards + segBar
+    + extras
     + _csInsights(st, d)
     + _csZHPerformance(st, d)
     + _csConsolidated(st, d)
@@ -7216,6 +7338,26 @@ VIEWS.cc_state = () => {
     + _csMovers(st, d)
     + _ccFlyout();
 };
+
+/* The alerts and opportunities are derived by the Command Centre endpoint, which a
+   scoped user is allowed to call — it simply returns only their units. Fetched once per
+   range and cached on the state-page state so switching tabs does not re-request it. */
+function _csCcData(st) {
+  const key = `${st.range}|${st.rangeFrom}|${st.rangeTo}|${st.compare}|${st.cmpFrom}|${st.cmpTo}`;
+  if (st._ccKey === key) return st._cc || null;
+  if (st._ccLoading === key) return st._cc || null;
+  st._ccLoading = key;
+  const p = new URLSearchParams({ range: st.range, compare: st.compare || 'prev_year' });
+  if (st.range === 'custom' && st.rangeFrom && st.rangeTo) { p.set('range_from', st.rangeFrom); p.set('range_to', st.rangeTo); }
+  if (st.cmpFrom && st.cmpTo) { p.set('compare_from', st.cmpFrom); p.set('compare_to', st.cmpTo); }
+  fetch(`${location.origin}/api/command/state-performance?${p}`, { headers: api.h() })
+    .then(r => r.json())
+    .then(r => { if (st._ccLoading !== key) return;
+      st._cc = r && r.detail ? { _err: r.detail } : r; st._ccKey = key; st._ccLoading = null; render(); })
+    .catch(e => { if (st._ccLoading !== key) return;
+      st._cc = { _err: String(e && e.message || e) }; st._ccKey = key; st._ccLoading = null; render(); });
+  return st._cc || null;
+}
 
 
 

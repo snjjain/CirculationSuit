@@ -17,7 +17,7 @@ const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
 const crypto = require('crypto');
 
-module.exports = function installAuth({ app, q, LEVEL_META }) {
+module.exports = function installAuth({ app, q, LEVEL_META, getScopeUnitCodes }) {
   const JWT_SECRET = process.env.JWT_SECRET || (() => {
     const s = crypto.randomBytes(48).toString('hex');
     console.warn('[auth] JWT_SECRET not set in .env — using an ephemeral secret (all sessions drop on restart). Set JWT_SECRET to persist logins.');
@@ -139,7 +139,37 @@ module.exports = function installAuth({ app, q, LEVEL_META }) {
     const isAdmin = perm && perm.is_admin !== null && perm.is_admin !== undefined ? Boolean(perm.is_admin) : (hl === 1);
 
     const scopeLabel = hl === 1 ? 'PAN India' : (unit_name || unit_code || '');
+
+    /* Where this person's dashboard should open.
+
+       Everyone landed on the all-India Command Centre, which for a VP or a branch
+       incharge is a page about other people's branches with their own state one click
+       away. A scoped user opens on the ground they actually run: their state if they
+       hold several branches, that branch's page if they hold one. Admin is untouched
+       and still lands on the Command Centre.
+
+       Derived from the same getScopeUnitCodes the API enforces, so the landing page can
+       never show more than the user is allowed to read. */
+    let landing = null;
+    if (!isAdmin && u.person_code && typeof getScopeUnitCodes === 'function') {
+      try {
+        const units = await getScopeUnitCodes(u.person_code, hl);
+        if (Array.isArray(units) && units.length) {
+          const ph = units.map(() => '?').join(',');
+          const { rows: st } = await q(
+            `SELECT UPPER(TRIM(state_name)) st, COUNT(*) n FROM agency_master
+              WHERE unit IN (${ph}) AND state_name IS NOT NULL AND TRIM(state_name) <> ''
+              GROUP BY st ORDER BY n DESC LIMIT 1`, units);
+          const stateName = st[0] && st[0].st ? st[0].st : null;
+          landing = units.length === 1
+            ? { screen: 'cc_state', state: stateName, unit: units[0] }
+            : { screen: 'cc_state', state: stateName, unit: '' };
+        }
+      } catch (_) { /* fall back to the Command Centre */ }
+    }
+
     return {
+      landing,
       id: u.id,
       person_code: u.person_code,
       name,

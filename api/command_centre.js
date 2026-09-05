@@ -225,21 +225,21 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
     if (mode === 'prev_day') {
       const { rows: pv } = await q(`SELECT MAX(supply_date) d FROM supply_data WHERE supply_date < ?`, [asOn]);
       prev = pv[0]?.d ? String(pv[0].d).slice(0, 10) : asOn;
-      label = 'Previous Day';
+      label = COMPARE_LABEL.prev_day;
     } else if (mode === 'prev_week') {
       const { rows: pv } = await q(`SELECT MAX(supply_date) d FROM supply_data WHERE supply_date <= DATE_SUB(?, INTERVAL 7 DAY)`, [asOn]);
       prev = pv[0]?.d ? String(pv[0].d).slice(0, 10) : asOn;
-      label = 'Previous Week';
+      label = COMPARE_LABEL.prev_week;
     } else if (mode === 'prev_month') {
       const { rows: pv } = await q(`SELECT MAX(supply_date) d FROM supply_data WHERE supply_date <= DATE_SUB(?, INTERVAL 30 DAY)`, [asOn]);
       prev = pv[0]?.d ? String(pv[0].d).slice(0, 10) : asOn;
-      label = 'Previous Month';
+      label = COMPARE_LABEL.prev_month;
     } else {
       // prev_year (default) — same date last year, nearest date with supply data
       const lyDate = `${Number(asOn.slice(0, 4)) - 1}${asOn.slice(4)}`;
       const { rows: pv } = await q(`SELECT MAX(supply_date) d FROM supply_data WHERE supply_date <= ?`, [lyDate]);
       prev = pv[0]?.d ? String(pv[0].d).slice(0, 10) : lyDate;
-      label = 'Previous Year';
+      label = COMPARE_LABEL.prev_year;
     }
     return { asOn, prev, label, mode: mode || 'prev_year' };
   }
@@ -554,6 +554,44 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
      "Today" asked for on its own is honoured as asked; trimming it would leave nothing.
      Server-local time is used because the rest of this file already builds its windows
      that way. */
+  /* Shift a window back by whatever the Compare With control asked for.
+
+     The control existed but never reached the figures: prevWin was hard-coded to the
+     same window one year earlier, so picking "last month" or "yesterday" changed the
+     caption and nothing else. Every growth number on the screen answered a question the
+     user had not asked.
+
+     Month shifts clamp to the target month's length, so 1–31 August against July gives
+     1–31 July and 1–31 July against June gives 1–30 June rather than rolling over into
+     the 1st of the next month. */
+  const _shiftWindow = (win, mode) => {
+    const p2 = n => String(n).padStart(2, '0');
+    const fmt = (y, m, d) => `${y}-${p2(m)}-${p2(d)}`;
+    const parse = iso => iso.split('-').map(Number);
+    const dim = (y, m) => new Date(y, m, 0).getDate();          // m is 1-based
+    const byDays = (iso, n) => {
+      const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() - n);
+      return fmt(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    };
+    const byMonths = (iso, n) => {
+      const [y, m, d] = parse(iso);
+      const t = new Date(y, m - 1 - n, 1);
+      const ty = t.getFullYear(), tm = t.getMonth() + 1;
+      return fmt(ty, tm, Math.min(d, dim(ty, tm)));
+    };
+    if (mode === 'prev_day')   return { from: byDays(win.from, 1),   to: byDays(win.to, 1) };
+    if (mode === 'prev_week')  return { from: byDays(win.from, 7),   to: byDays(win.to, 7) };
+    if (mode === 'prev_month') return { from: byMonths(win.from, 1), to: byMonths(win.to, 1) };
+    return { from: byMonths(win.from, 12), to: byMonths(win.to, 12) };   // prev_year
+  };
+
+  const COMPARE_LABEL = {
+    prev_day:   'Same window, previous day',
+    prev_week:  'Same window last week',
+    prev_month: 'Same window last month',
+    prev_year:  'Same window last year',
+  };
+
   const trimPartialDay = win => {
     const pad = n => String(n).padStart(2, '0');
     const now = new Date();
@@ -683,14 +721,60 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
       `SELECT DISTINCT period_label FROM agency_outstanding
        WHERE period_label <> 'CURRENT' AND period_label NOT LIKE 'BILL-%' ORDER BY period_label DESC LIMIT 1`);
     const prevLabel = labels[0]?.period_label || null;
+    // The snapshot before prevLabel, so the comparison figure is built the same way.
+    const { rows: labels2 } = await q(
+      `SELECT DISTINCT period_label FROM agency_outstanding
+       WHERE period_label <> 'CURRENT' AND period_label NOT LIKE 'BILL-%'
+       ORDER BY period_label DESC LIMIT 2`);
+    const prevPrev = labels2[1]?.period_label || null;
+
+    /* OVERDUE, not gross dues.
+
+       A bill raised for August goes out on 1 September and is collected during
+       September, so on 5 September it is money owed but not money late. Carrying it in
+       OUTSTANDING made every month look worse than it was, and management's rule is
+       explicit: the last month's bill is not overdue.
+
+       The not-yet-due part is everything billed since the last month-end snapshot —
+       CURRENT.bill_amt minus that snapshot's bill_amt. Because the ERP raises a whole
+       month in one go on the 1st, that difference IS last month's bill (Rajasthan: 5.48
+       Cr, exactly BILL-2026-08) and there is no separate part-month accrual to subtract
+       as well; deducting both would have double-counted it and understated overdue by a
+       full month.
+
+       Subtracted per AGENCY and floored at zero, so an agency whose whole balance is
+       this month's bill drops out rather than going negative and cancelling somebody
+       else's genuine arrears. The critical (>= 1 L) count and the agency count are taken
+       on the same overdue figure, so the headline and the counts beneath it agree. */
+    const overdueSql = (curLabel, priorLabel) => `
+      SELECT c.unit_code unit,
+             SUM(od) os,
+             SUM(od >= 100000) critical,
+             SUM(od > 0) agencies
+        FROM (
+          SELECT c0.unit_code, c0.ag_code,
+                 GREATEST(0, c0.cl - GREATEST(0, c0.bill - COALESCE(p0.bill, 0))) od
+            FROM (SELECT unit_code, ag_code, SUM(cl_amt) cl, SUM(bill_amt) bill
+                    FROM agency_outstanding
+                   WHERE period_label = ? AND CAST(dp_code AS UNSIGNED) = 1${uCl}
+                   GROUP BY unit_code, ag_code) c0
+            LEFT JOIN (SELECT unit_code, ag_code, SUM(bill_amt) bill
+                         FROM agency_outstanding
+                        WHERE period_label = ? AND CAST(dp_code AS UNSIGNED) = 1${uCl}
+                        GROUP BY unit_code, ag_code) p0
+              ON p0.unit_code = c0.unit_code AND p0.ag_code = c0.ag_code
+        ) c
+       GROUP BY c.unit_code`;
+
     const [cur, prv] = await Promise.all([
-      q(`SELECT unit_code unit, SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) os,
-                SUM(CASE WHEN CAST(dp_code AS UNSIGNED)=1 AND cl_amt>=100000 THEN 1 ELSE 0 END) critical,
-                SUM(CASE WHEN CAST(dp_code AS UNSIGNED)=1 THEN 1 ELSE 0 END) agencies
-         FROM agency_outstanding WHERE period_label='CURRENT'${uCl} GROUP BY unit_code`, uP),
       prevLabel
-        ? q(`SELECT unit_code unit, SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) os
-             FROM agency_outstanding WHERE period_label=?${uCl} GROUP BY unit_code`, [prevLabel, ...uP])
+        ? q(overdueSql('CURRENT', prevLabel), ['CURRENT', ...uP, prevLabel, ...uP])
+        : q(`SELECT unit_code unit, SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) os,
+                    SUM(CASE WHEN CAST(dp_code AS UNSIGNED)=1 AND cl_amt>=100000 THEN 1 ELSE 0 END) critical,
+                    SUM(CASE WHEN CAST(dp_code AS UNSIGNED)=1 AND cl_amt>0 THEN 1 ELSE 0 END) agencies
+             FROM agency_outstanding WHERE period_label='CURRENT'${uCl} GROUP BY unit_code`, uP),
+      (prevLabel && prevPrev)
+        ? q(overdueSql(prevLabel, prevPrev), [prevLabel, ...uP, prevPrev, ...uP])
         : Promise.resolve({ rows: [] }),
     ]);
     const out = { cur: blank(), prev: blank(), critical: blank(), agencies: blank(), prev_label: prevLabel };
@@ -820,8 +904,7 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
         ? { from: _cf, to: _ct }
         : (win.key === 'covid'
           ? { from: asOn, to: asOn }
-          : { from: `${Number(win.from.slice(0, 4)) - 1}${win.from.slice(4)}`,
-              to:   `${Number(win.to.slice(0, 4)) - 1}${win.to.slice(4)}` });
+          : _shiftWindow(win, mode));
       // Supply now covers the selected window, so the KPI caption must say so —
       // a one-day window still reads as a plain date rather than "X → X".
       const winLabel = win.from === win.to ? `on ${win.to}` : `${win.label} · ${win.from} → ${win.to}`;
@@ -1004,8 +1087,7 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
         ? { from: cmpFrom, to: cmpTo }
         : (win.key === 'covid'
           ? { from: asOn, to: asOn }
-          : { from: `${Number(win.from.slice(0, 4)) - 1}${win.from.slice(4)}`,
-              to:   `${Number(win.to.slice(0, 4)) - 1}${win.to.slice(4)}` });
+          : _shiftWindow(win, mode));
       const allUnits = await unitsOfState(stateKey);
       const unitName = {}; allUnits.forEach(u => { unitName[u.unit_code] = u.unit_name; });
 
@@ -1256,14 +1338,28 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
            FROM agency_collection
            WHERE is_valid=1 AND coll_date BETWEEN ? AND ? AND unit_code IN (${IN})
            GROUP BY unit_code, ag_code`, [win.from, win.to, ...codes]),
-        q(`SELECT unit_code, ag_code, MAX(ag_name) ag_name, MAX(exec_code) exec_code,
-                  MAX(exec_name) exec_name,
-                  SUM(CASE WHEN cl_amt>0 THEN cl_amt ELSE 0 END) os,
-                  SUM(CASE WHEN CAST(dp_code AS UNSIGNED)=1 THEN 1 ELSE 0 END) is_main,
-                  SUM(CASE WHEN CAST(dp_code AS UNSIGNED)=1 AND cl_amt>=100000 THEN 1 ELSE 0 END) critical
-           FROM agency_outstanding
-           WHERE period_label='CURRENT' AND unit_code IN (${IN})
-           GROUP BY unit_code, ag_code`, codes),
+        q(`SELECT ao.unit_code, ao.ag_code, MAX(ao.ag_name) ag_name, MAX(ao.exec_code) exec_code,
+                  MAX(ao.exec_name) exec_name,
+                  /* Overdue, on the same rule as the state card above: the balance less
+                     whatever has been billed since the last month-end snapshot, which is
+                     the bill raised on the 1st and collected across this month. Floored
+                     per agency so one agency fully covered by this month's bill cannot
+                     cancel another's real arrears. is_main and critical are counted on
+                     that same overdue figure, so the "N of M agencies" line underneath
+                     describes the number beside it — M used to count every agency on the
+                     ledger, 14,183 for Rajasthan, of which only 2,776 owed anything. */
+                  SUM(GREATEST(0, ao.cl_amt - GREATEST(0, ao.bill_amt - COALESCE(pb.bill, 0)))) os,
+                  SUM(GREATEST(0, ao.cl_amt - GREATEST(0, ao.bill_amt - COALESCE(pb.bill, 0))) > 0) is_main,
+                  SUM(GREATEST(0, ao.cl_amt - GREATEST(0, ao.bill_amt - COALESCE(pb.bill, 0))) >= 100000) critical
+           FROM agency_outstanding ao
+           LEFT JOIN (SELECT unit_code, ag_code, SUM(bill_amt) bill
+                        FROM agency_outstanding
+                       WHERE period_label = ? AND CAST(dp_code AS UNSIGNED) = 1
+                       GROUP BY unit_code, ag_code) pb
+             ON pb.unit_code = ao.unit_code AND pb.ag_code = ao.ag_code
+           WHERE ao.period_label='CURRENT' AND ao.unit_code IN (${IN})
+             AND CAST(ao.dp_code AS UNSIGNED) = 1
+           GROUP BY ao.unit_code, ao.ag_code`, [prevMonthLabel, ...codes]),
         q(`SELECT period_label, unit_code, SUM(bill_amt) amt,
                   SUM(rec_amt) rec, SUM(other_cr) ocr FROM agency_outstanding
            WHERE period_label IN (${[prevMonthLabel, prevPrevLabel, ...rangeBillLabels].map(() => '?').join(',')})
