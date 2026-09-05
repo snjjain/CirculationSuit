@@ -5095,13 +5095,18 @@ function _ccFlyExecPanel(x) {
     <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:6px">${title}</div>${inner}</div>` : '';
 
   // Worst dues first — that is what an executive panel opened from an alert is for.
-  const top = ags.slice().sort((a, b) => (b.total_outstanding || 0) - (a.total_outstanding || 0)).slice(0, 12);
+  /* Ranked on OVERDUE, which is what the column now reports — sorting on gross dues
+     while showing overdue would have put agencies at the top for money that is not yet
+     late. */
+  const top = ags.slice().sort((a, b) => (b.overdue || 0) - (a.overdue || 0)).slice(0, 12);
   const agTable = !top.length ? '' : `<table style="width:100%;border-collapse:collapse;font-size:11.5px">
     <thead><tr style="color:#94a3b8;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em">
       <th style="text-align:left;padding:4px 6px;font-weight:700">Agency</th>
       <th style="text-align:right;padding:4px 6px;font-weight:700">Avg. Supply</th>
+      <th style="text-align:right;padding:4px 6px;font-weight:700">Bill Amt</th>
+      <th style="text-align:right;padding:4px 6px;font-weight:700">Collected</th>
       <th style="text-align:right;padding:4px 6px;font-weight:700">Coll %</th>
-      <th style="text-align:right;padding:4px 6px;font-weight:700">Outstanding</th>
+      <th style="text-align:right;padding:4px 6px;font-weight:700" title="Dues less this month's bill, which is collected across this month and is not yet late">Overdue</th>
       <th style="text-align:right;padding:4px 6px;font-weight:700">Visits</th>
     </tr></thead><tbody>${top.map(a => `<tr onclick="ccFlyAgency('${q(a.unit_code)}','${q(a.ag_code)}','${q(a.ag_name || '')}')"
       title="Open agency profile" style="cursor:pointer;border-top:1px solid #f1f5f9"
@@ -5110,11 +5115,14 @@ function _ccFlyExecPanel(x) {
         <div style="color:#94a3b8;font-size:10px">${esc([a.unit_name || a.unit_code, a.dist_name, a.city_name].filter(Boolean).join(' · '))}${a.status && a.status !== 'Active' ? ' · ' + esc(a.status) : ''}</div></td>
       <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums"
         title="${_apFmtN(a.total_supply)} copies over ${a.supply_days || 0} supplying days">${_apFmtN(a.avg_supply != null ? a.avg_supply : a.total_supply)}</td>
+      <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums;color:#64748b">${a.billed ? _apFmtC(a.billed) : '—'}</td>
+      <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums">${(a.net_receipt != null ? a.net_receipt : a.total_collection) ? _apFmtC(a.net_receipt != null ? a.net_receipt : a.total_collection) : '—'}</td>
       <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums">${a.collection_pct == null ? '—' : a.collection_pct + '%'}</td>
-      <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums;color:${(a.total_outstanding || 0) > 0 ? '#b91c1c' : '#0f172a'}"><b>${_apFmtC(a.total_outstanding)}</b></td>
+      <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums;color:${(a.overdue || 0) > 0 ? '#b91c1c' : '#0f172a'}"
+        title="Total dues ${_apFmtC(a.total_outstanding)}"><b>${_apFmtC(a.overdue)}</b></td>
       <td style="padding:5px 6px;text-align:right;font-variant-numeric:tabular-nums">${_apFmtN(a.visit_count)}</td>
     </tr>`).join('')}</tbody></table>
-    ${ags.length > top.length ? `<div style="font-size:10.5px;color:#94a3b8;margin-top:5px">Showing the ${top.length} largest dues of ${_apFmtN(ags.length)} agencies.</div>` : ''}`;
+    ${ags.length > top.length ? `<div style="font-size:10.5px;color:#94a3b8;margin-top:5px">Showing the ${top.length} largest overdue balances of ${_apFmtN(ags.length)} agencies · hover Overdue for total dues.</div>` : ''}`;
 
   const chain = [
     ['Edition Incharge', e.edtn_incharge_name], ['Circulation Incharge', e.circ_incharge_name],
@@ -5222,7 +5230,7 @@ function _ccFlyExecPanel(x) {
     ${_ccFlyExecTourPlan(x)}
     ${sec('Posting', `<div>${fact('Branch', e.units)}${fact('State', e.state_name)}</div>`)}
     ${sec('Reports to', chain)}
-    ${sec('Agencies by dues', agTable)}
+    ${sec('Agencies by overdue', agTable)}
   </div>`;
 }
 function N_(v) { return Number(v) || 0; }
@@ -5429,7 +5437,28 @@ function _ccFlyAgencyPanel(a) {
         </tr></thead><tbody>${visitRows}</tbody></table>`
     : '<div style="font-size:11.5px;color:#94a3b8">No visits in last 6 months</div>';
 
-  const colls = (d.collection_recent || []).slice(0, 6).map(c => [esc(c.date || '—'), esc(c.payment_mode || c.payment_cat || '—'), `<b>${_apFmtC(c.amount)}</b>`]);
+  /* Six months of ledger movement instead of a list of individual receipts. The old
+     panel showed date / payment mode / amount, which answers "how was this paid" when
+     the question a dues panel exists to answer is "is this agency paying". Bill and net
+     receipt come from the same snapshot pair, so the percentage here matches the Coll %
+     in the cards above rather than being a second, narrower figure. */
+  const _mn = lbl => { const m = /^(\d{4})-(\d{2})$/.exec(String(lbl || '')); if (!m) return esc(lbl || '—');
+    const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${M[Number(m[2]) - 1]} ${m[1]}`; };
+  const ledger = ((d.trends || {}).ledger_months || []).slice(0, 6).map(r => [
+    _mn(r.month),
+    _apFmtC(r.bill),
+    `<b>${_apFmtC(r.net_receipt)}</b>`,
+    r.pct == null ? '—' : `<span style="color:${r.pct < 60 ? '#b91c1c' : r.pct < 85 ? '#b45309' : '#15803d'};font-weight:700">${r.pct}%</span>`,
+  ]);
+  /* Copies per day, over the days the agency actually supplied — the same basis as the
+     Avg. Supply column everywhere else, so a mid-month start is not read as a slump. */
+  const supRows = ((d.trends || {}).supply_history || []).slice(0, 6).map(r => [
+    _mn(r.month),
+    `<b>${_apFmtN(r.supply_days > 0 ? Math.round(r.total_supply / r.supply_days) : 0)}</b>`,
+    _apFmtN(r.total_supply),
+    _apFmtN(r.supply_days),
+  ]);
   const tags = (orx.tags || []).map(t => `<span style="display:inline-block;font-size:9.5px;font-weight:700;color:#1e3a8a;background:#eef4ff;border:1px solid #dbe6ff;border-radius:9px;padding:2px 8px;margin:0 5px 5px 0">${esc(AP_TAG_LABEL[t] || t)}</span>`).join('');
   // issues are visit remarks flagged as possible complaints — {date, executive, remarks}
   const issues = (d.issues || []).slice(0, 5).map(i => `<div style="font-size:11.5px;color:#b91c1c;background:#fef2f2;border-radius:7px;padding:6px 9px;margin-bottom:5px">
@@ -5451,6 +5480,7 @@ function _ccFlyAgencyPanel(a) {
       ${kpi('Supply trend', pct(m.supply_trend_pct), (m.supply_trend_pct || 0) < 0 ? '#b91c1c' : '#15803d')}
       ${kpi('Collection', m.collection_efficiency_pct == null ? '—' : m.collection_efficiency_pct + '%')}
       ${kpi('Outstanding', _apFmtC(m.outstanding), (m.outstanding || 0) > 0 ? '#b91c1c' : '#0f172a')}
+      ${m.overdue != null ? kpi('Overdue', _apFmtC(m.overdue), (m.overdue || 0) > 0 ? '#b91c1c' : '#0f172a') : ''}
       ${kpi('Growth headroom', _apFmtN(m.growth_potential_copies) + ' cp')}
       ${kpi('Last visit', _apDaysAgo(m.last_visit_days_ago))}
       ${(() => {
@@ -5474,7 +5504,12 @@ function _ccFlyAgencyPanel(a) {
     ${sec('Next best action', nba.filter(Boolean).length ? `<div style="font-size:12px;color:#0f172a;background:#f0fdf4;border:1px solid #dcfce7;border-radius:8px;padding:9px 11px;line-height:1.6">
       ${nba.filter(Boolean).map(r => `<div style="display:flex;gap:7px"><span style="color:#16a34a">›</span><span>${esc(r)}</span></div>`).join('')}</div>` : '')}
     ${sec('Open issues', issues)}
-    ${sec('Recent collections', miniTable(['Date', 'Mode', 'Amount'], colls))}
+    ${sec('Bill &amp; net receipt — last 6 months', ledger.length
+      ? miniTable(['Month', 'Bill', 'Net receipt', '%'], ledger)
+      : `<div style="font-size:11.5px;color:#94a3b8">No billing snapshots for this agency yet.</div>`)}
+    ${sec('Average supply — last 6 months', supRows.length
+      ? miniTable(['Month', 'Avg / day', 'Total copies', 'Days'], supRows)
+      : `<div style="font-size:11.5px;color:#94a3b8">No supply recorded in this period.</div>`)}
     ${sec('Recent visits', visitTableHtml)}
   </div>`;
 }

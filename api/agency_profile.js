@@ -192,7 +192,7 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
       let anchor = signals.find(s => s.agcd === agcd);
       if (!anchor) return res.status(404).json({ detail: 'Agency not found in this unit' });
 
-      const [collHistR, supHistR, collRecentR, oraVisitsR, appVisitsR, execLocR] = await Promise.all([
+      const [collHistR, supHistR, collRecentR, oraVisitsR, appVisitsR, execLocR, ledgerR, curOuR] = await Promise.all([
         q(`SELECT DATE_FORMAT(coll_date,'%Y-%m') month,
                   -SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) collection,
                    SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) charges,
@@ -227,7 +227,40 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
              AND visit_date >= DATE_SUB(CURDATE(), INTERVAL 180 DAY)
            ORDER BY visit_date DESC, id DESC LIMIT 50`, [unit_code, agcd]),
         anchor.exec_code ? q(`SELECT lat, lng, exec_name, address FROM exec_locations WHERE emp_code = ? AND lat IS NOT NULL LIMIT 1`, [String(anchor.exec_code)]) : Promise.resolve({ rows: [] }),
+        /* Cumulative bill and receipt snapshots for this agency, newest first. Each
+           month's own figures are the difference between consecutive snapshots —
+           agency_outstanding.bill_amt and rec_amt are cumulative for the financial
+           year, so taking them raw overstates a month several-fold. */
+        q(`SELECT period_label, SUM(bill_amt) bill, SUM(rec_amt) + SUM(other_cr) rec
+             FROM agency_outstanding
+            WHERE unit_code = ? AND ag_code = ?
+              AND period_label REGEXP '^[0-9]{4}-[0-9]{2}$'
+            GROUP BY period_label
+            ORDER BY period_label DESC LIMIT 8`, [unit_code, agcd]),
+
+        /* The live balance and what has been billed into it since the last month end.
+           That difference is the bill raised on the 1st of this month, which is
+           collected across this month and is therefore not yet late. */
+        q(`SELECT SUM(cl_amt) cl, SUM(bill_amt) bill FROM agency_outstanding
+            WHERE unit_code = ? AND ag_code = ? AND period_label = 'CURRENT'`,
+          [unit_code, agcd]),
       ]);
+
+      /* Telescope the snapshots into per-month bill and net receipt. A month whose
+         snapshot pair is incomplete is left out rather than shown as zero — an unwritten
+         record is not a month of no billing. */
+      const _snaps = (ledgerR.rows || []).slice().sort((a, b) => (a.period_label < b.period_label ? 1 : -1));
+      const monthlyLedger = [];
+      for (let i = 0; i < _snaps.length - 1 && monthlyLedger.length < 6; i++) {
+        const cur = _snaps[i], prv = _snaps[i + 1];
+        const bill = Math.max(0, N(cur.bill) - N(prv.bill));
+        const rec  = Math.max(0, N(cur.rec)  - N(prv.rec));
+        monthlyLedger.push({
+          month: cur.period_label,
+          bill, net_receipt: rec,
+          pct: bill > 0 ? Math.round((rec / bill) * 1000) / 10 : null,
+        });
+      }
 
       // ── Current outstanding detail (bill/rec/op already carried on anchor;
       //    collection_pct needs both) ──────────────────────────────────────
@@ -304,11 +337,28 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
           supply_trend_pct,
           collection_efficiency_pct: collection_pct,
           outstanding: anchor.outstanding,
+          overdue: (() => {
+            const cur = (curOuR.rows || [])[0];
+            if (!cur) return null;
+            const lastSnapBill = _snaps.length ? N(_snaps[0].bill) : 0;
+            const notDue = Math.max(0, N(cur.bill) - lastSnapBill);
+            return Math.max(0, N(cur.cl) - notDue);
+          })(),
           growth_potential_copies: anchor.opportunity_copies || Math.max(0, anchor.peak30_supply - anchor.cur_supply),
           last_visit_date: anchor.last_visit,
           last_visit_days_ago: anchor.days_since_visit,
         },
         trends: {
+          /* Month by month on the ERP's own ledger, not the cash book.
+
+             The panel used to list individual receipts with their payment mode, which
+             answered "how was this paid" when the question is "is this agency paying".
+             Bill and net receipt are the movement between consecutive cumulative
+             snapshots of agency_outstanding — the same basis as every collection
+             percentage in the suite, so this table and the Coll % above it cannot
+             disagree. agency_collection is deliberately not used: it holds banked cash
+             only and omits credit notes and adjustments. */
+          ledger_months: monthlyLedger,
           supply_history: supHist.map(r => ({ month: r.month, total_supply: N(r.total_supply), supply_days: N(r.supply_days) })),
           collection_history: collHistR.rows.map(r => ({ month: r.month, collection: N(r.collection), charges: N(r.charges), txn_count: N(r.txn_count) })),
         },
