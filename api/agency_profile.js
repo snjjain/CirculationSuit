@@ -270,8 +270,16 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
       // ── Supply trend: this month vs last month, from the agency's own 12mo history ──
       const supHist = supHistR.rows; // DESC by month
       const thisMonth = supHist[0], lastMonth = supHist[1];
-      const supply_trend_pct = (thisMonth && lastMonth && N(lastMonth.total_supply) > 0)
-        ? R1((N(thisMonth.total_supply) - N(lastMonth.total_supply)) / N(lastMonth.total_supply) * 100) : null;
+      /* Copies per day, not month totals. Comparing a part-month total against a whole
+         previous month makes every agency collapse at the start of a month: on 5
+         September GANESH NEWS AGENCY read -83.3% because 5 days of supply were measured
+         against 30, while its actual rate — 682 copies a day — had not moved at all.
+         Dividing each month by the days it actually supplied compares like with like,
+         and matches the figure the DCR app now shows the executive standing in the shop. */
+      const rate = m => (m && N(m.supply_days) > 0) ? N(m.total_supply) / N(m.supply_days) : null;
+      const curRate = rate(thisMonth), prvRate = rate(lastMonth);
+      const supply_trend_pct = (curRate != null && prvRate > 0)
+        ? R1((curRate - prvRate) / prvRate * 100) : null;
 
       // ── Visit intelligence: merge oracle + app, unify shape ──────────────
       const visits = [

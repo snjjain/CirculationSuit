@@ -92,6 +92,18 @@ const DICT = [
   ['Plan Tour', 'टूर प्लान'], ['Agency Visit', 'एजेंसी विज़िट'], ['Calling', 'कॉलिंग'],
   ['Attendance', 'उपस्थिति'], ['Hawker Visit', 'हॉकर विज़िट'], ['Reader Visit', 'रीडर विज़िट'],
   ['New Area', 'नया क्षेत्र'], ['Office / Other', 'कार्यालय / अन्य'],
+  // agency detail card
+  ['Agency detail', 'एजेंसी विवरण'], ['Call', 'कॉल'], ['Supply', 'सप्लाई'],
+  ['Supply trend', 'सप्लाई रुझान'], ['Outstanding', 'बकाया'], ['Overdue', 'अतिदेय'],
+  ['Last bill', 'पिछला बिल'], ['Last visit', 'पिछली विज़िट'], ['Market share', 'बाज़ार हिस्सा'],
+  ['Top competitor', 'मुख्य प्रतिस्पर्धी'], ['days ago', 'दिन पहले'], ['never', 'कभी नहीं'],
+  ['received', 'प्राप्त'], ['avg per day, last 30 days', 'औसत प्रतिदिन, पिछले 30 दिन'],
+  ['vs the 30 days before', 'पिछले 30 दिनों की तुलना में'],
+  ["this month's bill excluded", 'इस माह का बिल शामिल नहीं'], ['total dues', 'कुल बकाया'],
+  ['Choose an agency first.', 'पहले एजेंसी चुनें।'], ['Code', 'कोड'], ['Class', 'श्रेणी'],
+  ['District', 'ज़िला'], ['City', 'शहर'], ['Station', 'स्टेशन'], ['Address', 'पता'],
+  ['Contact', 'संपर्क'], ['Mobile', 'मोबाइल'], ['Executive', 'कार्यकारी'],
+  ['Last collection', 'पिछली वसूली'], ['agency', 'एजेंसी'],
   // section heads
   ['Tour planning', 'टूर प्लानिंग'], ['Visit', 'विज़िट'], ['Growth commitment', 'ग्रोथ प्रतिबद्धता'],
   ['Outcome', 'परिणाम'], ['Agent feedback', 'एजेंट फ़ीडबैक'], ['Call report', 'कॉल रिपोर्ट'],
@@ -631,7 +643,10 @@ function _autoPanel() {
         <div style="font-size:14.5px;font-weight:650;color:var(--d-ink)">${esc(a.ag_name || '')}</div>
         <div style="font-size:11.5px;color:var(--d-mut);margin-top:2px">${esc([a.city, a.station].filter(Boolean).join(' · '))}</div>
       </div>
-      ${tel.length === 10 ? `<a href="tel:+91${tel}" class="dcr-tag info" style="text-decoration:none;padding:6px 11px;font-size:12px;flex:none">📞 Call</a>` : ''}
+      <div style="display:flex;gap:6px;flex:none">
+        ${tel.length === 10 ? `<a href="tel:+91${tel}" class="dcr-tag info" style="text-decoration:none;padding:6px 11px;font-size:12px">📞 ${T('Call')}</a>` : ''}
+        <button onclick="dmAgencyCard()" class="dcr-tag" style="padding:6px 11px;font-size:12px;border:1px solid var(--d-line);background:#fff;cursor:pointer">📇 ${T('Agency detail')}</button>
+      </div>
     </div>
     ${a.ag_status === 'Closed' || a.ag_status === 'Suspended' ? `<div class="dcr-closed">
       <b>${esc(a.ag_status)} agency.</b> ${a.last_supply ? `Last supply ${esc(String(a.last_supply).slice(0, 10))}. ` : ''}Nil copies and nil billing are expected${Number(a.outstanding) > 0 ? ` — the ${_INR(a.outstanding)} outstanding is old dues` : ''}.
@@ -649,6 +664,60 @@ function _autoPanel() {
       ${!(a.last_bill > 0) ? '' : cell('Balance of that bill', _INR(a.bill_balance))}
       ${cell('Last collection', a.last_collection_date ? esc(a.last_collection_date) : '')}
     </div></div>`;
+}
+
+/* The whole agency, on the doorstep.
+
+   The inline panel above answers "who am I standing in front of and what do they owe".
+   This answers "how are they doing" — the same card the office sees in Agency 360, so
+   an executive is never the last person to know that supply has fallen 83% or that the
+   competitor is outselling us here. Read-only: it is context for the visit, not another
+   form to fill. */
+window.dmAgencyCard = () => dmFly({ title: T('Agency detail'), body: _agencyCardBody });
+
+function _agencyCardBody() {
+  const a = DM.agency;
+  if (!a) return `<div style="font-size:12.5px;color:var(--d-mut)">${T('Choose an agency first.')}</div>`;
+  const pctTone = v => v == null ? 'var(--d-mut)' : v < 0 ? 'var(--d-bad)' : 'var(--d-ok)';
+  const tile = (k, v, tone, sub) => `<div style="background:var(--d-soft,#f6f8fb);border-radius:10px;padding:9px 11px">
+    <div style="font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--d-mut)">${k}</div>
+    <div style="font-size:15px;font-weight:700;color:${tone || 'var(--d-ink)'};margin-top:2px">${v}</div>
+    ${sub ? `<div style="font-size:10.5px;color:var(--d-mut);margin-top:1px">${sub}</div>` : ''}</div>`;
+  const fact = (k, v) => (v == null || v === '') ? '' : `<div style="display:flex;gap:9px;font-size:12px;line-height:1.75">
+    <span style="flex:none;width:104px;color:var(--d-mut)">${k}</span><span style="color:var(--d-ink);min-width:0">${v}</span></div>`;
+  const days = a.last_visit_days_ago;
+
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${tile(T('Supply'), _NN(a.supply_30d || a.daily_copies) + ' cp', null, T('avg per day, last 30 days'))}
+      ${tile(T('Supply trend'), a.supply_trend_pct == null ? '—' : (a.supply_trend_pct > 0 ? '+' : '') + a.supply_trend_pct + '%',
+             pctTone(a.supply_trend_pct), T('vs the 30 days before'))}
+      ${tile(T('Outstanding'), _INR(a.outstanding), a.outstanding > 100000 ? 'var(--d-bad)' : null, T('total dues'))}
+      ${tile(T('Overdue'), a.overdue == null ? '—' : _INR(a.overdue), (a.overdue || 0) > 0 ? 'var(--d-bad)' : 'var(--d-ok)',
+             T('this month\'s bill excluded'))}
+      ${tile(T('Last bill') + (a.last_bill_month ? ' · ' + esc(a.last_bill_month) : ''), _INR(a.last_bill), null,
+             a.last_bill > 0 ? `${_INR(a.bill_collection)} ${T('received')} · ${a.bill_recovered_pct}%` : '')}
+      ${tile(T('Last visit'), days == null ? T('never') : days + ' ' + T('days ago'),
+             days == null || days > 30 ? 'var(--d-bad)' : null, a.last_visit ? esc(String(a.last_visit).slice(0, 10)) : '')}
+      ${a.market_share_pct == null ? '' : tile(T('Market share'), a.market_share_pct + '%',
+             a.market_share_pct < 50 ? 'var(--d-bad)' : 'var(--d-ok)', esc(a.competitor_period || ''))}
+      ${!a.top_competitor ? '' : tile(T('Top competitor'), esc(a.top_competitor),
+             'var(--d-warn)', _NN(a.top_competitor_copies) + ' cp')}
+    </div>
+    ${a.ag_status === 'Closed' || a.ag_status === 'Suspended' ? `<div class="dcr-closed" style="margin-top:10px">
+      <b>${esc(a.ag_status)} ${T('agency')}.</b></div>` : ''}
+    <div style="margin-top:12px;border-top:1px solid var(--d-line);padding-top:10px">
+      ${fact(T('Agency'), esc(a.ag_name || ''))}
+      ${fact(T('Code'), esc(a.target_code || ''))}
+      ${fact(T('Class'), esc(a.ag_class || ''))}
+      ${fact(T('District'), esc(a.district || ''))}
+      ${fact(T('City'), esc(a.city || ''))}
+      ${fact(T('Station'), esc(a.station || ''))}
+      ${fact(T('Address'), esc(a.address || ''))}
+      ${fact(T('Contact'), esc(a.contact_person || ''))}
+      ${fact(T('Mobile'), esc(a.mobile || ''))}
+      ${fact(T('Executive'), esc(a.executive || ''))}
+      ${fact(T('Last collection'), a.last_collection_date ? esc(a.last_collection_date) : '')}
+    </div>`;
 }
 
 // ── forms ───────────────────────────────────────────────────────────────────

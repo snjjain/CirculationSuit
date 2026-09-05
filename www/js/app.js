@@ -7545,6 +7545,156 @@ window.taDecide = async (action) => {
   st.busy = false; render();
 };
 
+/* Assigning a tour, from the same screen the approvals live on.
+
+   An incharge who can only approve what others thought of can react but not direct. A
+   plan the incharge assigns is already their decision, so it is filed approved and the
+   executive can simply go — which is what the API has always done with for_person_code;
+   there was just no way to reach it outside the mobile app.
+
+   The stop list is built here rather than posted one at a time so a half-entered tour
+   never lands as a real half-tour. */
+const TA_PURPOSES = ['Recovery – Outstanding Amount', 'Growth Discussion', 'New Agreement / Contract',
+  'Agency Change', 'Reader Feedback Collection', 'Scheme & Offer Promotion',
+  'Supply Complaint Redressal', 'Relationship Visit', 'Competitor Analysis Visit', 'Other'];
+
+function _taAsg() {
+  const st = _taState();
+  return st.asg || (st.asg = { open: false, person: '', date: '', stops: [], q: '', found: null,
+                               searching: false, saving: false, err: null });
+}
+window.taAssignOpen = () => {
+  const a = _taAsg(); a.open = true; a.err = null;
+  if (!a.date) { const d = new Date(); d.setDate(d.getDate() + 1); a.date = d.toISOString().slice(0, 10); }
+  if (!a.stops.length) a.stops = [{ target_code: '', target_name: '', unit_code: '', purpose: TA_PURPOSES[0], visit_time: '', growth_target: '', description: '' }];
+  _taLoadTeam(); render();
+};
+window.taAssignClose = () => { const a = _taAsg(); a.open = false; a.err = null; render(); };
+window.taAsgSet = (k, v) => { const a = _taAsg(); a[k] = v; render(); };
+window.taStopSet = (i, k, v) => { const a = _taAsg(); if (a.stops[i]) a.stops[i][k] = v; if (k !== 'description') render(); };
+window.taStopAdd = () => { const a = _taAsg(); a.stops.push({ target_code: '', target_name: '', unit_code: '', purpose: TA_PURPOSES[0], visit_time: '', growth_target: '', description: '' }); render(); };
+window.taStopDel = i => { const a = _taAsg(); a.stops.splice(i, 1); if (!a.stops.length) taStopAdd(); render(); };
+
+function _taLoadTeam() {
+  const st = _taState();
+  if (st.team || st._teamLoading) return;
+  st._teamLoading = true;
+  fetch(`${location.origin}/api/dcr-m/team`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { st.team = (d && d.rows) || []; st._teamLoading = false; render(); })
+    .catch(() => { st.team = []; st._teamLoading = false; render(); });
+}
+/* Searched against the API rather than filtered in the browser, so the incharge can only
+   pick an agency inside the branches they are allowed to read. */
+window.taSearch = (() => { let t; return (i, v) => {
+  const a = _taAsg(); a.q = v; a.stopIdx = i; clearTimeout(t);
+  if (!String(v).trim()) { a.found = null; render(); return; }
+  a.searching = true; render();
+  t = setTimeout(async () => {
+    try {
+      const st = _taState();
+      const u = st.unit ? `&unit=${encodeURIComponent(st.unit)}` : '';
+      const r = await fetch(`${location.origin}/api/dcr-m/targets?type=agent&limit=25&q=${encodeURIComponent(v)}${u}`, { headers: api.h() });
+      const d = await r.json();
+      a.found = (d && d.rows) || []; a.searching = false; render();
+    } catch (e) { a.found = []; a.searching = false; render(); }
+  }, 300);
+}; })();
+window.taPick = (i, code, name, unit) => {
+  const a = _taAsg();
+  if (a.stops[i]) { a.stops[i].target_code = code; a.stops[i].target_name = name; a.stops[i].unit_code = unit; }
+  a.q = ''; a.found = null; render();
+};
+window.taAssignSave = async () => {
+  const a = _taAsg();
+  const stops = a.stops.filter(x => x.target_code);
+  if (!a.person) { a.err = 'Choose who the tour is for.'; render(); return; }
+  if (!a.date) { a.err = 'Choose a date.'; render(); return; }
+  if (!stops.length) { a.err = 'Add at least one agency.'; render(); return; }
+  a.saving = true; a.err = null; render();
+  try {
+    const r = await fetch(`${location.origin}/api/dcr-m/tour`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tour_date: a.date, for_person_code: a.person, stops }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.detail) throw new Error(d.detail || 'Could not save the tour');
+    const st = _taState();
+    st.msg = `Tour assigned — ${d.stops} stop${d.stops === 1 ? '' : 's'} on ${a.date}, already approved.`;
+    a.open = false; a.stops = []; a.q = ''; a.found = null;
+    st.data = null; st._key = '';
+  } catch (e) { a.err = String(e.message || e); }
+  a.saving = false; render();
+};
+
+function _taAssignPanel() {
+  const st = _taState(), a = _taAsg();
+  if (!a.open) return '';
+  const team = st.team || [];
+  const inp = 'width:100%;padding:6px 9px;border:1px solid var(--brd,#cbd5e1);border-radius:7px;font-size:12.5px;background:#fff;color:#0f172a';
+  const lbl = t => `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:4px">${t}</div>`;
+
+  const stopHtml = a.stops.map((sp, i) => `<div style="border:1px solid #e2e8f0;border-radius:9px;padding:10px;margin-bottom:8px;background:#fbfdff">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
+      <b style="font-size:11.5px;color:#1e3a8a">Stop ${i + 1}</b>
+      ${a.stops.length > 1 ? `<button onclick="taStopDel(${i})" style="border:0;background:none;color:#b91c1c;font-size:11.5px;cursor:pointer">remove</button>` : ''}
+    </div>
+    ${lbl('Agency')}
+    ${sp.target_code
+      ? `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 9px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font-size:12.5px">
+           <span><b>${esc(sp.target_name)}</b> <span style="color:#94a3b8">${esc(sp.target_code)} · ${esc(sp.unit_code)}</span></span>
+           <button onclick="taStopSet(${i},'target_code','')" style="border:0;background:none;color:#0ea5e9;font-size:11.5px;cursor:pointer">change</button></div>`
+      : `<input style="${inp}" placeholder="Type an agency name or code…" value="${esc(a.stopIdx === i ? a.q : '')}" oninput="taSearch(${i},this.value)">
+         ${a.stopIdx === i && a.searching ? `<div style="font-size:11.5px;color:#94a3b8;padding:5px 2px">Searching…</div>` : ''}
+         ${a.stopIdx === i && a.found ? (a.found.length
+            ? `<div style="max-height:150px;overflow:auto;border:1px solid #e2e8f0;border-radius:7px;margin-top:5px">
+                ${a.found.map(f => `<div onclick="taPick(${i},'${_csQ(f.target_code)}','${_csQ(f.target_name || '')}','${_csQ(f.unit_code || '')}')"
+                  style="padding:6px 9px;font-size:12px;cursor:pointer;border-bottom:1px solid #f1f5f9"
+                  onmouseenter="this.style.background='#eff6ff'" onmouseleave="this.style.background=''">
+                  <b>${esc(f.target_name || f.target_code)}</b>
+                  <div style="font-size:10.5px;color:#94a3b8">${esc([f.target_code, f.unit_code, f.city].filter(Boolean).join(' · '))}</div></div>`).join('')}
+               </div>`
+            : `<div style="font-size:11.5px;color:#94a3b8;padding:5px 2px">No agency found.</div>`) : ''}`}
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">
+      <div>${lbl('Purpose')}<select style="${inp}" onchange="taStopSet(${i},'purpose',this.value)">
+        ${TA_PURPOSES.map(pz => `<option${sp.purpose === pz ? ' selected' : ''}>${esc(pz)}</option>`).join('')}</select></div>
+      <div>${lbl('Time')}<input type="time" style="${inp}" value="${esc(sp.visit_time || '')}" onchange="taStopSet(${i},'visit_time',this.value)"></div>
+      <div>${lbl('Growth target (cp)')}<input type="number" min="0" style="${inp}" value="${esc(sp.growth_target || '')}" oninput="taStopSet(${i},'growth_target',this.value)"></div>
+    </div>
+    <div style="margin-top:8px">${lbl('What should they achieve?')}
+      <textarea rows="2" style="${inp};resize:vertical" oninput="taStopSet(${i},'description',this.value)">${esc(sp.description || '')}</textarea></div>
+  </div>`).join('');
+
+  return `<div class="card" style="padding:14px 16px;margin-bottom:14px;border:1px solid #c7d7fe;background:#f8fbff">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div><b style="font-size:14px;color:#1e3a8a">Assign a tour</b>
+        <div style="font-size:11px;color:#64748b">Filed as already approved — it is your instruction, not a request</div></div>
+      <button onclick="taAssignClose()" style="border:0;background:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1">&times;</button>
+    </div>
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px">
+      <div>${lbl('For whom')}
+        <select style="${inp}" onchange="taAsgSet('person',this.value)">
+          <option value="">${st._teamLoading ? 'Loading your team…' : 'Choose a team member…'}</option>
+          ${team.map(t => `<option value="${esc(t.person_code)}"${a.person === t.person_code ? ' selected' : ''}>${esc(t.person_name)} — ${esc(LEVEL_ROLE_LABEL(t.hierarchy_level))}${t.unit_code ? ' · ' + esc(t.unit_code) : ''}</option>`).join('')}
+        </select></div>
+      <div>${lbl('Tour date')}<input type="date" style="${inp}" value="${esc(a.date)}" onchange="taAsgSet('date',this.value)"></div>
+    </div>
+    ${stopHtml}
+    <button onclick="taStopAdd()" class="btn sm" style="margin-bottom:10px">+ Add another agency</button>
+    ${a.err ? `<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:8px;padding:8px 11px;font-size:12.5px;margin-bottom:9px">${esc(a.err)}</div>` : ''}
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn sm" onclick="taAssignClose()">Cancel</button>
+      <button class="btn sm" ${a.saving ? 'disabled' : ''} onclick="taAssignSave()"
+        style="background:#1e3a8a;color:#fff;border-color:#1e3a8a">${a.saving ? 'Assigning…' : 'Assign tour'}</button>
+    </div>
+  </div>`;
+}
+/* The mobile app's own level names, so a person is described the same way on both. */
+function LEVEL_ROLE_LABEL(l) {
+  return ({ 1: 'Admin', 2: 'Edition Incharge', 3: 'Circulation Incharge', 4: 'Zonal Head',
+            5: 'VP Circulation', 7: 'Field Executive', 9: 'Agent', 10: 'Hawker' })[Number(l)] || 'Staff';
+}
+
 VIEWS.tour_approvals = () => {
   const st = _taState();
   _taLoad();
@@ -7572,6 +7722,7 @@ VIEWS.tour_approvals = () => {
       </select></div>
     <div style="flex:1"></div>
     <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn sm" onclick="taAssignOpen()" style="background:#eef4ff;color:#1e3a8a;border-color:#c7d7fe">＋ Assign tour</button>
       ${selCount ? `<span style="font-size:12px;color:var(--muted)">${selCount} selected</span>` : ''}
       <button class="btn sm" ${st.busy || !selCount ? 'disabled' : ''} onclick="taDecide('reject')"
         style="background:#fef2f2;color:#b91c1c;border-color:#fecaca">Reject…</button>
@@ -7628,7 +7779,7 @@ VIEWS.tour_approvals = () => {
         · Competitor copies are the largest single competitor at that agency, from the latest survey period.
       </div>`;
 
-  return head + sel + note + `<div class="card" style="padding:12px 14px">${body}</div>`;
+  return head + sel + _taAssignPanel() + note + `<div class="card" style="padding:12px 14px">${body}</div>`;
 };
 
 /* ═══════════ VZ — data-viz component library ═══════════

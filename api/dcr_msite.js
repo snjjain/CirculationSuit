@@ -584,7 +584,7 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       // Financial year starts in April.
       const fyStart = (d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1) + '-04-01';
 
-      const [master, cur, bills, coll, sup] = await Promise.all([
+      const [master, cur, bills, coll, sup, trend, odR, compR, lastVisitR] = await Promise.all([
         q(`SELECT ag_name, agent_name, mobile_no1, email_id, city_name, station_name,
                   dist_name, address, ag_class_name, executive_name
            FROM agency_master WHERE unit = ? AND agcd = ? AND CAST(dpcd AS UNSIGNED) = 1 LIMIT 1`, [unit, code]),
@@ -611,6 +611,55 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
            FROM supply_data WHERE unit_code = ? AND agcd = ? AND sup_type_code = 'S01'
              AND COALESCE(publ,'') NOT IN ('P14')
              AND supply_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)`, [unit, code]),
+
+        /* The rest of the Agency 360 card, so an executive standing in the shop sees
+           what the office sees. Thirty days against the thirty before it is the trend
+           the executive can still do something about; a year-on-year figure is a
+           reporting number, not a doorstep one. */
+        q(`SELECT
+             ROUND(SUM(CASE WHEN supply_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                            THEN sup_copy END)
+                   / NULLIF(COUNT(DISTINCT CASE WHEN supply_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                            THEN supply_date END), 0)) cur30,
+             ROUND(SUM(CASE WHEN supply_date < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                            THEN sup_copy END)
+                   / NULLIF(COUNT(DISTINCT CASE WHEN supply_date < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                            THEN supply_date END), 0)) prv30
+           FROM supply_data
+           WHERE unit_code = ? AND agcd = ? AND sup_type_code = 'S01'
+             AND COALESCE(publ,'') NOT IN ('P14')
+             AND supply_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)`, [unit, code]),
+
+        // Overdue: the balance less whatever has been billed since the last month end.
+        q(`SELECT SUM(c.cl_amt) cl, SUM(c.bill_amt) bill,
+                  (SELECT SUM(bill_amt) FROM agency_outstanding
+                    WHERE unit_code = c.unit_code AND ag_code = c.ag_code
+                      AND period_label = (SELECT MAX(period_label) FROM agency_outstanding
+                                           WHERE period_label REGEXP '^[0-9]{4}-[0-9]{2}$')) prev_bill
+             FROM agency_outstanding c
+            WHERE c.unit_code = ? AND c.ag_code = ? AND c.period_label = 'CURRENT'
+            GROUP BY c.unit_code, c.ag_code`, [unit, code]),
+
+        // Latest competitor survey for this agency.
+        q(`SELECT our_supply, period,
+                  GREATEST(COALESCE(comp1_supply,0), COALESCE(comp2_supply,0), COALESCE(comp3_supply,0),
+                           COALESCE(comp4_supply,0), COALESCE(comp5_supply,0)) top_cp,
+                  CASE GREATEST(COALESCE(comp1_supply,0), COALESCE(comp2_supply,0), COALESCE(comp3_supply,0),
+                                COALESCE(comp4_supply,0), COALESCE(comp5_supply,0))
+                    WHEN COALESCE(comp1_supply,0) THEN comp1_name
+                    WHEN COALESCE(comp2_supply,0) THEN comp2_name
+                    WHEN COALESCE(comp3_supply,0) THEN comp3_name
+                    WHEN COALESCE(comp4_supply,0) THEN comp4_name
+                    ELSE comp5_name END top_name,
+                  COALESCE(comp1_supply,0)+COALESCE(comp2_supply,0)+COALESCE(comp3_supply,0)
+                    +COALESCE(comp4_supply,0)+COALESCE(comp5_supply,0) all_comp
+             FROM competitor_data
+            WHERE comp_type = 'agency' AND unit_code = ? AND agent_code = ?
+            ORDER BY period DESC LIMIT 1`, [unit, code]),
+
+        // When anyone last stood here.
+        q(`SELECT MAX(visit_date) d FROM dcr_agency_visit
+            WHERE unit_code = ? AND visit_to_main_code = ?`, [unit, code]),
       ]);
 
       const m = master.rows[0] || {};
@@ -671,6 +720,35 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         collection_fy: collectionFy,
         last_collection_date: iso(lastDate),
         fy_from: fyStart,
+
+        // ── Agency 360 context ──
+        supply_trend_pct: (() => {
+          const t = trend.rows[0] || {}; const a = N(t.cur30), b = N(t.prv30);
+          return b > 0 ? Math.round(((a - b) / b) * 1000) / 10 : null;
+        })(),
+        supply_30d: N(trend.rows[0] && trend.rows[0].cur30),
+        overdue: (() => {
+          const o = odR.rows[0]; if (!o) return null;
+          return Math.max(0, N(o.cl) - Math.max(0, N(o.bill) - N(o.prev_bill)));
+        })(),
+        /* Our share is measured against OUR OWN supply, not the our_supply column of the
+           competitor survey — that column is often left at zero by the surveyor, which
+           turned a 69% share into 0%. The competitor copies come from the survey; ours
+           come from supply_data, which is the same pairing the dashboard uses. */
+        market_share_pct: (() => {
+          const c = compR.rows[0]; if (!c) return null;
+          const ours = N(trend.rows[0] && trend.rows[0].cur30) || N(c.our_supply);
+          const tot = ours + N(c.all_comp);
+          return tot > 0 ? Math.round((ours / tot) * 100) : null;
+        })(),
+        top_competitor: (compR.rows[0] && compR.rows[0].top_name) || null,
+        top_competitor_copies: compR.rows[0] ? N(compR.rows[0].top_cp) : null,
+        competitor_period: (compR.rows[0] && compR.rows[0].period) || null,
+        last_visit: iso(lastVisitR.rows[0] && lastVisitR.rows[0].d),
+        last_visit_days_ago: (() => {
+          const d0 = lastVisitR.rows[0] && lastVisitR.rows[0].d; if (!d0) return null;
+          return Math.round((Date.now() - new Date(String(d0).slice(0, 10) + 'T00:00:00').getTime()) / 86400000);
+        })(),
       });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
@@ -890,9 +968,9 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         await q(
           `INSERT INTO dcr_tour_plan (tour_date, staff_person_code, staff_name, staff_emp_code, unit_code,
              target_type, target_code, target_name, target_extra, visit_time, purpose, description,
-             status, seq_no, expected_recovery, outstanding_snap,
+             status, seq_no, expected_recovery, outstanding_snap, growth_target,
              assigned_by, assigned_by_name, approved_by, approved_by_name, approved_at)
-           VALUES (?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?)`,
+           VALUES (?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?)`,
           [b.tour_date, owner.person_code, owner.name, owner.emp_code, unit,
            ['agent', 'hawker'].includes(s.target_type) ? s.target_type : 'agent',
            S(s.target_code, 40), S(s.target_name, 300), S(s.target_extra, 300),
@@ -900,6 +978,9 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
            status, i + 1,
            s.expected_recovery == null ? null : Number(s.expected_recovery),
            s.outstanding == null ? null : Number(s.outstanding),
+           // What the visit is meant to add, so the approver and the executive are
+           // working to the same number rather than to a remark.
+           s.growth_target == null || s.growth_target === '' ? null : Number(s.growth_target),
            assigning ? staff.person_code : null, assigning ? staff.name : null,
            assigning ? staff.person_code : null, assigning ? staff.name : null,
            assigning ? new Date() : null]);
