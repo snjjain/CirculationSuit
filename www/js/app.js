@@ -7554,8 +7554,10 @@ window.taDecide = async (action) => {
     });
     const d = await r.json();
     if (!r.ok || d.detail) throw new Error(d.detail || 'Could not save the decision');
+    const past = Number(d.skipped_past || 0);
     st.msg = `${d.affected} tour${d.affected === 1 ? '' : 's'} ${action === 'approve' ? 'approved' : 'rejected'}.`
-      + (d.skipped ? ` ${d.skipped} skipped — already decided.` : '');
+      + (past ? ` ${past} left alone — the date has passed; reject them or ask for a re-plan.` : '')
+      + (d.skipped - past > 0 ? ` ${d.skipped - past} skipped — already decided.` : '');
     st.sel = {}; st.data = null; st._key = '';
   } catch (e) { st.err = String(e.message || e); }
   st.busy = false; render();
@@ -7626,6 +7628,9 @@ window.taAssignSave = async () => {
   const stops = a.stops.filter(x => x.target_code);
   if (!a.person) { a.err = 'Choose who the tour is for.'; render(); return; }
   if (!a.date) { a.err = 'Choose a date.'; render(); return; }
+  if (a.date < new Date().toISOString().slice(0, 10)) {
+    a.err = 'A tour cannot be planned for a date before today.'; render(); return;
+  }
   if (!stops.length) { a.err = 'Add at least one agency.'; render(); return; }
   a.saving = true; a.err = null; render();
   try {
@@ -7694,7 +7699,9 @@ function _taAssignPanel() {
           <option value="">${st._teamLoading ? 'Loading your team…' : 'Choose a team member…'}</option>
           ${team.map(t => `<option value="${esc(t.person_code)}"${a.person === t.person_code ? ' selected' : ''}>${esc(t.person_name)} — ${esc(LEVEL_ROLE_LABEL(t.hierarchy_level))}${t.unit_code ? ' · ' + esc(t.unit_code) : ''}</option>`).join('')}
         </select></div>
-      <div>${lbl('Tour date')}<input type="date" style="${inp}" value="${esc(a.date)}" onchange="taAsgSet('date',this.value)"></div>
+      <div>${lbl('Tour date')}<input type="date" style="${inp}" min="${new Date().toISOString().slice(0, 10)}"
+        value="${esc(a.date)}" onchange="taAsgSet('date',this.value)"
+        title="A tour cannot be planned for a date before today"></div>
     </div>
     ${stopHtml}
     <button onclick="taStopAdd()" class="btn sm" style="margin-bottom:10px">+ Add another agency</button>
@@ -7734,7 +7741,8 @@ VIEWS.tour_approvals = () => {
       </select></div>
     <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Status</div>
       <select onchange="taSetStatus(this.value)" class="inp" style="min-width:150px;font-size:12.5px;padding:6px 10px">
-        ${[['submitted', 'Awaiting approval'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']]
+        ${[['submitted', 'Awaiting approval'], ['approved', 'Approved'], ['rejected', 'Rejected'],
+           ['lapsed', 'Lapsed — date passed' + (d.lapsed_count ? ` (${d.lapsed_count})` : '')], ['all', 'All']]
           .map(([v, l]) => `<option value="${v}"${st.status === v ? ' selected' : ''}>${l}</option>`).join('')}
       </select></div>
     <div style="flex:1"></div>
@@ -7758,7 +7766,9 @@ VIEWS.tour_approvals = () => {
 
   const body = !rows.length
     ? `<div style="padding:26px;text-align:center;color:var(--muted);font-size:13px">
-         ${st.status === 'submitted' ? 'Nothing is waiting for your approval.' : 'No tour plans for this selection.'}
+         ${st.status === 'submitted' ? 'Nothing is waiting for your approval.'
+            : st.status === 'lapsed' ? 'No tours have lapsed.' : 'No tour plans for this selection.'}
+         ${st.status === 'submitted' && d.lapsed_count ? `<div style="font-size:11.5px;margin-top:6px">${d.lapsed_count} tour${d.lapsed_count === 1 ? '' : 's'} lapsed — see “Lapsed — date passed”.</div>` : ''}
          ${d.team_size ? `<div style="font-size:11.5px;margin-top:5px">${d.team_size} people report to you.</div>` : ''}</div>`
     : `<div style="overflow-x:auto"><table>
       <thead><tr>
@@ -7771,7 +7781,7 @@ VIEWS.tour_approvals = () => {
           ? `<input type="checkbox" ${st.sel[r.id] ? 'checked' : ''} onclick="taToggle(${r.id})">`
           : ''}</td>
         <td style="white-space:nowrap;font-size:12px">${esc(r.tour_date)}
-          ${r.overdue && r.status === 'submitted' ? '<div style="font-size:9.5px;color:#b45309;font-weight:700">overdue</div>' : ''}
+          ${r.overdue && r.status === 'submitted' ? '<div style="font-size:9.5px;color:#b45309;font-weight:700" title="The date has passed — reject or ask for a re-plan">date passed</div>' : ''}
           ${r.visit_time ? `<div style="font-size:9.5px;color:var(--muted)">${esc(r.visit_time)}</div>` : ''}</td>
         <td style="font-size:12px"><b>${esc(r.person_name || r.person_code)}</b>
           <div style="font-size:10px;color:var(--muted)">${esc([r.designation, r.unit_name].filter(Boolean).join(' · '))}</div>
@@ -7797,7 +7807,11 @@ VIEWS.tour_approvals = () => {
         · Competitor copies are the largest single competitor at that agency, from the latest survey period.
       </div>`;
 
-  return head + sel + _taAssignPanel() + note + `<div class="card" style="padding:12px 14px">${body}</div>`;
+  /* The list comes first and the form after it. An approver opens this screen to see
+     what is waiting, not to file something — the form on top pushed the very thing they
+     came for below the fold. */
+  return head + sel + note + `<div class="card" style="padding:12px 14px">${body}</div>`
+       + _taAssignPanel();
 };
 
 /* ═══════════ VZ — data-viz component library ═══════════

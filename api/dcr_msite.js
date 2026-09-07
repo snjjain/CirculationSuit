@@ -1146,7 +1146,7 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       const codes = team.map(t => t.person_code);
       const lvlOf  = new Map(team.map(t => [t.person_code, Number(t.hierarchy_level)]));
       const anyone = isAdmin && !codes.length;      // admin with no downline of their own
-      const status = ['submitted', 'approved', 'rejected', 'all'].includes(String(req.query.status || ''))
+      const status = ['submitted', 'approved', 'rejected', 'lapsed', 'all'].includes(String(req.query.status || ''))
         ? String(req.query.status) : 'submitted';
       const unit = S(req.query.unit_code, 8) || null;
 
@@ -1155,11 +1155,18 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       if (anyone && Array.isArray(units) && units.length) {
         where.push(`p.unit_code IN (${units.map(() => '?').join(',')})`); args.push(...units);
       }
-      if (status !== 'all') { where.push('p.status = ?'); args.push(status); }
+      /* A tour whose date has passed cannot be approved, so it does not belong in the
+         queue of decisions still to be made. It is not deleted either: "lapsed" lists
+         exactly those, so the backlog stays visible and can be rejected or re-planned
+         rather than quietly vanishing. */
+      if (status === 'lapsed') { where.push(`p.status = 'submitted' AND p.tour_date < ?`); args.push(today()); }
+      else if (status === 'submitted') { where.push(`p.status = 'submitted' AND p.tour_date >= ?`); args.push(today()); }
+      else if (status !== 'all') { where.push('p.status = ?'); args.push(status); }
       if (unit) { where.push('p.unit_code = ?'); args.push(unit); }
-      // Deliberately keeps past dates: a decision that was owed does not stop being owed
-      // at midnight, and dropping it would hide the backlog.
-      where.push('p.tour_date >= DATE_SUB(CURDATE(), INTERVAL 45 DAY)');
+      // Decided plans are still worth looking back at; the window keeps that bounded.
+      if (status !== 'submitted' && status !== 'lapsed') {
+        where.push('p.tour_date >= DATE_SUB(CURDATE(), INTERVAL 45 DAY)');
+      }
 
       const { rows } = await q(
         `SELECT p.id, p.tour_date, p.staff_person_code, p.staff_name, p.unit_code,
@@ -1255,8 +1262,14 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       (Array.isArray(units) ? units : []).forEach(u => unitSet.set(u, unitNames[u] || u));
       team.forEach(t => { if (t.unit_code) unitSet.set(t.unit_code, unitNames[t.unit_code] || t.unit_code); });
       out.forEach(r => { if (r.unit_code) unitSet.set(r.unit_code, r.unit_name); });
+      // How many are sitting past their date, so the screen can point at them.
+      const { rows: lap } = anyone ? { rows: [{ n: 0 }] } : await q(
+        `SELECT COUNT(*) n FROM dcr_tour_plan
+          WHERE status = 'submitted' AND tour_date < ?
+            AND staff_person_code IN (${codes.map(() => '?').join(',')})`, [today(), ...codes]);
+
       res.json({
-        rows: out, team_size: team.length, status,
+        rows: out, team_size: team.length, status, lapsed_count: N(lap[0] && lap[0].n),
         approver: staff ? { person_code: staff.person_code, name: staff.name } : { person_code: 'ADMIN', name: 'Administrator' },
         units: [...unitSet.entries()].map(([code, name]) => ({ unit_code: code, unit_name: name }))
           .sort((a, b) => String(a.unit_name).localeCompare(String(b.unit_name))),
