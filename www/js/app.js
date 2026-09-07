@@ -5853,7 +5853,7 @@ function _ccStateCard(s, d) {
                               : _ccTrend(s.supply.agent_growth_pct),
       null, null, `ccOpenState('${q(s.key)}')`)}
 
-    ${_ccKpiRow('CASH SALE (CITY)', _ccN(s.supply.cash) + ' cp',
+    ${!_segAllowed('cash') ? '' : _ccKpiRow('CASH SALE (CITY)', _ccN(s.supply.cash) + ' cp',
       s.supply.cash || s.supply.cash_previous
         ? `${d && d.compare_is_later ? 'now' : 'was'} ${_ccN(s.supply.cash_previous)}`
         : 'agent sale only — no city centres',
@@ -5987,7 +5987,7 @@ function _cmdViewNew() {
     : `<br><span style="color:#475569">${wasWord} ${fmt(val)}</span>`);
 
   const topStrip = !t.supply ? '' : `<div class="cc-strip" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:18px">
-    ${_ccTopCard({ label: st.state ? esc(shown[0] ? shown[0].name : '') + ' Supply' : 'Total Supply', color: '#3b82f6',
+    ${!_segAllowed('cash') ? '' : _ccTopCard({ label: st.state ? esc(shown[0] ? shown[0].name : '') + ' Supply' : 'Total Supply', color: '#3b82f6',
       value: _ccN(t.supply.value),
       trend: cmpTrend(t.supply.value, t.supply.prev, t.supply.growth_pct),
       sub: `Agent + Cash · ${esc(t.supply.window)}${wasLine(t.supply.prev, _ccN)}`,
@@ -5997,7 +5997,7 @@ function _cmdViewNew() {
       trend: cmpTrend(t.agent.value, t.agent.prev, t.agent.growth_pct),
       sub: `${t.agent.share_pct == null ? '' : t.agent.share_pct + '% of supply · '}credit agencies${wasLine(t.agent.prev, _ccN)}`,
       barPct: t.agent.share_pct, onClick: `ccDrill('supply_dash','${q(anyState)}')` })}
-    ${_ccTopCard({ label: 'Cash Sale', color: '#f59e0b',
+    ${!_segAllowed('cash') ? '' : _ccTopCard({ label: 'Cash Sale', color: '#f59e0b',
       value: _ccN(t.cash.value),
       trend: cmpTrend(t.cash.value, t.cash.prev, t.cash.growth_pct),
       sub: `${t.cash.share_pct == null ? '' : t.cash.share_pct + '% of supply · '}city / hawker${wasLine(t.cash.prev, _ccN)}`,
@@ -6949,7 +6949,9 @@ function _csZHRows(st, d) {
   const zhMs  = zh  => msAvail ? _msRoll(execsUnder(zh).map(execMs))  : null;
   const msCell = v => msAvail ? tdR(_msPct(v)) : '';
 
-  const metricsRow = (r, msVal) => tdR(NF(r.agent_cur)) + tdR(NF(r.cash_cur)) + tdR(GP(r.growth_pct))
+  /* The cell has to go wherever the header goes, or every figure after it lands under
+     the wrong column. */
+  const metricsRow = (r, msVal) => tdR(NF(r.agent_cur)) + (_segAllowed('cash') ? tdR(NF(r.cash_cur)) : '') + tdR(GP(r.growth_pct))
     + tdR(NF(r.billed)) + tdR(NF(r.collection)) + tdR(CP(r.coll_pct))
     + tdR(NF(r.os)) + tdR(CR(r.critical)) + tdR(VS(r.visits)) + msCell(msVal) + tdC(ST(r));
 
@@ -7024,7 +7026,7 @@ function _csZHPerformance(st, d) {
   const msTh = (_zms && _zms.available) ? `<th style="${thS}" title="Patrika share of total market (competitor data · ${esc(_zms.period || '')})">Mkt Share</th>` : '';
   const thead = `<thead><tr style="border-bottom:2px solid #e2e8f0;background:#f8fafc">
     <th style="text-align:left;padding:5px 8px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Name</th>
-    <th style="${thS}">Agent Sale</th><th style="${thS}">Cash Sale</th><th style="${thS}">Growth</th>
+    <th style="${thS}">Agent Sale</th>${_segAllowed('cash') ? `<th style="${thS}">Cash Sale</th>` : ''}<th style="${thS}">Growth</th>
     <th style="${thS}">Prev Bill</th><th style="${thS}">Collection</th><th style="${thS}">Coll%</th>
     <th style="${thS}">OS</th><th style="${thS}">Critical</th><th style="${thS}">Visits</th>${msTh}
     <th style="text-align:center;padding:5px 7px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">Status</th>
@@ -7053,6 +7055,9 @@ function _csCircLine(agent, cash) {
 
 /* ── Center Wise (CI) table — dedicated layout for Centre Incharges ── */
 function _csCITable(st, d, rows) {
+  /* Centre Incharge Performance is cash sale end to end. An agent-only login has no
+     business being shown it — those centres are not theirs to run. */
+  if (!_segAllowed('cash')) return '';
   const gLabel = 'Centre Incharge';
   const ciUnit = st.unit || '';
   const rowLink = r => r.exec_code ? `ccOpenExecPanel('${_csQ(r.exec_code)}','${_csQ(r.name)}','${_csQ(ciUnit)}')` : '';
@@ -7381,13 +7386,16 @@ VIEWS.cc_state = () => {
        const prevLbl = d.prev_range_from
          ? `${esc(d.compare_label || 'Compared with')} · ${_csSpan(d.prev_range_from, d.prev_range_to)}`
          : `${esc(d.compare_label || '')}`; return `
-    ${_ccTopCard({ label: 'Total supply (avg/day)', color: '#1e3a8a',
+    ${_segAllowed('cash') ? _ccTopCard({ label: 'Total supply (avg/day)', color: '#1e3a8a',
       value: _ccN(t.supply.current) + ' cp', trend: _ccTrend(t.supply.growth_pct),
-      sub: prevLbl })}
+      sub: prevLbl })
+      /* An agent-only login must not be shown a total that silently includes the cash
+         half of the branch — it would not reconcile with anything else on their screen. */
+      : ''}
     ${_ccTopCard({ label: 'Agent sale (credit)', color: '#3b82f6',
       value: _ccN(t.agent.current) + ' cp', trend: _ccTrend(t.agent.growth_pct),
       sub: `${t.agent.share_pct == null ? '—' : t.agent.share_pct + '%'} of supply · was ${_ccN(t.agent.previous)} · ${prevLbl}` })}
-    ${_ccTopCard({ label: 'Cash sale (city)', color: '#0ea5e9',
+    ${!_segAllowed('cash') ? '' : _ccTopCard({ label: 'Cash sale (city)', color: '#0ea5e9',
       value: _ccN(t.cash.current) + ' cp', trend: _ccTrend(t.cash.growth_pct),
       sub: t.cash.current || t.cash.previous
         ? `${t.cash.share_pct == null ? '—' : t.cash.share_pct + '%'} of supply · ${_ccN(t.cash.centres)} branch${t.cash.centres === 1 ? '' : 'es'} with city sale · ${prevLbl}`
@@ -19107,9 +19115,23 @@ function render() {
 
 restoreSession();
 render();
-/* Validate any restored token in the background; refresh the profile or force re-login on 401 */
+/* Validate any restored token in the background; refresh the profile or force re-login on 401.
+
+   The refreshed profile carries `landing` and `segments`, and it arrives AFTER the
+   restored (possibly older) profile has already chosen a screen — so a session that
+   began before those fields existed stayed on the all-India Command Centre and was
+   still shown cash sale. If the user has not navigated away in the meantime, the fresh
+   landing is applied; if they have, they are left where they are. */
 if (S.user && AUTH_TOKEN) {
+  const screenAtRestore = S.screen;
   api.get("/api/auth/me").then(d => {
-    if (d && d.user) { S.user = d.user; saveSession(d.user, AUTH_TOKEN); render(); }
+    if (!d || !d.user) return;
+    S.user = d.user; saveSession(d.user, AUTH_TOKEN);
+    if (S.screen === screenAtRestore) {
+      _applyLanding(d.user);
+      const want = defaultScreen(d.user);
+      if (want !== S.screen) S.screen = want;
+    }
+    render();
   });
 }
