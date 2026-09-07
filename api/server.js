@@ -2928,6 +2928,38 @@ app.get('/api/outstanding/kpis', async (req, res) => {
     const d = r.rows[0] || {};
     const N = v => Number(v) || 0;
     const billed = N(d.total_billed), collected = N(d.total_collected);
+
+    /* OVERDUE on the same rule as the Command Centre: the balance less whatever has
+       been billed since the last month-end snapshot — the bill raised on the 1st and
+       collected across this month, which is owed but not late. Subtracted per agency
+       and floored at zero so one agency covered by this month's bill cannot cancel
+       another's real arrears. Only meaningful for the live CURRENT balance; a
+       month-end snapshot is already a closed position. */
+    let overdueTot = null, lastSnapLabel = null;
+    if (label === 'CURRENT') {
+      try {
+        const { rows: ls } = await q(
+          `SELECT MAX(period_label) l FROM agency_outstanding
+            WHERE period_label REGEXP '^[0-9]{4}-[0-9]{2}$'`);
+        lastSnapLabel = ls[0] && ls[0].l;
+        if (lastSnapLabel) {
+          const { rows: od } = await q(`
+            SELECT SUM(GREATEST(0, c.cl - GREATEST(0, c.bill - COALESCE(p.bill, 0)))) od
+              FROM (SELECT unit_code, ag_code, SUM(cl_amt) cl, SUM(bill_amt) bill
+                      FROM agency_outstanding ao
+                     WHERE period_label = 'CURRENT' AND CAST(dp_code AS UNSIGNED) = 1
+                       ${clause}${sc.clause}
+                     GROUP BY unit_code, ag_code) c
+              LEFT JOIN (SELECT unit_code, ag_code, SUM(bill_amt) bill
+                           FROM agency_outstanding
+                          WHERE period_label = ? AND CAST(dp_code AS UNSIGNED) = 1
+                          GROUP BY unit_code, ag_code) p
+                ON p.unit_code = c.unit_code AND p.ag_code = c.ag_code`,
+            [...params, ...sc.params, lastSnapLabel]);
+          overdueTot = N(od[0] && od[0].od);
+        }
+      } catch (_) { overdueTot = null; }
+    }
     const asOn = label === 'CURRENT' ? null : (() => {
       const [y, m] = label.split('-').map(Number);
       return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);   // month-end
@@ -2944,7 +2976,15 @@ app.get('/api/outstanding/kpis', async (req, res) => {
       total_collected:         collected,
       total_outstanding:       N(d.total_outstanding),
       current_outstanding:     N(d.total_outstanding) - N(d.overdue_outstanding),
+      /* Dues carried by agencies that have not been supplied for 30 days. That is a
+         supply-inactivity measure, not a billing-age one, and calling it "overdue"
+         made this screen disagree with the Command Centre, which holds out the bill
+         raised on the 1st of this month. Renamed for what it is; the true overdue
+         figure is added beside it below. */
+      stopped_supply_outstanding: N(d.overdue_outstanding),
       overdue_outstanding:     N(d.overdue_outstanding),
+      overdue:                 overdueTot,
+      overdue_excludes:        lastSnapLabel,
       critical_outstanding:    N(d.critical_outstanding),
       collection_pct:          billed > 0 ? ((collected / billed) * 100).toFixed(1) : '0.0',
       op_outstanding:          N(d.op_total),

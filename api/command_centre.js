@@ -1061,6 +1061,9 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
       // count and outstanding is a balance, so both stay on the as-on date while
       // collection and field visits sum over the selected range.
       const sum = f => states.reduce((a, s) => a + f(s), 0);
+      // Whether the ledger could be telescoped for this range at all; without it the
+      // headline falls back to banked cash rather than showing nothing.
+      const cashKnown = !!col.recovery_known;
       const supTot = sum(s => s.supply.current), supPrevTot = sum(s => s.supply.previous);
       const billTot = col.has_billing ? sum(s => s.collection.prev_month_billing) : null;
       const mtdTot = sum(s => s.collection.current);
@@ -1077,8 +1080,18 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
         cash:          { value: sum(s => s.supply.cash), prev: sum(s => s.supply.cash_previous),
                          growth_pct: r1(pct(sum(s => s.supply.cash), sum(s => s.supply.cash_previous))),
                          share_pct: supTot ? r1(sum(s => s.supply.cash) / supTot * 100) : null, window: winLabel },
-        collection:    { value: rng.collection, prev: rngPrev.collection,
-                         growth_pct: r1(pct(rng.collection, rngPrev.collection)),
+        /* The headline COLLECTION is the ledger's net receipt — the same figure the state
+           cards below it report, and the same numerator as the collection percentage
+           beside it. It used to be banked cash from agency_collection while the cards
+           used the ledger, so one screen carried two different numbers under one word:
+           48.52 L in the strip against 63.84 L on the card, for the same branch and
+           month. Banked cash is kept as collection_cash — a real figure, and the one the
+           Collections dashboard reports, but a narrower one: it misses the 12.54 L of
+           credit notes and adjustments the ERP counts as recovered. */
+        collection:    { value: cashKnown ? mtdTot : rng.collection, prev: rngPrev.collection,
+                         collection_cash: rng.collection,
+                         basis: cashKnown ? 'ledger net receipt' : 'receipts banked',
+                         growth_pct: r1(pct(cashKnown ? mtdTot : rng.collection, rngPrev.collection)),
                          txn: rng.txn, agencies_paid: rng.agencies_paid, window: win.label },
         collection_pct:{ value: billTot > 0 ? r1(mtdTot / billTot * 100) : null, billed: billTot, collected: mtdTot,
                          bill_months: col.billing_months, bill_missing: col.billing_missing,

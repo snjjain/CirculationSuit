@@ -6005,7 +6005,13 @@ function _cmdViewNew() {
     ${_ccTopCard({ label: 'Collection', color: '#22c55e',
       value: _ccINR(t.collection.value),
       trend: cmpTrend(t.collection.value, t.collection.prev, t.collection.growth_pct),
-      sub: `${_ccN(t.collection.txn)} receipts · ${esc(t.collection.window)}${wasLine(t.collection.prev, _ccINR)}`,
+      /* Say which figure this is. The ledger's net receipt and the cash book's banked
+         total are both real and they differ by credit notes and adjustments; printing
+         one without naming it is how the same word ended up meaning two things. */
+      sub: `${esc(t.collection.basis || 'collection')} · ${_ccN(t.collection.txn)} receipts · ${esc(t.collection.window)}`
+         + (t.collection.collection_cash != null && t.collection.collection_cash !== t.collection.value
+            ? ` · ${_ccINR(t.collection.collection_cash)} banked` : '')
+         + `${wasLine(t.collection.prev, _ccINR)}`,
       onClick: `ccDrill('collections','${q(anyState)}')` })}
     ${(()=>{ const cp = t.collection_pct;
       /* Collections in the selected range settle the bill raised the month before it,
@@ -10990,7 +10996,11 @@ function colOverviewTab() {
   </tr>`;
   }).join('');
   return `<div class="vz-kgrid" style="margin-bottom:16px">
-    ${vzKpi({ icon:'💰', label:'Total Collection', value:colFmtC(k.total_collection), status:'up', onclick:goto('geo') })}
+    ${/* This screen is the cash book: what was banked, by mode, by transaction. The
+          Command Centre reports the ERP's net receipt, which also counts credit notes
+          and adjustments and therefore runs higher. Both are real; the label says which
+          one this is so the two screens can be reconciled rather than doubted. */''}
+    ${vzKpi({ icon:'💰', label:'Receipts Banked', value:colFmtC(k.total_collection), sub:'excludes credit notes & adjustments', status:'up', onclick:goto('geo') })}
     ${vzKpi({ icon:'📆', label:'MTD Collection',   value:colFmtC(k.mtd_collection),   status:'up', onclick:goto('trend') })}
     ${vzKpi({ icon:'📊', label:'YTD Collection',   value:colFmtC(k.ytd_collection),   status:'fl', onclick:goto('trend') })}
     ${vzKpi({ icon:'🔄', label:'Transactions',     value:(k.total_txn||0).toLocaleString(), status:'fl', onclick:goto('geo') })}
@@ -12343,7 +12353,10 @@ function ouOverviewTab() {
   const kpiGrid = loading ? spin : `<div class="vz-kgrid" style="margin-bottom:16px">
     ${vzKpi({ icon:'💰', label:'Total Outstanding',   value:ouFmtC(k.total_outstanding),   status:'dn' })}
     ${vzKpi({ icon:'📅', label:'Current Outstanding', value:ouFmtC(k.current_outstanding), sub:'Within 30 days', status:'dn' })}
-    ${vzKpi({ icon:'⚠️', label:'Overdue Outstanding', value:ouFmtC(k.overdue_outstanding),  sub:'31+ days', status:'dn' })}
+    ${k.overdue == null ? '' : vzKpi({ icon:'⏰', label:'Overdue', value:ouFmtC(k.overdue),
+        sub: (k.overdue_excludes ? _ccMonthName(k.overdue_excludes) + ' bill excluded' : "this month's bill excluded"), status:'dn' })}
+    ${vzKpi({ icon:'⚠️', label:'Dues · supply stopped', value:ouFmtC(k.stopped_supply_outstanding != null ? k.stopped_supply_outstanding : k.overdue_outstanding),
+        sub:'not supplied 30+ days', status:'dn' })}
     ${vzKpi({ icon:'🏢', label:'Total Agencies',      value:ouFmtN(k.total_agencies),       status:'fl' })}
     ${vzKpi({ icon:'📌', label:'With Outstanding',    value:ouFmtN(k.agencies_with_outstanding), sub:'of '+ouFmtN(k.total_agencies), status:'dn' })}
     ${vzKpi({ icon:'📋', label:'Total Billed',        value:ouFmtC(k.total_billed),         status:'fl' })}
