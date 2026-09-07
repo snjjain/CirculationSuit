@@ -387,6 +387,35 @@ module.exports = function installAuth({ app, q, LEVEL_META, getScopeUnitCodes, g
   });
 
   // PATCH /api/admin/users/:id  — update (activate/deactivate, designation, type, email, name, mobile)
+  /* Find the ERP person behind a code — or find the code from a name.
+
+     The staff code is what ties an app login to hierarchy_master, and everything
+     downstream hangs off it: branch scope, the approval chain, DCR, whose figures the
+     dashboard shows. It could be set when creating a user but never corrected
+     afterwards, so an account created without one — or with the wrong one — stayed
+     wrong and showed "No branch posting found" with no way to fix it from the screen.
+     Searching by name matters because nobody remembers person codes. */
+  app.get('/api/admin/staff-lookup', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const term = String(req.query.q || '').trim();
+      if (term.length < 2) return res.json({ rows: [] });
+      const like = `%${term}%`;
+      const { rows } = await q(
+        `SELECT hm.person_code, MAX(hm.person_name) person_name, MAX(hm.employee_code) employee_code,
+                MAX(hm.unit_code) unit_code, MAX(un.unit_name) unit_name,
+                MAX(hm.hierarchy_level) hierarchy_level, MAX(hm.is_active) is_active,
+                (SELECT COUNT(*) FROM app_users au WHERE au.person_code = hm.person_code) has_login
+           FROM hierarchy_master hm
+           LEFT JOIN units un ON un.unit_code = hm.unit_code
+          WHERE hm.person_code = ? OR UPPER(hm.employee_code) = UPPER(?)
+             OR hm.person_name LIKE ? OR hm.employee_code LIKE ?
+          GROUP BY hm.person_code
+          ORDER BY MAX(hm.is_active) DESC, MAX(hm.person_name)
+          LIMIT 12`, [term, term, like, like]);
+      res.json({ rows });
+    } catch (e) { res.status(500).json({ detail: e.message }); }
+  });
+
   app.patch('/api/admin/users/:id', requireAuth, requireAdmin, async (req, res) => {
     try {
       const b = req.body || {}, fields = [], params = [];

@@ -15597,10 +15597,17 @@ window.umEdit = (id) => {
          ${(u.unit_name || u.unit_code) ? `<div><span style="color:var(--ink-2)">Branch</span> &nbsp;<b>${esc(u.unit_name || '')}</b>${u.unit_code ? ` <span style="color:var(--ink-2)">(${esc(u.unit_code)})</span>` : ''}</div>` : ''}
          <div style="font-size:11px;color:var(--ink-2);margin-top:3px">From the ERP hierarchy — change it there, not here.</div>
        </div>`
-    : `<div style="background:var(--surface-2);border-radius:8px;padding:9px 11px;margin-bottom:12px;font-size:12px;color:var(--ink-2)">
-         No branch posting found for this person in the ERP hierarchy.</div>`;
+    : `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:9px 11px;margin-bottom:12px;font-size:12px;color:#92400e">
+         No branch posting found in the ERP hierarchy. Set the staff code below to link
+         this login to a person — until then they have no branch, no approval chain and
+         no data scope.</div>`;
   modal(`<h3>Edit user</h3><div id="umErr"></div>
     ${posting}
+    <div class="fld"><label>Staff / person code — links this login to the ERP hierarchy</label>
+      <input id="umPerson" value="${esc(u.person_code || '')}" placeholder="e.g. E01786, or type a name to search"
+             oninput="umStaffSearch(this.value)" autocomplete="off">
+      <div id="umStaffHint" style="font-size:11.5px;color:var(--ink-2);margin-top:4px"></div>
+      <div id="umStaffList"></div></div>
     <div class="fld"><label>Full name</label><input id="umName" value="${esc(u.name || '')}"></div>
     <div class="fld"><label>Mobile number</label><input id="umMobile" maxlength="10" inputmode="numeric" value="${esc(u.mobile || '')}"></div>
     <div class="fld"><label>User ID</label><input id="umUsername" value="${esc(u.username || '')}"></div>
@@ -15610,9 +15617,44 @@ window.umEdit = (id) => {
     <label style="display:flex;align-items:center;gap:8px;margin:10px 0;cursor:pointer"><input type="checkbox" id="umActive" ${u.is_active ? 'checked' : ''}> Active</label>
     <div style="display:flex;gap:9px;margin-top:12px"><button class="btn pri block" onclick="umUpdate(${u.id})">Save changes</button><button class="btn" onclick="closeModals()">Cancel</button></div>`);
 };
+/* Search hierarchy_master while the admin types, so a code is chosen from real people
+   rather than typed from memory. Debounced; the list replaces itself each time. */
+window.umStaffSearch = (() => { let t; return v => {
+  clearTimeout(t);
+  const hint = document.getElementById('umStaffHint');
+  const list = document.getElementById('umStaffList');
+  if (!hint || !list) return;
+  const term = String(v || '').trim();
+  if (term.length < 2) { hint.textContent = ''; list.innerHTML = ''; return; }
+  hint.textContent = 'Searching…';
+  t = setTimeout(async () => {
+    const r = await apiCall('GET', '/api/admin/staff-lookup?q=' + encodeURIComponent(term));
+    const rows = (r && r.rows) || [];
+    if (!rows.length) { hint.textContent = 'No matching person in the ERP hierarchy.'; list.innerHTML = ''; return; }
+    const exact = rows.find(x => String(x.person_code).toUpperCase() === term.toUpperCase());
+    hint.innerHTML = exact
+      ? `Linked to <b>${esc(exact.person_name || '')}</b>${exact.employee_code ? ' · emp ' + esc(exact.employee_code) : ''}${exact.unit_name ? ' · ' + esc(exact.unit_name) : ''}${Number(exact.is_active) ? '' : ' <span style="color:#b45309">(inactive in ERP)</span>'}`
+      : `${rows.length} match${rows.length === 1 ? '' : 'es'} — pick one:`;
+    list.innerHTML = exact ? '' : `<div style="max-height:150px;overflow:auto;border:1px solid var(--brd);border-radius:7px;margin-top:5px">
+      ${rows.map(x => `<div onclick="umStaffPick('${_csQ(x.person_code)}')"
+          style="padding:6px 9px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--brd2)"
+          onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''">
+          <b>${esc(x.person_name || x.person_code)}</b> <span style="color:var(--ink-2)">${esc(x.person_code)}</span>
+          <div style="font-size:10.5px;color:var(--ink-2)">${esc([x.employee_code && 'emp ' + x.employee_code, x.unit_name || x.unit_code, 'L' + x.hierarchy_level,
+            Number(x.is_active) ? null : 'inactive', Number(x.has_login) ? 'already has a login' : null].filter(Boolean).join(' · '))}</div>
+        </div>`).join('')}</div>`;
+  }, 300);
+}; })();
+window.umStaffPick = code => {
+  const el = document.getElementById('umPerson');
+  if (el) { el.value = code; umStaffSearch(code); }
+  const list = document.getElementById('umStaffList'); if (list) list.innerHTML = '';
+};
+
 window.umUpdate = async (id) => {
   const b = { name: gv('umName'), mobile: gv('umMobile'), username: gv('umUsername'),
     hierarchy_level: gv('umLevel'), user_type: gv('umType'), email: gv('umEmail'),
+    person_code: gv('umPerson').trim() || null,
     is_active: document.getElementById('umActive').checked };
   const r = await apiCall('PATCH', '/api/admin/users/' + id, b);
   if (!r.ok) { document.getElementById('umErr').innerHTML = `<div class="err">${esc(r.detail || 'Update failed')}</div>`; return; }
