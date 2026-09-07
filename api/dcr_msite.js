@@ -974,6 +974,11 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
       const b = req.body || {};
       if (!isDate(b.tour_date)) return res.status(400).json({ detail: 'tour_date (YYYY-MM-DD) is required' });
+      /* Same rule as approval, for the same reason: an assignment is an instruction to
+         go somewhere, and it cannot be issued for a day that has passed. */
+      if (String(b.tour_date) < today()) {
+        return res.status(400).json({ detail: 'A tour cannot be planned for a date before today.', code: 'past_date' });
+      }
       const stops = Array.isArray(b.stops) ? b.stops : [];
       if (!stops.length) return res.status(400).json({ detail: 'At least one stop is required' });
 
@@ -994,12 +999,32 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       }
 
       const status = assigning ? 'approved' : 'submitted';
-      let n = 0;
+
+      /* One visit to an agency per person per day.
+
+         The same agency was being planned two and three times for the same executive on
+         the same date — SHYAM NEWS AGENCY three times for SHAKIR KHAN on 7 September —
+         which double-counts the day's workload, gives the approver the same decision
+         twice, and makes the visit record ambiguous when the executive checks in.
+
+         A plan that was REJECTED or CANCELLED does not block a new one: being told to
+         re-plan is precisely when the stop has to be entered again. */
+      const { rows: liveStops } = await q(
+        `SELECT unit_code, target_code FROM dcr_tour_plan
+          WHERE staff_person_code = ? AND tour_date = ?
+            AND status NOT IN ('rejected', 'cancelled')`, [owner.person_code, b.tour_date]);
+      const taken = new Set(liveStops.map(r => `${r.unit_code}|${String(r.target_code).toUpperCase()}`));
+
+      let n = 0, dupes = [];
       for (let i = 0; i < stops.length; i++) {
         const s = stops[i] || {};
         const unit = S(s.unit_code, 10) || owner.unit_code;
         if (!unit || !S(s.target_code, 40)) continue;
         if (units && !units.includes(unit)) continue;
+        // Blocks both an existing plan and a repeat inside this same request.
+        const key = `${unit}|${String(S(s.target_code, 40)).toUpperCase()}`;
+        if (taken.has(key)) { dupes.push(S(s.target_name, 300) || S(s.target_code, 40)); continue; }
+        taken.add(key);
         await q(
           `INSERT INTO dcr_tour_plan (tour_date, staff_person_code, staff_name, staff_emp_code, unit_code,
              target_type, target_code, target_name, target_extra, visit_time, purpose, description,
@@ -1021,7 +1046,14 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
            assigning ? new Date() : null]);
         n++;
       }
-      res.json({ ok: true, stops: n, status, for: owner.person_code, assigned: assigning });
+      if (!n && dupes.length) {
+        return res.status(409).json({
+          detail: `${dupes.length === 1 ? dupes[0] + ' is' : 'Those agencies are'} already planned for `
+                + `${owner.name} on ${b.tour_date}.`,
+          code: 'duplicate_stop', duplicates: dupes });
+      }
+      res.json({ ok: true, stops: n, status, for: owner.person_code, assigned: assigning,
+                 skipped_duplicates: dupes.length, duplicates: dupes });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
@@ -1255,21 +1287,40 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       const team = staff ? await subordinates(staff, units2) : [];
       const allowed = new Set(team.map(t => t.person_code));
       const { rows: own } = await q(
-        `SELECT id, staff_person_code, unit_code FROM dcr_tour_plan WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+        `SELECT id, staff_person_code, unit_code, tour_date FROM dcr_tour_plan WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
       // Admin decides on anything inside the branches they may read; everyone else only
       // on their own downline.
       const inScope = r => !units2 || !units2.length || units2.includes(r.unit_code);
       const ok = own.filter(r => allowed.has(r.staff_person_code) || (isAdmin2 && inScope(r))).map(r => r.id);
       if (!ok.length) return res.status(403).json({ detail: 'None of those plans belong to your team.' });
 
+      /* A tour cannot be APPROVED for a day that has already gone. Approval is
+         permission to travel, and permission granted after the fact is a record being
+         tidied, not a decision. Rejection is still allowed on past dates — that is how
+         a stale plan gets cleared off the board. */
+      let stalePast = 0, actIds = ok;
+      if (action === 'approve') {
+        const t = today();
+        const pastIds = new Set(own.filter(r => String(r.tour_date).slice(0, 10) < t).map(r => r.id));
+        stalePast = ok.filter(id => pastIds.has(id)).length;
+        actIds = ok.filter(id => !pastIds.has(id));
+        if (!actIds.length) {
+          return res.status(409).json({
+            detail: `Those tours are dated before today and can no longer be approved. `
+                  + `Ask the executive to re-plan them for today or later, or reject them.`,
+            code: 'past_date', skipped_past: stalePast });
+        }
+      }
+
       const r = await q(
         `UPDATE dcr_tour_plan
             SET status = ?, approved_by = ?, approved_by_name = ?, approved_at = NOW(), reject_reason = ?
-          WHERE id IN (${ok.map(() => '?').join(',')}) AND status = 'submitted'`,
+          WHERE id IN (${actIds.map(() => '?').join(',')}) AND status = 'submitted'`,
         [action === 'approve' ? 'approved' : 'rejected', staff.person_code, staff.name,
-         action === 'reject' ? S(b.reason, 500) : null, ...ok]);
+         action === 'reject' ? S(b.reason, 500) : null, ...actIds]);
       const affected = N((r && r.rows && r.rows.affectedRows) || 0);
-      res.json({ ok: true, action, affected, skipped: ids.length - affected, by: staff.name });
+      res.json({ ok: true, action, affected, skipped: ids.length - affected,
+                 skipped_past: stalePast, by: staff.name });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
@@ -1381,6 +1432,15 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
   const SUB_LEVEL_COL = { 2: 'edtn_incharge_code', 3: 'circ_incharge_code',
                           4: 'zonal_head_code', 5: 'vp_circulation_code' };
 
+  /* Authority rank, which the level NUMBER does not give you.
+
+     The chain runs Executive -> Edition (Dak) Incharge -> Circulation Incharge -> Zonal
+     Head -> VP, but the stored levels are 7, 2, 3, 4, 5 — so a Field Executive carries
+     the HIGHEST number while sitting at the BOTTOM. Comparing levels numerically would
+     make an executive senior to everyone. Rank is therefore explicit. */
+  const RANK = { 10: 0, 9: 0, 7: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 1: 9 };
+  const rankOf = lvl => (RANK[Number(lvl)] != null ? RANK[Number(lvl)] : 1);
+
   /* Everyone below this person, from BOTH records of the hierarchy.
 
      hierarchy_master.reporting_to is a chain of individuals; hierarchy_mapping names,
@@ -1422,24 +1482,40 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
     /* The mapping side. A Zonal Head owns the executives his column names AND the
        incharges sitting between them, which is why the incharge codes on those same
        rows are pulled in as people too. */
-    const col = SUB_LEVEL_COL[Number(staff.level != null ? staff.level : staff.hierarchy_level)];
-    const mapped = col ? q(
+    const myLevel = Number(staff.level != null ? staff.level : staff.hierarchy_level);
+    const myRank = rankOf(myLevel);
+    const col = SUB_LEVEL_COL[myLevel];
+
+    /* Only the rungs BELOW the caller. The mapping row that names a Dak Incharge also
+       names his Circulation Incharge and Zonal Head, so pulling every code off those
+       rows handed Ankit Bihari Sharma his own Zonal Head as a "subordinate" — and the
+       Assign Tour list offered NEERAJ JAIN to him. Each column is taken only when it
+       sits under the caller's own rung. */
+    const below = [];
+    if (myRank > rankOf(7)) below.push('exec_code');
+    if (myRank > rankOf(2)) below.push('edtn_incharge_code');
+    if (myRank > rankOf(3)) below.push('circ_incharge_code');
+    if (myRank > rankOf(4)) below.push('zonal_head_code');
+    const mapped = (col && below.length) ? q(
       `SELECT DISTINCT hm.person_code, hm.person_name, hm.employee_code,
               hm.unit_code, hm.hierarchy_level
          FROM hierarchy_master hm
-         JOIN (SELECT exec_code AS c FROM hierarchy_mapping WHERE ${col} = ?
-               UNION SELECT edtn_incharge_code FROM hierarchy_mapping WHERE ${col} = ?
-               UNION SELECT circ_incharge_code FROM hierarchy_mapping WHERE ${col} = ?
-               UNION SELECT zonal_head_code    FROM hierarchy_mapping WHERE ${col} = ?) m
+         JOIN (${below.map(cn => `SELECT ${cn} AS c FROM hierarchy_mapping WHERE ${col} = ?`).join(' UNION ')}) m
            ON m.c = hm.person_code
         WHERE hm.is_active = 1 AND hm.person_code <> ?
         ${uCl}`,
-      [staff.person_code, staff.person_code, staff.person_code, staff.person_code,
-       staff.person_code, ...uP]) : Promise.resolve({ rows: [] });
+      [...below.map(() => staff.person_code), staff.person_code, ...uP]) : Promise.resolve({ rows: [] });
 
     const [a, b] = await Promise.all([chain, mapped]);
     const seen = new Map();
-    [...a.rows, ...b.rows].forEach(r => { if (r.person_code && !seen.has(r.person_code)) seen.set(r.person_code, r); });
+    /* Whichever record produced them, a subordinate must sit strictly below the caller.
+       The reporting_to chain can loop back up through a stale row, and the mapping can
+       name a peer; neither may become someone this person can approve or assign to. */
+    [...a.rows, ...b.rows].forEach(r => {
+      if (!r.person_code || seen.has(r.person_code)) return;
+      if (rankOf(r.hierarchy_level) >= myRank) return;
+      seen.set(r.person_code, r);
+    });
     return [...seen.values()].sort((x, y) =>
       (Number(x.hierarchy_level) - Number(y.hierarchy_level)) ||
       String(x.person_name || '').localeCompare(String(y.person_name || '')));

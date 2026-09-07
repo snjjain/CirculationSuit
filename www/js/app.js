@@ -7620,7 +7620,8 @@ window.taAssignSave = async () => {
     const d = await r.json();
     if (!r.ok || d.detail) throw new Error(d.detail || 'Could not save the tour');
     const st = _taState();
-    st.msg = `Tour assigned — ${d.stops} stop${d.stops === 1 ? '' : 's'} on ${a.date}, already approved.`;
+    st.msg = `Tour assigned — ${d.stops} stop${d.stops === 1 ? '' : 's'} on ${a.date}, already approved.`
+      + (d.skipped_duplicates ? ` ${d.skipped_duplicates} skipped — already planned for that person on that date: ${(d.duplicates || []).join(', ')}.` : '');
     a.open = false; a.stops = []; a.q = ''; a.found = null;
     st.data = null; st._key = '';
   } catch (e) { a.err = String(e.message || e); }
@@ -7776,6 +7777,7 @@ VIEWS.tour_approvals = () => {
       </tbody></table></div>
       <div style="font-size:10.5px;color:var(--muted);margin-top:8px">
         ${rows.length} stop${rows.length === 1 ? '' : 's'}${pend.length ? ` · ${pend.length} awaiting your decision` : ''}
+        · A tour dated before today cannot be approved — reject it or ask for a re-plan.
         · Competitor copies are the largest single competitor at that agency, from the latest survey period.
       </div>`;
 
