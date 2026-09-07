@@ -124,9 +124,24 @@ module.exports = function registerSupplyDash(ctx) {
            WHERE executive_name IS NOT NULL${on(sc2, 'unit')} ORDER BY executive_name LIMIT 500`, sc2.params),
         unitHomeState(),
       ]);
-      const unitsDeduped = units.rows.map(u => ({ ...u, state_name: uhs[u.unit_code] || null }));
+      /* The business has four territories — Rajasthan, Madhya Pradesh, Chhattisgarh and
+         National — not the twenty-odd raw state names that appear in supply_data. Those
+         raw names come from where an AGENCY sits, and a border unit supplies into
+         several states, so the unfiltered list offered ANDHRA PRADESH, GOA, KERALA,
+         PONDICHERRY and the rest as if they were territories somebody runs. Every other
+         screen already buckets by the unit's home state; this dropdown now does too, and
+         each unit carries its BUCKET so picking Rajasthan lists every Rajasthan branch
+         rather than only those whose raw home state string happens to match. */
+      const unitsDeduped = units.rows.map(u => ({
+        ...u,
+        state_name: regionOf(uhs[u.unit_code]),
+        home_state: uhs[u.unit_code] || null,
+      }));
+      const ORDER = ['RAJASTHAN', 'MADHYA PRADESH', 'CHHATTISGARH', 'NATIONAL'];
+      const present = new Set(unitsDeduped.map(u => u.state_name));
+      const bucketed = ORDER.filter(x => present.has(x)).map(x => ({ state_name: x }));
       const d = await refDates(req);
-      const data = { units: unitsDeduped, states: states.rows, executives: execs.rows, data_upto: d ? d.cur : null };
+      const data = { units: unitsDeduped, states: bucketed, executives: execs.rows, data_upto: d ? d.cur : null };
       _supdFiltersCache.set(key, { data, exp: now + _SUPD_FILTERS_TTL });
       res.json(data);
     } catch (e) { res.status(500).json({ detail: String(e) }); }
