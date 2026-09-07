@@ -4031,8 +4031,10 @@ function _cmdViewLegacy() {
       lbl: supLbl, icon: '📦', color: 'var(--blue)', goto: "go('supply_dash')",
       sub: supPending ? 'Not synced yet for this period — supply loads overnight'
         : (sup && !sup._err ? 'Agent ' + (Number(sup.agent.current) || 0).toLocaleString('en-IN') + (cashVal != null && hasCashCentres ? ' · Cash ' + cashVal : '') + ' · ' + sup.data_upto + cashNote : '') },
-    { val: ou && !ou._err ? _cmdFmtC(ou.total_outstanding)      : (c._ouLoading ? '…' : '—'),
-      lbl: 'Outstanding · ' + (ouAsOn ? 'As on ' + ouAsOn : 'As on Today'), icon: '💰', color: 'var(--red)', goto: "go('outstanding')",
+    /* Overdue, like every other screen. A home tile that says a different number from
+       the dashboard it links to is the first thing anyone notices. */
+    { val: ou && !ou._err ? _cmdFmtC(ou.overdue != null ? ou.overdue : ou.total_outstanding) : (c._ouLoading ? '…' : '—'),
+      lbl: (ou && !ou._err && ou.overdue != null ? 'Overdue · ' : 'Outstanding · ') + (ouAsOn ? 'As on ' + ouAsOn : 'As on Today'), icon: '💰', color: 'var(--red)', goto: "go('outstanding')",
       sub: ou && !ou._err ? (ou.critical_count||0).toLocaleString('en-IN') + ' critical agencies'
         + (!ouAsOn && (cf.period === 'today' || cf.period === 'yesterday') ? ' · live balance, no daily history' : '') : '' },
     { val: co && !co._err ? _cmdFmtC(co.total_collection)        : (c._coLoading ? '…' : '—'),
@@ -11000,7 +11002,10 @@ function colOverviewTab() {
           Command Centre reports the ERP's net receipt, which also counts credit notes
           and adjustments and therefore runs higher. Both are real; the label says which
           one this is so the two screens can be reconciled rather than doubted. */''}
-    ${vzKpi({ icon:'💰', label:'Receipts Banked', value:colFmtC(k.total_collection), sub:'excludes credit notes & adjustments', status:'up', onclick:goto('geo') })}
+    ${vzKpi({ icon:'💰', label:'Total Collection', value:colFmtC(k.total_collection),
+        sub: k.collection_basis === 'ledger net receipt' && k.collection_banked != null && k.collection_banked !== k.total_collection
+          ? colFmtC(k.collection_banked) + ' banked · rest is credit notes & adjustments'
+          : 'receipts banked', status:'up', onclick:goto('geo') })}
     ${vzKpi({ icon:'📆', label:'MTD Collection',   value:colFmtC(k.mtd_collection),   status:'up', onclick:goto('trend') })}
     ${vzKpi({ icon:'📊', label:'YTD Collection',   value:colFmtC(k.ytd_collection),   status:'fl', onclick:goto('trend') })}
     ${vzKpi({ icon:'🔄', label:'Transactions',     value:(k.total_txn||0).toLocaleString(), status:'fl', onclick:goto('geo') })}
@@ -11013,7 +11018,7 @@ function colOverviewTab() {
   </div>
   <div class="two">
     <div class="vz-sec">
-      <div class="cardhead"><h3>Payment Mode Mix <span style="font-weight:400;font-size:11px;color:var(--muted)">(tap to drill)</span></h3></div>
+      <div class="cardhead"><h3>Payment Mode Mix <span style="font-weight:400;font-size:11px;color:var(--muted)">(banked receipts only · tap to drill)</span></h3></div>
       ${colDonut(st.modes)}
     </div>
     <div class="vz-sec">
@@ -12351,10 +12356,12 @@ function ouOverviewTab() {
 
   // KPI grid
   const kpiGrid = loading ? spin : `<div class="vz-kgrid" style="margin-bottom:16px">
-    ${vzKpi({ icon:'💰', label:'Total Outstanding',   value:ouFmtC(k.total_outstanding),   status:'dn' })}
-    ${vzKpi({ icon:'📅', label:'Current Outstanding', value:ouFmtC(k.current_outstanding), sub:'Within 30 days', status:'dn' })}
+    ${/* Overdue leads, because that is the figure every other screen reports. Gross dues
+          follow it as context, not as a rival headline. */''}
     ${k.overdue == null ? '' : vzKpi({ icon:'⏰', label:'Overdue', value:ouFmtC(k.overdue),
-        sub: (k.overdue_excludes ? _ccMonthName(k.overdue_excludes) + ' bill excluded' : "this month's bill excluded"), status:'dn' })}
+        sub: (k.overdue_excludes ? _ccMonthName(k.overdue_excludes) + ' bill excluded — not yet due' : "this month's bill excluded"), status:'dn' })}
+    ${vzKpi({ icon:'💰', label:'Total Dues (gross)', value:ouFmtC(k.total_outstanding), sub:"includes this month's bill", status:'dn' })}
+    ${vzKpi({ icon:'📅', label:'Current Outstanding', value:ouFmtC(k.current_outstanding), sub:'Within 30 days', status:'dn' })}
     ${vzKpi({ icon:'⚠️', label:'Dues · supply stopped', value:ouFmtC(k.stopped_supply_outstanding != null ? k.stopped_supply_outstanding : k.overdue_outstanding),
         sub:'not supplied 30+ days', status:'dn' })}
     ${vzKpi({ icon:'🏢', label:'Total Agencies',      value:ouFmtN(k.total_agencies),       status:'fl' })}

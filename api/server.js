@@ -3943,8 +3943,72 @@ app.get('/api/collection/kpis', async (req, res) => {
     const CASH_CATS = new Set(['EXECUTIVE CASH', 'Cash']);
     const cash    = modes.rows.filter(r=>CASH_CATS.has(r.payment_cat)).reduce((s,r)=>s+Number(r.amt||0),0);
     const digital = modes.rows.filter(r=>!CASH_CATS.has(r.payment_cat)).reduce((s,r)=>s+Number(r.amt||0),0);
+
+    /* The ERP's own net receipt for the same window and scope — the figure every other
+       screen reports as "collection". This screen is the cash book and its mode mix,
+       transactions and top-agency table are all banked cash; but the HEADLINE has to be
+       the same number the Command Centre shows, or the two disagree and neither can be
+       trusted. Banked cash stays underneath it as the narrower measure it is.
+
+       Telescoped from consecutive cumulative snapshots, the same rule as
+       collection_basis.js: money banked during a month is the movement between that
+       month's snapshot and the one before it. */
+    let ledgerRecovery = null;
+    try {
+      const from = (req.query.from && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from)) ? req.query.from
+                 : (trend.rows[0] && trend.rows[0].first_date ? String(trend.rows[0].first_date).slice(0,10) : null);
+      const to   = (req.query.to && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to)) ? req.query.to : anchor;
+      if (from) {
+        const months = [];
+        let cur = new Date(from.slice(0,7) + '-01T00:00:00');
+        const end = new Date(to.slice(0,7) + '-01T00:00:00');
+        while (cur <= end && months.length < 36) {
+          const y = cur.getFullYear(), m = cur.getMonth() + 1;
+          const pv = new Date(y, m - 2, 1);
+          months.push({ label: `${y}-${String(m).padStart(2,'0')}`,
+                        prev: `${pv.getFullYear()}-${String(pv.getMonth()+1).padStart(2,'0')}` });
+          cur = new Date(y, m, 1);
+        }
+        const labels = [...new Set(months.flatMap(x => [x.label, x.prev]))];
+
+        /* The two tables are filtered on different columns — agency_collection carries
+           state_name / branch_name / district_name, agency_outstanding carries
+           unit_code. Rather than match names across them, the screen's own filter is
+           resolved to the set of units it actually covers and THOSE are applied to the
+           ledger, which is exact.
+
+           A payment-mode filter has no meaning in the ledger — a net receipt is not
+           attributable to a payment channel — so that slice honestly falls back to
+           banked cash and says so. */
+        let unitCl = '', unitP = [];
+        if (String(req.query.payment_cat || '').trim()) throw new Error('payment filter — ledger not applicable');
+        const { rows: fu } = await q(
+          `SELECT DISTINCT unit_code FROM agency_collection WHERE is_valid=1 ${clause}`, params);
+        const uList = fu.map(x => x.unit_code).filter(Boolean);
+        if (uList.length) { unitCl = ` AND unit_code IN (${uList.map(()=>'?').join(',')})`; unitP = uList; }
+
+        if (labels.length) {
+          const { rows: lr } = await q(
+            `SELECT period_label, SUM(rec_amt) + SUM(other_cr) r FROM agency_outstanding ao
+              WHERE period_label IN (${labels.map(()=>'?').join(',')}) ${sc.clause}${unitCl}
+              GROUP BY period_label`, [...labels, ...sc.params, ...unitP]);
+          const at = new Map(lr.map(x => [x.period_label, Number(x.r) || 0]));
+          let tot = 0, any = false;
+          months.forEach(mn => {
+            if (!at.has(mn.label) || !at.has(mn.prev)) return;
+            any = true; tot += Math.max(0, at.get(mn.label) - at.get(mn.prev));
+          });
+          if (any) ledgerRecovery = tot;
+        }
+      }
+    } catch (_) { ledgerRecovery = null; }
+
     res.json({
-      total_collection:   Number(total.rows[0].tot),
+      /* One number across the suite. Where the ledger can be telescoped it is the
+         headline; where it cannot, banked cash is, and collection_basis says which. */
+      total_collection:   ledgerRecovery != null ? ledgerRecovery : Number(total.rows[0].tot),
+      collection_banked:  Number(total.rows[0].tot),
+      collection_basis:   ledgerRecovery != null ? 'ledger net receipt' : 'receipts banked',
       total_txn:          Number(total.rows[0].txn),
       today_collection:   Number(todayR.rows[0].tot),
       mtd_collection:     Number(mtd.rows[0].tot),
