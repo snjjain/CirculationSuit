@@ -234,8 +234,19 @@ module.exports = function installAuth({ app, q, LEVEL_META, getScopeUnitCodes, g
       const ip = ipOf(req);
       if (!ident || !password) return res.status(400).json({ detail: 'User ID / mobile number and password are required' });
 
-      // Identity can be a User ID, a mobile number, OR a staff employee code
-      // (hierarchy_master.employee_code — used by circulation staff for the DCR app).
+      /* Identity can be a User ID, a mobile number, OR a staff employee code
+         (hierarchy_master.employee_code — used by circulation staff for the DCR app).
+
+         Deliberately NOT `LIMIT 1`. Employee codes are ERP data and are not unique: 29
+         people carry the placeholder "SURVEY", 7 carry "CASHIER", and thirteen more are
+         shared by two records apiece — 62 accounts in all. Taking the first row meant
+         one shared code plus the provisioned password opened whichever account the
+         optimiser happened to return, which is somebody else's branch, and it also made
+         the real owner's password look wrong for reasons nobody could see from the
+         login screen.
+
+         An identifier that names more than one person is refused and says so, rather
+         than guessing. Their mobile number is personal and still works. */
       const { rows } = await q(
         `SELECT au.* FROM app_users au
          WHERE (au.username IS NOT NULL AND LOWER(au.username) = LOWER(?))
@@ -244,8 +255,16 @@ module.exports = function installAuth({ app, q, LEVEL_META, getScopeUnitCodes, g
                   SELECT person_code FROM hierarchy_master
                    WHERE employee_code IS NOT NULL AND employee_code <> '0'
                      AND UPPER(employee_code) = UPPER(?)))
-         LIMIT 1`,
+         LIMIT 5`,
         [ident, identDig, identDig, ident]);
+      if (rows.length > 1) {
+        await audit('login_fail', { detail: `ambiguous id ${ident} matches ${rows.length} accounts`, ip });
+        return res.status(409).json({
+          detail: 'This User ID belongs to more than one person, so it cannot be used to sign in. '
+                + 'Please sign in with your registered mobile number, or ask the administrator for a personal User ID.',
+          code: 'ambiguous_id',
+        });
+      }
       const u = rows[0];
       if (!u) { await audit('login_fail', { detail: `unknown id ${ident}`, ip }); return res.status(401).json({ detail: 'Invalid User ID / mobile number or password' }); }
       if (!u.is_active) { await audit('login_fail', { target: u.person_code, actorName: u.name, detail: 'inactive account', ip }); return res.status(403).json({ detail: 'Your account is inactive. Please contact the administrator.' }); }
