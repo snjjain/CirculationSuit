@@ -8435,7 +8435,10 @@ function _supdSaleDrill(st) {
   } else {
     const opts = mode === 'agent'
       ? [['district', '📍 District Wise'], ['executive', '👔 Executive Wise']]
-      : [['center', '🏬 Center Wise'], ['edition', '📰 Edition Wise'], ['matrix', '🧮 Center × Edition'], ['executive', '👔 Executive Wise']];
+      /* On the cash side this grouping is the CENTRE INCHARGE, so it says so — calling it
+         "Executive Wise" invited the reader to compare it with the agent-side executive
+         list, which is a different set of people entirely. */
+      : [['center', '🏬 Center Wise'], ['edition', '📰 Edition Wise'], ['matrix', '🧮 Center × Edition'], ['executive', '👔 Centre Incharge Wise']];
     const toggle = `<div class="seg" style="margin-bottom:12px">${opts.map(([k, l]) => `<button class="${st.drillBy === k ? 'on' : ''}" onclick="supdDrillBy('${k}')">${l}</button>`).join('')}</div>`;
     if (mode === 'cash' && st.drillBy === 'matrix') {
       _supdFetch('drillMatrix', `/api/supply-dash/cash/center-edition/${encodeURIComponent(st.drillUnit)}${qs}`);

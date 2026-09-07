@@ -1083,7 +1083,15 @@ module.exports = function registerSupplyDash(ctx) {
       const by = ['executive', 'edition', 'hawker'].includes(req.query.by) ? req.query.by : 'center';
       const center = (req.query.center || '').trim();
       let groupCol, extraCls = '', extraP = [];
-      if (by === 'executive') groupCol = `COALESCE(NULLIF(h.field_officer_name,''), NULLIF(h.center_incharge_name,''), '(no executive)')`;
+      /* Cash sale belongs to the CENTRE INCHARGE, who runs the city centres — not to the
+         field officer, who supervises several incharges. Preferring field_officer_name
+         put a different set of people on this screen from the Command Centre: eleven
+         field officers (DEV RAJ SINGH, PRAMOD SINGH...) against twenty-seven centre
+         incharges (GAJENDRA SHEKHAWAT, RAM KISHORE BUNKER...) for the same Jaipur cash
+         supply, so the two screens named different people as responsible for the same
+         copies. The incharge now wins; the field officer remains as a fallback for rows
+         where no incharge is stamped. */
+      if (by === 'executive') groupCol = `COALESCE(NULLIF(h.center_incharge_name,''), NULLIF(h.field_officer_name,''), '(no centre incharge)')`;
       else if (by === 'edition') groupCol = `COALESCE(NULLIF(h.edtn_name,''), '—')`;
       else if (by === 'hawker') { groupCol = `COALESCE(NULLIF(h.hawker_name,''), h.hawker_id, '—')`; if (center) { extraCls = ' AND h.hawker_center = ?'; extraP = [center]; } }
       else groupCol = `COALESCE(NULLIF(h.hawker_center,''), '—')`;
