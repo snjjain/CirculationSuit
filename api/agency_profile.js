@@ -42,6 +42,167 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
   const NEARBY_RADIUS_KM = 5;
   const COMPLAINT_WORDS = ['complaint', 'शिकायत', 'problem', 'issue', 'गलत', 'नाराज', 'angry', 'refuse', 'मना कर'];
 
+  /* ══ Branch recovery, for "above average" ══
+     Telescoped from the branch's own cumulative snapshots, the same rule as every
+     collection figure in this suite. Cached for ten minutes because every agency in a
+     branch asks the same question and the answer moves once a month. */
+  const _brCache = new Map();
+  async function branchLedger(unitCode) {
+    const hit = _brCache.get(unitCode);
+    if (hit && Date.now() - hit.ts < 600000) return hit.data;
+    const { rows } = await q(
+      `SELECT period_label, SUM(bill_amt) bill, SUM(rec_amt) + SUM(other_cr) rec
+         FROM agency_outstanding
+        WHERE unit_code = ? AND period_label REGEXP '^[0-9]{4}-[0-9]{2}$'
+        GROUP BY period_label ORDER BY period_label DESC LIMIT 8`, [unitCode]);
+    const snaps = rows.slice();
+    const months = [];
+    for (let i = 0; i < snaps.length - 1 && months.length < 6; i++) {
+      const bill = Math.max(0, N(snaps[i].bill) - N(snaps[i + 1].bill));
+      const rec  = Math.max(0, N(snaps[i].rec)  - N(snaps[i + 1].rec));
+      if (bill > 0) months.push({ month: snaps[i].period_label, pct: (rec / bill) * 100 });
+    }
+    const data = months.length
+      ? { months: months.length, avg_pct: R1(months.reduce((a, m) => a + m.pct, 0) / months.length) }
+      : { months: 0, avg_pct: null };
+    _brCache.set(unitCode, { data, ts: Date.now() });
+    if (_brCache.size > 60) for (const [k, v] of _brCache) if (Date.now() - v.ts > 1200000) _brCache.delete(k);
+    return data;
+  }
+
+  /* ══ Agency signals ══
+     Plain statements about what the ledger actually shows, each carrying the figures it
+     was drawn from so the reader can check it rather than trust it. Every one is a
+     comparison the agency itself supplies — its own months, its own bill, its own payment
+     rhythm, its own branch — never a fixed rupee threshold, which would flag every large
+     agency and no small one.
+
+     A signal is omitted when its inputs are missing. An unwritten snapshot is not a month
+     of no billing, and silence is more honest than a green tick drawn from nothing. */
+  function buildSignals({ ledger, closing, overdue, outstanding, branch, payDates, supRate, daysSinceVisit }) {
+    const out = [];
+    const add = (level, title, detail) => out.push({ level, title, detail });
+    const pctChg = (a, b) => (b > 0 ? ((a - b) / b) * 100 : null);
+
+    const billed = ledger.filter(m => m.bill > 0);
+    const avgBill = billed.length ? billed.reduce((a, m) => a + m.bill, 0) / billed.length : null;
+    const agencyPct = billed.length ? billed.reduce((a, m) => a + m.pct, 0) / billed.length : null;
+    const noPay12m = !payDates.length;
+
+    // ── Dues ──────────────────────────────────────────────────────────────────
+    if (overdue != null) {
+      if (outstanding <= 0) {
+        add('good', 'No dues outstanding', 'Account is fully settled.');
+      } else if (overdue <= 0) {
+        add('good', 'Dues current and within terms',
+          `${fmtINR(outstanding)} outstanding is this month's bill — nothing past due.`);
+      } else if (avgBill && avgBill > 0) {
+        const months = overdue / avgBill;
+        if (months >= 1.5) {
+          add('risk', 'Overdue amount exceeds normal pattern',
+            `${fmtINR(overdue)} overdue — ${months.toFixed(1)} months of billing at its average ${fmtINR(avgBill)} a month.`);
+        } else {
+          add('watch', 'Carrying overdue dues',
+            `${fmtINR(overdue)} overdue — ${months.toFixed(1)} months of its average ${fmtINR(avgBill)} bill.`);
+        }
+      } else if (noPay12m) {
+        /* No bill to size it against and nothing paid in a year — a closed or dormant
+           account. VIMAL AGENCIES (CLOSED) sat on 26.69 L unchanged for eight months and
+           read as a mild "watch" purely because the absent billing history left the
+           comparison with nothing to divide by. */
+        add('risk', 'Dormant account carrying dues',
+          `${fmtINR(overdue)} past due, with no billing and no receipt in 12 months.`);
+      } else {
+        add('watch', 'Carrying overdue dues', `${fmtINR(overdue)} past due.`);
+      }
+    }
+
+    // ── Outstanding, three months on ─────────────────────────────────────────
+    // The closing balance across snapshots, not the bill — the question is whether the
+    // account is deepening, and a rising bill with matching receipts is not that.
+    if (closing.length >= 4) {
+      const now = closing[0].cl, then = closing[3].cl;
+      const chg = pctChg(now, then), diff = now - then;
+      if (chg != null && chg >= 10 && Math.abs(diff) >= 25000) {
+        add('watch', 'Outstanding increased during last 3 months',
+          `${fmtINR(then)} → ${fmtINR(now)} since ${closing[3].month} (+${chg.toFixed(1)}%).`);
+      } else if (chg != null && chg <= -10 && Math.abs(diff) >= 25000) {
+        add('good', 'Outstanding reduced over 3 months',
+          `${fmtINR(then)} → ${fmtINR(now)} since ${closing[3].month} (${chg.toFixed(1)}%).`);
+      }
+    }
+
+    // ── Recovery against the branch ──────────────────────────────────────────
+    if (agencyPct != null && branch && branch.avg_pct != null && billed.length >= 3) {
+      const gap = agencyPct - branch.avg_pct;
+      if (gap >= 5) {
+        add('good', 'Collection consistently above average',
+          `${agencyPct.toFixed(1)}% recovered over ${billed.length} months against the branch's ${branch.avg_pct}%.`);
+      } else if (gap <= -15) {
+        add('risk', 'Collection below branch average',
+          `${agencyPct.toFixed(1)}% recovered over ${billed.length} months against the branch's ${branch.avg_pct}%.`);
+      } else if (gap <= -5) {
+        add('watch', 'Collection trailing the branch',
+          `${agencyPct.toFixed(1)}% recovered over ${billed.length} months against the branch's ${branch.avg_pct}%.`);
+      }
+    }
+
+    // ── Payment rhythm ───────────────────────────────────────────────────────
+    if (payDates.length) {
+      const last = payDates[0];
+      const sinceLast = daysBetween(Date.now(), last.getTime());
+      if (sinceLast >= 45) {
+        add('risk', 'No payment received recently',
+          `Last receipt ${sinceLast} days ago, on ${fmtDate(last)}.`);
+      }
+      // Widening gaps beat a single late payment: three intervals against the three before
+      // them, so one holiday month does not read as a collapse.
+      if (payDates.length >= 7) {
+        const gaps = [];
+        for (let i = 0; i < payDates.length - 1; i++) gaps.push(daysBetween(payDates[i].getTime(), payDates[i + 1].getTime()));
+        const recent = gaps.slice(0, 3), older = gaps.slice(3, 6);
+        const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+        const r = mean(recent), o = mean(older);
+        const dy = n => `${Math.round(n)} day${Math.round(n) === 1 ? '' : 's'}`;
+        if (o > 0 && r >= 20 && r >= o * 1.3) {
+          add('risk', 'Payment delay increasing',
+            `${dy(r)} between payments lately, against ${dy(o)} before that.`);
+        } else if (o >= 7 && r <= o * 0.7 && sinceLast < 45) {
+          /* Only worth saying when the gap was meaningful to begin with — an agency
+             moving from two days to one has not changed how it pays. */
+          add('good', 'Paying more often than before',
+            `${dy(r)} between payments lately, against ${dy(o)} before that.`);
+        }
+      }
+    } else if (outstanding > 0 && !out.some(x => x.title === 'Dormant account carrying dues')) {
+      // The dormant signal already says this, with the same figure — once is enough.
+      add('risk', 'No payment on record this year', `${fmtINR(outstanding)} outstanding with no receipt in 12 months.`);
+    }
+
+    // ── Supply ───────────────────────────────────────────────────────────────
+    if (supRate && supRate.cur != null && supRate.prev != null && supRate.prev > 0) {
+      const chg = pctChg(supRate.cur, supRate.prev);
+      if (chg <= -10) {
+        add('watch', 'Supply falling',
+          `${Math.round(supRate.cur)} copies/day, down from ${Math.round(supRate.prev)} last month (${chg.toFixed(1)}%).`);
+      } else if (chg >= 10) {
+        add('good', 'Supply growing',
+          `${Math.round(supRate.cur)} copies/day, up from ${Math.round(supRate.prev)} last month (+${chg.toFixed(1)}%).`);
+      }
+    }
+
+    // ── Field contact ────────────────────────────────────────────────────────
+    if (daysSinceVisit == null) {
+      add('watch', 'No visit in 6 months', 'No field visit on record for this agency.');
+    } else if (daysSinceVisit > 30) {
+      add('watch', 'Not visited recently', `${daysSinceVisit} days since the last field visit.`);
+    }
+
+    // Worst first — this is a list to act on, not a report card.
+    const rank = { risk: 0, watch: 1, good: 2 };
+    return out.sort((a, b) => rank[a.level] - rank[b.level]);
+  }
+
   // ── Per-unit agency signal set — same tags/score/opportunity math as
   //    ai_nexus.js's buildAgencySignals, just scoped by unit_code directly
   //    instead of the caller's req scope, so a single-agency lookup doesn't
@@ -192,7 +353,8 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
       let anchor = signals.find(s => s.agcd === agcd);
       if (!anchor) return res.status(404).json({ detail: 'Agency not found in this unit' });
 
-      const [collHistR, supHistR, collRecentR, oraVisitsR, appVisitsR, execLocR, ledgerR, curOuR] = await Promise.all([
+      const [collHistR, supHistR, collRecentR, oraVisitsR, appVisitsR, execLocR, ledgerR, curOuR,
+             branchLed, payDatesR] = await Promise.all([
         q(`SELECT DATE_FORMAT(coll_date,'%Y-%m') month,
                   -SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) collection,
                    SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) charges,
@@ -231,7 +393,8 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
            month's own figures are the difference between consecutive snapshots —
            agency_outstanding.bill_amt and rec_amt are cumulative for the financial
            year, so taking them raw overstates a month several-fold. */
-        q(`SELECT period_label, SUM(bill_amt) bill, SUM(rec_amt) + SUM(other_cr) rec
+        q(`SELECT period_label, SUM(bill_amt) bill, SUM(rec_amt) + SUM(other_cr) rec,
+                  SUM(cl_amt) cl
              FROM agency_outstanding
             WHERE unit_code = ? AND ag_code = ?
               AND period_label REGEXP '^[0-9]{4}-[0-9]{2}$'
@@ -244,6 +407,18 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
         q(`SELECT SUM(cl_amt) cl, SUM(bill_amt) bill FROM agency_outstanding
             WHERE unit_code = ? AND ag_code = ? AND period_label = 'CURRENT'`,
           [unit_code, agcd]),
+
+        /* What the branch as a whole recovers, so "above average" means above this
+           agency's own peers rather than above some invented number. Cached per branch
+           because every agency in it computes the same figure. */
+        branchLedger(unit_code),
+
+        /* A year of receipt dates. The 90-day list above drives the receipts table and is
+           too short to say whether the gap between payments is widening. */
+        q(`SELECT coll_date FROM agency_collection
+            WHERE unit_code = ? AND ag_code = ? AND is_valid = 1 AND amount < 0
+              AND coll_date >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
+            ORDER BY coll_date DESC LIMIT 40`, [unit_code, agcd]),
       ]);
 
       /* Telescope the snapshots into per-month bill and net receipt. A month whose
@@ -258,9 +433,42 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
         monthlyLedger.push({
           month: cur.period_label,
           bill, net_receipt: rec,
+          closing: N(cur.cl),
           pct: bill > 0 ? Math.round((rec / bill) * 1000) / 10 : null,
         });
       }
+
+      /* The signals, built from what the ledger actually shows. Overdue is the same
+         figure the card reports above them — the balance less this month's bill — so a
+         signal and a card cannot say different things about the same agency. */
+      const _overdue = (() => {
+        const cur = (curOuR.rows || [])[0];
+        if (!cur) return null;
+        const lastSnapBill = _snaps.length ? N(_snaps[0].bill) : 0;
+        return Math.max(0, N(cur.cl) - Math.max(0, N(cur.bill) - lastSnapBill));
+      })();
+      const _closing = _snaps.map(r => ({ month: r.period_label, cl: N(r.cl) }));
+      /* One payment event per DAY. An agency often settles through several documents on
+         the same date, and counting each row separately produced nought-day gaps — which
+         made "paying more often than before" fire on agencies six lakh in arrears. */
+      const _payDates = [...new Set((payDatesR.rows || [])
+        .map(r => r.coll_date && String(r.coll_date).slice(0, 10)).filter(Boolean))]
+        .sort().reverse().map(d => new Date(d + 'T00:00:00')).filter(d => !isNaN(d));
+      const _supRate = (() => {
+        const rt = m => (m && N(m.supply_days) > 0) ? N(m.total_supply) / N(m.supply_days) : null;
+        const h = supHistR.rows || [];
+        return { cur: rt(h[0]), prev: rt(h[1]) };
+      })();
+      const _signals = buildSignals({
+        ledger: monthlyLedger,
+        closing: _closing,
+        overdue: _overdue,
+        outstanding: N(anchor.outstanding),
+        branch: branchLed,
+        payDates: _payDates,
+        supRate: _supRate,
+        daysSinceVisit: anchor.days_since_visit,
+      });
 
       // ── Current outstanding detail (bill/rec/op already carried on anchor;
       //    collection_pct needs both) ──────────────────────────────────────
@@ -371,6 +579,7 @@ module.exports = function installAgencyProfile({ app, q, getScopeUnitCodes }) {
           collection_history: collHistR.rows.map(r => ({ month: r.month, collection: N(r.collection), charges: N(r.charges), txn_count: N(r.txn_count) })),
         },
         opportunity_risk: { tags: anchor.tags, score: anchor.score, expected_outcome: expectedOutcome(anchor), decline_pct: anchor.decline_pct, peak30_supply: anchor.peak30_supply },
+        signals: _signals,
         visits: visits.slice(0, 30),
         issues,
         nearby,

@@ -10,7 +10,7 @@ const DASH_MENU = [
   ["outstanding",      "Outstanding",                 "💰"],
   ["exec_perf",        "Executive Performance",       "👤"],
   ["dcr_analytics",    "DCR - Field Visit Analysis",  "📍"],
-  ["tour_approvals",   "Tour Approvals",              "✅"],
+  ["tour_approvals",   "Task Assignment",             "📌"],
   ["agency_rating",    "Agency Rating Engine",        "⭐"],
   // "short_payment" is deliberately NOT listed here — it lives as a tab inside the
   // Collections dashboard, which renders the very same VIEWS.short_payment via
@@ -1981,7 +1981,29 @@ function _apModel(d) {
     supplyHist: t.supply_history || [], collHist: t.collection_history || [],
     visits: d.visits || [], nearby: d.nearby || [], issues: d.issues || [],
     coll: d.collection_recent || [],
+    signals: d.signals || [],
   };
+}
+
+/* Signals are statements about what the ledger shows, each carrying the figures it came
+   from. Red first — this is a list to act on, not a report card. */
+const AP_SIGNAL_STYLE = {
+  risk:  { dot: '🔴', color: '#b91c1c', bg: '#fef2f2', brd: '#fecaca' },
+  watch: { dot: '🟡', color: '#b45309', bg: '#fffbeb', brd: '#fde68a' },
+  good:  { dot: '🟢', color: '#15803d', bg: '#f0fdf4', brd: '#bbf7d0' },
+};
+function _apSignalRows(signals, compact) {
+  if (!signals.length) return '';
+  return signals.map(sg => {
+    const st = AP_SIGNAL_STYLE[sg.level] || AP_SIGNAL_STYLE.watch;
+    return `<div style="display:flex;gap:8px;align-items:flex-start;background:${st.bg};border:1px solid ${st.brd};border-radius:8px;padding:${compact ? '6px 9px' : '8px 11px'};margin-bottom:6px">
+      <span style="flex:none;font-size:${compact ? '11px' : '12px'};line-height:1.5">${st.dot}</span>
+      <span style="min-width:0">
+        <span style="display:block;font-size:${compact ? '11.5px' : '12.5px'};font-weight:700;color:${st.color}">${esc(sg.title)}</span>
+        <span style="display:block;font-size:${compact ? '11px' : '12px'};color:var(--ink-2, #475569);margin-top:1px;line-height:1.5">${esc(sg.detail)}</span>
+      </span>
+    </div>`;
+  }).join('');
 }
 
 VIEWS.agency_profile = () => {
@@ -2022,6 +2044,12 @@ VIEWS.agency_profile = () => {
   const chips = `<div class="vz-kgrid" style="margin-bottom:14px">
     ${mo.kpis.map(k => vzKpi({ icon: k.icon, label: k.label, value: k.value, sub: k.sub || '', status: k.status })).join('')}
   </div>`;
+
+  const signalsCard = mo.signals.length ? `<div class="card" style="padding:16px;margin-bottom:14px">
+    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-2);margin-bottom:10px">🚦 Agency Signals</div>
+    ${_apSignalRows(mo.signals, false)}
+    <div style="font-size:10.5px;color:var(--ink-3);margin-top:4px">Each signal compares this agency with its own history, its own bill and its own branch — read from the ERP ledger, not a fixed rupee threshold.</div>
+  </div>` : '';
 
   const brief = `<div class="card" style="padding:16px;margin-bottom:14px;border-left:4px solid ${ss.color}">
     <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-2);margin-bottom:8px">🤖 AI Agency Brief</div>
@@ -2115,7 +2143,7 @@ VIEWS.agency_profile = () => {
     ${nbaBody}
   </div>`;
 
-  return header + identityCard + chips + brief + sixCards + nba;
+  return header + identityCard + chips + signalsCard + brief + sixCards + nba;
 };
 
 /* ── DCR drill-down modals ── */
@@ -5628,6 +5656,10 @@ function _ccFlyAgencyPanel(a) {
     <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
       ${mo.kpis.map(k => kpi(k.label, k.pre ? k.value : k.value, k.tone)).join('')}
     </div>
+    ${mo.signals.length ? `<div style="margin-top:12px">
+      <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:6px">🚦 Agency signals</div>
+      ${_apSignalRows(mo.signals, true)}
+    </div>` : ''}
     ${tags ? `<div style="margin-top:10px">${tags}</div>` : ''}
     ${sec('Agency', `<div>
       ${fact('Code', id.agcd)}${fact('Branch', id.unit_name || id.unit_code)}
@@ -7646,18 +7678,21 @@ function _csCcData(st) {
    downline when the decision is posted. */
 function _taState() {
   return S.tourAppr || (S.tourAppr = {
-    data: null, _loading: false, _key: '', unit: '', status: 'submitted',
+    data: null, _loading: false, _key: '', unit: '', status: 'submitted', taskType: '', execStatus: '',
+    types: null, priorities: null, ov: null, ovOpen: false, ovGroup: 'executive',
     sel: {}, busy: false, msg: null, err: null,
   });
 }
 function _taLoad() {
   const st = _taState();
-  const key = `${st.unit}|${st.status}`;
+  const key = `${st.unit}|${st.status}|${st.taskType || ''}|${st.execStatus || ''}`;
   if (st._key === key && st.data) return;
   if (st._loading === key) return;
   st._loading = key;
   const p = new URLSearchParams({ status: st.status });
   if (st.unit) p.set('unit_code', st.unit);
+  if (st.taskType) p.set('task_type', st.taskType);
+  if (st.execStatus) p.set('exec_status', st.execStatus);
   fetch(`${location.origin}/api/dcr-m/tour/board?${p}`, { headers: api.h() })
     .then(r => r.json())
     .then(d => { if (st._loading !== key) return;
@@ -7665,8 +7700,20 @@ function _taLoad() {
     .catch(e => { if (st._loading !== key) return;
       st.data = { _err: String(e && e.message || e) }; st._key = key; st._loading = null; render(); });
 }
-window.taSetUnit = v => { const st = _taState(); st.unit = v; st.data = null; st._key = ''; st.sel = {}; render(); };
+window.taSetUnit = v => { const st = _taState(); st.unit = v; st.data = null; st._key = ''; st.ov = null; st.sel = {}; render(); };
 window.taSetStatus = v => { const st = _taState(); st.status = v; st.data = null; st._key = ''; st.sel = {}; render(); };
+window.taSetType = v => { const st = _taState(); st.taskType = v || ''; st.data = null; st._key = ''; st.ov = null; st.sel = {}; render(); };
+window.taSetExec = v => { const st = _taState(); st.execStatus = v || ''; st.data = null; st._key = ''; st.sel = {}; render(); };
+
+const TA_PRI_DOT = { urgent: '🔴', high: '🟠', normal: '🔵', low: '⚪' };
+/* What the EXECUTIVE has done with it, which is a different question from whether it was
+   approved — an approved task nobody has touched is the one a manager needs to see. */
+function TA_EXEC_CHIP(execStatus, apprStatus) {
+  if (apprStatus !== 'approved') return '<span style="color:var(--muted)">—</span>';
+  if (execStatus === 'done') return '<span class="chip good" style="font-size:9.5px">🟢 Completed</span>';
+  if (execStatus === 'in_progress') return '<span class="chip warn" style="font-size:9.5px">🟠 In progress</span>';
+  return '<span class="chip" style="font-size:9.5px;background:#eef4ff;color:#1e3a8a">🔵 Open</span>';
+}
 window.taToggle = id => { const st = _taState(); st.sel[id] = !st.sel[id]; render(); };
 window.taToggleAll = on => {
   const st = _taState(); const rows = (st.data && st.data.rows) || [];
@@ -7711,25 +7758,59 @@ window.taDecide = async (action) => {
 
    The stop list is built here rather than posted one at a time so a half-entered tour
    never lands as a real half-tour. */
+/* Kept for the executive's own tour plans filed from the DCR app, which still choose a
+   purpose from this list. The manager's form no longer asks for one — the task type and
+   its subject say what the visit is for. */
 const TA_PURPOSES = ['Recovery – Outstanding Amount', 'Growth Discussion', 'New Agreement / Contract',
   'Agency Change', 'Reader Feedback Collection', 'Scheme & Offer Promotion',
   'Supply Complaint Redressal', 'Relationship Visit', 'Competitor Analysis Visit', 'Other'];
 
+/* The catalogue is fetched, never hard-coded here — one definition in api/task_types.js
+   serves the manager's form, the executive's phone and the server's validation, so a type
+   cannot exist on one and not the others. */
+function _taTypes() {
+  const st = _taState();
+  if (!st.types && !st._typesLoading) {
+    st._typesLoading = true;
+    fetch(`${location.origin}/api/dcr-m/task-types`, { headers: api.h() })
+      .then(r => r.json())
+      .then(d => { st.types = (d && d.types) || []; st.priorities = (d && d.priorities) || [];
+                   st._typesLoading = false; render(); })
+      .catch(() => { st.types = []; st.priorities = []; st._typesLoading = false; render(); });
+  }
+  return st.types || [];
+}
+const _taTypeDef = k => (_taTypes().find(t => t.key === k) || null);
+
 function _taAsg() {
   const st = _taState();
-  return st.asg || (st.asg = { open: false, person: '', date: '', stops: [], q: '', found: null,
-                               searching: false, saving: false, err: null });
+  return st.asg || (st.asg = { open: false, task_type: 'tour', subject: '', priority: 'normal',
+                               objective: '', area: '', person: '', date: '', stops: [], q: '',
+                               found: null, searching: false, saving: false, err: null });
 }
 window.taAssignOpen = () => {
   const a = _taAsg(); a.open = true; a.err = null;
   if (!a.date) { const d = new Date(); d.setDate(d.getDate() + 1); a.date = d.toISOString().slice(0, 10); }
-  if (!a.stops.length) a.stops = [{ target_code: '', target_name: '', unit_code: '', purpose: TA_PURPOSES[0], visit_time: '', growth_target: '', description: '' }];
-  _taLoadTeam(); render();
+  if (!a.stops.length) a.stops = [_taBlankStop()];
+  _taTypes(); _taLoadTeam(); render();
+};
+function _taBlankStop() {
+  return { target_code: '', target_name: '', unit_code: '', purpose: '', visit_time: '',
+           growth_target: '', expected_recovery: '', description: '' };
+}
+/* Changing the type changes what the form is asking for, so the target is cleared rather
+   than carried across — an agency picked for a collection call is not the answer to
+   "which area do you want surveyed". */
+window.taAsgType = v => {
+  const a = _taAsg();
+  a.task_type = v; a.err = null; a.q = ''; a.found = null;
+  a.stops = [_taBlankStop()];
+  render();
 };
 window.taAssignClose = () => { const a = _taAsg(); a.open = false; a.err = null; render(); };
 window.taAsgSet = (k, v) => { const a = _taAsg(); a[k] = v; render(); };
 window.taStopSet = (i, k, v) => { const a = _taAsg(); if (a.stops[i]) a.stops[i][k] = v; if (k !== 'description') render(); };
-window.taStopAdd = () => { const a = _taAsg(); a.stops.push({ target_code: '', target_name: '', unit_code: '', purpose: TA_PURPOSES[0], visit_time: '', growth_target: '', description: '' }); render(); };
+window.taStopAdd = () => { const a = _taAsg(); a.stops.push(_taBlankStop()); render(); };
 window.taStopDel = i => { const a = _taAsg(); a.stops.splice(i, 1); if (!a.stops.length) taStopAdd(); render(); };
 
 function _taLoadTeam() {
@@ -7764,43 +7845,127 @@ window.taPick = (i, code, name, unit) => {
 };
 window.taAssignSave = async () => {
   const a = _taAsg();
-  const stops = a.stops.filter(x => x.target_code);
-  if (!a.person) { a.err = 'Choose who the tour is for.'; render(); return; }
-  if (!a.date) { a.err = 'Choose a date.'; render(); return; }
+  const def = _taTypeDef(a.task_type) || { target: 'either' };
+  const stops = def.target === 'area'
+    ? a.stops.filter(x => (x.target_name || '').trim()).map(x => ({ ...x, unit_code: x.unit_code || '' }))
+    : def.target === 'none' ? [{}]
+    : a.stops.filter(x => x.target_code);
+
+  if (!a.person) { a.err = 'Choose who the task is for.'; render(); return; }
+  if (!String(a.subject || '').trim()) { a.err = 'Give the task a subject — it is what the executive sees first.'; render(); return; }
+  if (!a.date) { a.err = 'Choose a due date.'; render(); return; }
   if (a.date < new Date().toISOString().slice(0, 10)) {
-    a.err = 'A tour cannot be planned for a date before today.'; render(); return;
+    a.err = 'A task cannot be assigned for a date before today.'; render(); return;
   }
-  if (!stops.length) { a.err = 'Add at least one agency.'; render(); return; }
+  if (def.target === 'area' && !stops.length) { a.err = 'Name the area or locality to visit.'; render(); return; }
+  if (['agent', 'hawker', 'either'].includes(def.target) && !stops.length) {
+    a.err = 'Choose at least one agency or hawker.'; render(); return;
+  }
   a.saving = true; a.err = null; render();
   try {
-    const r = await fetch(`${location.origin}/api/dcr-m/tour`, {
+    const r = await fetch(`${location.origin}/api/dcr-m/task`, {
       method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tour_date: a.date, for_person_code: a.person, stops }),
+      body: JSON.stringify({ task_type: a.task_type, due_date: a.date, for_person_code: a.person,
+                             subject: a.subject, priority: a.priority, objective: a.objective,
+                             input_lang: /[\u0900-\u097F]/.test(`${a.subject} ${a.objective}`) ? 'hi' : 'en',
+                             stops }),
     });
     const d = await r.json();
-    if (!r.ok || d.detail) throw new Error(d.detail || 'Could not save the tour');
+    if (!r.ok || d.detail) throw new Error(d.detail || 'Could not save the task');
     const st = _taState();
-    st.msg = `Tour assigned — ${d.stops} stop${d.stops === 1 ? '' : 's'} on ${a.date}, already approved.`
-      + (d.skipped_duplicates ? ` ${d.skipped_duplicates} skipped — already planned for that person on that date: ${(d.duplicates || []).join(', ')}.` : '');
-    a.open = false; a.stops = []; a.q = ''; a.found = null;
+    st.msg = `${d.task_label} assigned — ${d.tasks} ${d.tasks === 1 ? 'task' : 'tasks'} due ${d.due_date}, already approved.`
+      + (d.skipped_duplicates ? ` ${d.skipped_duplicates} skipped — already assigned that task for that day: ${(d.duplicates || []).join(', ')}.` : '');
+    a.open = false; a.stops = []; a.q = ''; a.found = null; a.subject = ''; a.objective = '';
     st.data = null; st._key = '';
   } catch (e) { a.err = String(e.message || e); }
   a.saving = false; render();
 };
 
+/* ══ Dictation for the assignment form ══
+   The DCR app has had this for a while; a manager writing the instruction deserves it
+   too, and these instructions are written in Hindi as often as English. The button is
+   always drawn: hiding it where the browser cannot dictate — Firefox has never shipped
+   the Web Speech API — made the feature look absent rather than unavailable. */
+const _taSR = () => window.SpeechRecognition || window.webkitSpeechRecognition;
+function _taDictLang() {
+  try { return localStorage.getItem('dcr_dict_lang') || 'hi-IN'; } catch (_) { return 'hi-IN'; }
+}
+window.taDictLang = () => {
+  const next = _taDictLang() === 'en-IN' ? 'hi-IN' : 'en-IN';
+  try { localStorage.setItem('dcr_dict_lang', next); } catch (_) {}
+  const a = _taAsg(); if (a._sr) { try { a._sr.stop(); } catch (_) {} }
+  render();
+};
+window.taVoice = key => {
+  const SR = _taSR(), a = _taAsg();
+  if (!SR) {
+    a.err = 'Dictation needs Chrome, Edge or the Android app — this browser does not support it. '
+          + 'You can still type in Hindi or English.';
+    render(); return;
+  }
+  if (a.listening === key && a._sr) { try { a._sr.stop(); } catch (_) {} return; }
+  if (a._sr) { try { a._sr.stop(); } catch (_) {} }
+  const r = new SR();
+  r.lang = _taDictLang(); r.interimResults = false; r.continuous = false;
+  r.onresult = e => {
+    const txt = Array.from(e.results).map(x => x[0].transcript).join(' ').trim();
+    // Appends, so a second burst does not wipe the first and speech can mix with typing.
+    if (txt) a[key] = ((a[key] || '') + ' ' + txt).trim();
+    a.listening = null; a._sr = null; render();
+  };
+  r.onerror = ev => {
+    a.listening = null; a._sr = null;
+    if (ev && (ev.error === 'not-allowed' || ev.error === 'service-not-allowed')) {
+      a.err = 'Microphone blocked. Allow mic access for this site, then tap 🎤 again.';
+    }
+    render();
+  };
+  r.onend = () => { if (a.listening === key) { a.listening = null; a._sr = null; render(); } };
+  a.listening = key; a._sr = r; render();
+  try { r.start(); } catch (_) { a.listening = null; a._sr = null; render(); }
+};
+function _taMic(key) {
+  const a = _taAsg(), on = a.listening === key, can = !!_taSR();
+  return `<span style="position:absolute;right:7px;bottom:7px;display:flex;gap:4px;align-items:center">
+    <button type="button" onclick="taVoice('${key}')" title="${can ? (on ? 'Stop' : 'Dictate') : 'Dictation not available in this browser'}"
+      style="width:30px;height:28px;border-radius:7px;cursor:pointer;font-size:14px;line-height:1;
+             border:1px solid ${on ? '#fecaca' : '#cbd5e1'};background:${on ? '#fef2f2' : '#fff'};
+             color:${on ? '#b91c1c' : '#64748b'};opacity:${can ? 1 : .45}">${on ? '■' : '🎤'}</button>
+    ${can ? `<button type="button" onclick="taDictLang()" title="Dictation language"
+      style="min-width:30px;height:28px;padding:0 6px;border-radius:7px;border:1px solid #cbd5e1;background:#fff;
+             color:#64748b;font-size:11px;font-weight:600;cursor:pointer">${_taDictLang() === 'en-IN' ? 'EN' : 'हिं'}</button>` : ''}
+  </span>`;
+}
+
 function _taAssignPanel() {
   const st = _taState(), a = _taAsg();
   if (!a.open) return '';
   const team = st.team || [];
+  const types = _taTypes();
+  const def = _taTypeDef(a.task_type) || { key: a.task_type, label: 'Task', target: 'either', numeric: null, multi: true, desc: [] };
+  const prios = st.priorities || [];
   const inp = 'width:100%;padding:6px 9px;border:1px solid var(--brd,#cbd5e1);border-radius:7px;font-size:12.5px;background:#fff;color:#0f172a';
   const lbl = t => `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:4px">${t}</div>`;
+  const areaMode = def.target === 'area', noTarget = def.target === 'none';
+  const stopWord = areaMode ? 'Area' : 'Stop';
 
-  const stopHtml = a.stops.map((sp, i) => `<div style="border:1px solid #e2e8f0;border-radius:9px;padding:10px;margin-bottom:8px;background:#fbfdff">
+  /* The form asks for what the chosen type actually needs and nothing else — an area
+     survey has no agency to pick, a campaign has no target at all, and a collection call
+     wants a rupee figure where a growth visit wants copies. */
+  const stopHtml = noTarget ? '' : a.stops.map((sp, i) => `<div style="border:1px solid #e2e8f0;border-radius:9px;padding:10px;margin-bottom:8px;background:#fbfdff">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
-      <b style="font-size:11.5px;color:#1e3a8a">Stop ${i + 1}</b>
+      <b style="font-size:11.5px;color:#1e3a8a">${stopWord} ${i + 1}</b>
       ${a.stops.length > 1 ? `<button onclick="taStopDel(${i})" style="border:0;background:none;color:#b91c1c;font-size:11.5px;cursor:pointer">remove</button>` : ''}
     </div>
-    ${lbl('Agency')}
+    ${areaMode ? `${lbl('Area / locality to visit')}
+      <input style="${inp}" placeholder="e.g. Vidhyadhar Nagar Sector 5"
+        value="${esc(sp.target_name || '')}" oninput="taStopSet(${i},'target_name',this.value)">
+      <div style="margin-top:8px">${lbl('Branch')}
+        <select style="${inp}" onchange="taStopSet(${i},'unit_code',this.value)">
+          <option value="">Executive's own branch</option>
+          ${(st.data && st.data.units || []).map(u => `<option value="${esc(u.unit_code || u)}"${sp.unit_code === (u.unit_code || u) ? ' selected' : ''}>${esc(u.unit_name || u.unit_code || u)}</option>`).join('')}
+        </select></div>` : `
+    ${lbl(def.target === 'hawker' ? 'Hawker' : def.target === 'agent' ? 'Agency' : 'Agency / Hawker')}
     ${sp.target_code
       ? `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 9px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font-size:12.5px">
            <span><b>${esc(sp.target_name)}</b> <span style="color:#94a3b8">${esc(sp.target_code)} · ${esc(sp.unit_code)}</span></span>
@@ -7816,39 +7981,76 @@ function _taAssignPanel() {
                   <div style="font-size:10.5px;color:#94a3b8">${esc([f.target_code, f.unit_code, f.city].filter(Boolean).join(' · '))}</div></div>`).join('')}
                </div>`
             : `<div style="font-size:11.5px;color:#94a3b8;padding:5px 2px">No agency found.</div>`) : ''}`}
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">
-      <div>${lbl('Purpose')}<select style="${inp}" onchange="taStopSet(${i},'purpose',this.value)">
-        ${TA_PURPOSES.map(pz => `<option${sp.purpose === pz ? ' selected' : ''}>${esc(pz)}</option>`).join('')}</select></div>
-      <div>${lbl('Time')}<input type="time" style="${inp}" value="${esc(sp.visit_time || '')}" onchange="taStopSet(${i},'visit_time',this.value)"></div>
-      <div>${lbl('Growth target (cp)')}<input type="number" min="0" style="${inp}" value="${esc(sp.growth_target || '')}" oninput="taStopSet(${i},'growth_target',this.value)"></div>
+`}
+    <div style="display:grid;grid-template-columns:${def.numeric ? '1fr 1fr' : '1fr'};gap:8px;margin-top:8px">
+      <div>${lbl('Time (optional)')}<input type="time" style="${inp}" value="${esc(sp.visit_time || '')}" onchange="taStopSet(${i},'visit_time',this.value)"></div>
+      ${def.numeric === 'expected_recovery'
+        ? `<div>${lbl('Amount to recover (₹)')}<input type="number" min="0" style="${inp}" value="${esc(sp.expected_recovery || '')}" oninput="taStopSet(${i},'expected_recovery',this.value)"></div>`
+        : def.numeric === 'growth_target'
+        ? `<div>${lbl('Copies to add')}<input type="number" min="0" style="${inp}" value="${esc(sp.growth_target || '')}" oninput="taStopSet(${i},'growth_target',this.value)"></div>`
+        : ''}
     </div>
-    <div style="margin-top:8px">${lbl('What should they achieve?')}
+    <div style="margin-top:8px">${lbl('Instructions for this ' + stopWord.toLowerCase())}
       <textarea rows="2" style="${inp};resize:vertical" oninput="taStopSet(${i},'description',this.value)">${esc(sp.description || '')}</textarea></div>
   </div>`).join('');
 
+  const dictHint = 'Type in Hindi or English, or tap 🎤 to dictate';
+
   return `<div class="card" style="padding:14px 16px;margin-bottom:14px;border:1px solid #c7d7fe;background:#f8fbff">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-      <div><b style="font-size:14px;color:#1e3a8a">Assign a tour</b>
+      <div><b style="font-size:14px;color:#1e3a8a">Assign a task</b>
         <div style="font-size:11px;color:#64748b">Filed as already approved — it is your instruction, not a request</div></div>
       <button onclick="taAssignClose()" style="border:0;background:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1">&times;</button>
     </div>
-    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px">
+
+    <div style="margin-bottom:10px">${lbl('Task type')}
+      <select style="${inp}" onchange="taAsgType(this.value)">
+        ${st._typesLoading && !types.length ? '<option>Loading task types…</option>' : ''}
+        ${types.map(t => `<option value="${esc(t.key)}"${a.task_type === t.key ? ' selected' : ''}>${esc(t.label)}</option>`).join('')}
+      </select>
+      ${(def.desc || []).length ? `<div style="font-size:11px;color:#64748b;margin-top:5px;line-height:1.55">
+        ${def.desc.map(x => `<div>• ${esc(x)}</div>`).join('')}</div>` : ''}
+    </div>
+
+    <div style="margin-bottom:10px;position:relative">${lbl('Subject')}
+      <input style="${inp};padding-right:76px" placeholder="What is this task, in one line?"
+        value="${esc(a.subject || '')}" oninput="taAsgSet('subject',this.value)">
+      ${_taMic('subject')}
+      <div style="font-size:10.5px;color:#94a3b8;margin-top:4px">${dictHint}</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;margin-bottom:10px">
       <div>${lbl('For whom')}
         <select style="${inp}" onchange="taAsgSet('person',this.value)">
           <option value="">${st._teamLoading ? 'Loading your team…' : 'Choose a team member…'}</option>
           ${team.map(t => `<option value="${esc(t.person_code)}"${a.person === t.person_code ? ' selected' : ''}>${esc(t.person_name)} — ${esc(LEVEL_ROLE_LABEL(t.hierarchy_level))}${t.unit_code ? ' · ' + esc(t.unit_code) : ''}</option>`).join('')}
         </select></div>
-      <div>${lbl('Tour date')}<input type="date" style="${inp}" min="${new Date().toISOString().slice(0, 10)}"
+      <div>${lbl('Due date')}<input type="date" style="${inp}" min="${new Date().toISOString().slice(0, 10)}"
         value="${esc(a.date)}" onchange="taAsgSet('date',this.value)"
-        title="A tour cannot be planned for a date before today"></div>
+        title="A task cannot be assigned for a date before today"></div>
+      <div>${lbl('Priority')}
+        <select style="${inp}" onchange="taAsgSet('priority',this.value)">
+          ${(prios.length ? prios : [{ key: 'normal', label: 'Normal', dot: '' }]).map(pr =>
+            `<option value="${esc(pr.key)}"${a.priority === pr.key ? ' selected' : ''}>${esc(pr.dot || '')} ${esc(pr.label)}</option>`).join('')}
+        </select></div>
     </div>
+
+    <div style="margin-bottom:10px;position:relative">${lbl('Task objective')}
+      <textarea rows="2" style="${inp};resize:vertical;padding-right:76px"
+        placeholder="What must be achieved? Amount, copies, information to bring back…"
+        oninput="taAsgSet('objective',this.value)">${esc(a.objective || '')}</textarea>
+      ${_taMic('objective')}
+    </div>
+
     ${stopHtml}
-    <button onclick="taStopAdd()" class="btn sm" style="margin-bottom:10px">+ Add another agency</button>
+    ${!noTarget && def.multi !== false
+      ? `<button onclick="taStopAdd()" class="btn sm" style="margin-bottom:10px">+ Add another ${areaMode ? 'area' : 'agency'}</button>`
+      : ''}
     ${a.err ? `<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:8px;padding:8px 11px;font-size:12.5px;margin-bottom:9px">${esc(a.err)}</div>` : ''}
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn sm" onclick="taAssignClose()">Cancel</button>
       <button class="btn sm" ${a.saving ? 'disabled' : ''} onclick="taAssignSave()"
-        style="background:#1e3a8a;color:#fff;border-color:#1e3a8a">${a.saving ? 'Assigning…' : 'Assign tour'}</button>
+        style="background:#1e3a8a;color:#fff;border-color:#1e3a8a">${a.saving ? 'Assigning…' : 'Assign task'}</button>
     </div>
   </div>`;
 }
@@ -7858,15 +8060,83 @@ function LEVEL_ROLE_LABEL(l) {
             5: 'VP Circulation', 7: 'Field Executive', 9: 'Agent', 10: 'Hawker' })[Number(l)] || 'Staff';
 }
 
+/* ══ Task status, the way a manager asks about it ══
+   The table below answers "what did I assign"; this answers "where has it got to" —
+   the same rows counted by person, by agency, by hawker, by area and by type. The
+   grouping is done by the server so a "12 open" here and a "12 open" on the executive's
+   phone are the same twelve. */
+const TA_GROUPS = [['executive', 'Executive'], ['agency', 'Agency'], ['hawker', 'Hawker'],
+                   ['area', 'Area'], ['task_type', 'Task type'], ['branch', 'Branch']];
+function _taOverview() {
+  const st = _taState();
+  if (!st.ovOpen) return '';
+  if (!st.ov && !st._ovLoading) {
+    st._ovLoading = true;
+    const p = new URLSearchParams();
+    if (st.unit) p.set('unit_code', st.unit);
+    if (st.taskType) p.set('task_type', st.taskType);
+    fetch(`${location.origin}/api/dcr-m/tasks/overview?${p}`, { headers: api.h() })
+      .then(r => r.json())
+      .then(d => { st.ov = d && d.detail ? { _err: d.detail } : d; st._ovLoading = false; render(); })
+      .catch(e => { st.ov = { _err: String(e && e.message || e) }; st._ovLoading = false; render(); });
+  }
+  if (!st.ov) return `<div class="card" style="padding:18px;margin-bottom:12px;text-align:center;color:var(--muted);font-size:12.5px">Loading task status…</div>`;
+  if (st.ov._err) return `<div class="card" style="padding:14px;margin-bottom:12px;color:#b91c1c;font-size:12.5px">${esc(st.ov._err)}</div>`;
+
+  const c = st.ov.counts || {};
+  const groups = st.ov.groups || {};
+  const avail = TA_GROUPS.filter(([k]) => (groups[k] || []).length);
+  const cur = (st.ovGroup && (groups[st.ovGroup] || []).length) ? st.ovGroup : (avail[0] || ['executive'])[0];
+  const rows = groups[cur] || [];
+
+  const tile = (label, n, color, bg) => `<div style="background:${bg};border:1px solid ${color}22;border-radius:9px;padding:9px 12px;min-width:96px">
+    <div style="font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:${color}">${label}</div>
+    <div style="font-size:19px;font-weight:800;color:${color};font-variant-numeric:tabular-nums">${_apFmtN(n || 0)}</div></div>`;
+
+  return `<div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <div><b style="font-size:13.5px">Task status</b>
+        <div style="font-size:11px;color:var(--muted)">${st.ov.scope === 'all' ? 'Every task in your scope' : `Your team — ${st.ov.team_size} people`} · last 60 days</div></div>
+      <button class="btn sm" onclick="taOvToggle()">Hide</button>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      ${tile('Total', c.total, '#334155', '#f8fafc')}
+      ${tile('🔵 Open', c.pending, '#1e3a8a', '#eef4ff')}
+      ${tile('🟠 In progress', c.in_progress, '#c2410c', '#fff7ed')}
+      ${tile('🟢 Completed', c.done, '#15803d', '#f0fdf4')}
+      ${tile('🔴 Overdue', c.overdue, '#b91c1c', '#fef2f2')}
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      ${avail.map(([k, l]) => `<button onclick="taOvGroup('${k}')" class="btn sm"
+        style="${cur === k ? 'background:#1e3a8a;color:#fff;border-color:#1e3a8a' : ''}">${l} (${(groups[k] || []).length})</button>`).join('')}
+    </div>
+    ${rows.length ? `<div style="overflow-x:auto;max-height:320px"><table style="font-size:12px">
+      <thead><tr><th>${esc((avail.find(([k]) => k === cur) || [, 'Group'])[1])}</th>
+        <th class="r">Total</th><th class="r">🔵 Open</th><th class="r">🟠 In progress</th>
+        <th class="r">🟢 Completed</th><th class="r">🔴 Overdue</th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td style="max-width:260px;white-space:normal"><b>${esc(r.label)}</b></td>
+        <td class="r">${_apFmtN(r.total)}</td>
+        <td class="r">${r.pending ? _apFmtN(r.pending) : '—'}</td>
+        <td class="r" style="color:${r.in_progress ? '#c2410c' : 'inherit'}">${r.in_progress ? _apFmtN(r.in_progress) : '—'}</td>
+        <td class="r" style="color:${r.done ? '#15803d' : 'inherit'}">${r.done ? _apFmtN(r.done) : '—'}</td>
+        <td class="r" style="color:${r.overdue ? '#b91c1c' : 'inherit'};font-weight:${r.overdue ? 700 : 400}">${r.overdue ? _apFmtN(r.overdue) : '—'}</td>
+      </tr>`).join('')}</tbody></table></div>`
+      : `<div style="font-size:12px;color:var(--muted);padding:12px 0">No tasks in this grouping.</div>`}
+  </div>`;
+}
+window.taOvToggle = () => { const st = _taState(); st.ovOpen = !st.ovOpen; if (st.ovOpen) st.ov = null; render(); };
+window.taOvGroup = k => { const st = _taState(); st.ovGroup = k; render(); };
+
 VIEWS.tour_approvals = () => {
   const st = _taState();
   _taLoad();
   const d = st.data;
-  const head = pagehead('Tour Approvals', 'Plans filed by your team — approve or reject with a reason');
+  const head = pagehead('Task Assignment', 'Give your team work, and see what has been done with it');
 
-  if (!d) return head + `<div style="padding:26px;text-align:center;color:var(--muted);font-size:13px">Loading tour plans…</div>`;
+  if (!d) return head + `<div style="padding:26px;text-align:center;color:var(--muted);font-size:13px">Loading tasks…</div>`;
   if (d._err) return head + `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:16px;color:#b91c1c">
-    Could not load tour plans.<div style="font-size:11.5px;color:var(--muted);margin-top:4px">${esc(d._err)}</div></div>`;
+    Could not load tasks.<div style="font-size:11.5px;color:var(--muted);margin-top:4px">${esc(d._err)}</div></div>`;
 
   const rows = d.rows || [];
   const pend = rows.filter(r => r.status === 'submitted');
@@ -7884,9 +8154,21 @@ VIEWS.tour_approvals = () => {
            ['lapsed', 'Lapsed — date passed' + (d.lapsed_count ? ` (${d.lapsed_count})` : '')], ['all', 'All']]
           .map(([v, l]) => `<option value="${v}"${st.status === v ? ' selected' : ''}>${l}</option>`).join('')}
       </select></div>
+    <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Progress</div>
+      <select onchange="taSetExec(this.value)" class="inp" style="min-width:150px;font-size:12.5px;padding:6px 10px">
+        ${[['', 'Any progress'], ['open', '🔵 Not done yet'], ['pending', 'Not started'],
+           ['in_progress', '🟠 In progress'], ['done', '🟢 Completed']]
+          .map(([v, l]) => `<option value="${v}"${(st.execStatus || '') === v ? ' selected' : ''}>${l}</option>`).join('')}
+      </select></div>
+    <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Task type</div>
+      <select onchange="taSetType(this.value)" class="inp" style="min-width:190px;font-size:12.5px;padding:6px 10px">
+        <option value="">All task types</option>
+        ${_taTypes().map(t => `<option value="${esc(t.key)}"${st.taskType === t.key ? ' selected' : ''}>${esc(t.label)}</option>`).join('')}
+      </select></div>
     <div style="flex:1"></div>
     <div style="display:flex;gap:8px;align-items:center">
-      <button class="btn sm" onclick="taAssignOpen()" style="background:#eef4ff;color:#1e3a8a;border-color:#c7d7fe">＋ Assign tour</button>
+      <button class="btn sm" onclick="taOvToggle()">${st.ovOpen ? 'Hide status' : '📊 Task status'}</button>
+      <button class="btn sm" onclick="taAssignOpen()" style="background:#eef4ff;color:#1e3a8a;border-color:#c7d7fe">＋ Assign task</button>
       ${selCount ? `<span style="font-size:12px;color:var(--muted)">${selCount} selected</span>` : ''}
       <button class="btn sm" ${st.busy || !selCount ? 'disabled' : ''} onclick="taDecide('reject')"
         style="background:#fef2f2;color:#b91c1c;border-color:#fecaca">Reject…</button>
@@ -7906,14 +8188,14 @@ VIEWS.tour_approvals = () => {
   const body = !rows.length
     ? `<div style="padding:26px;text-align:center;color:var(--muted);font-size:13px">
          ${st.status === 'submitted' ? 'Nothing is waiting for your approval.'
-            : st.status === 'lapsed' ? 'No tours have lapsed.' : 'No tour plans for this selection.'}
-         ${st.status === 'submitted' && d.lapsed_count ? `<div style="font-size:11.5px;margin-top:6px">${d.lapsed_count} tour${d.lapsed_count === 1 ? '' : 's'} lapsed — see “Lapsed — date passed”.</div>` : ''}
+            : st.status === 'lapsed' ? 'No tasks have lapsed.' : 'No tasks for this selection.'}
+         ${st.status === 'submitted' && d.lapsed_count ? `<div style="font-size:11.5px;margin-top:6px">${d.lapsed_count} task${d.lapsed_count === 1 ? '' : 's'} lapsed — see “Lapsed — date passed”.</div>` : ''}
          ${d.team_size ? `<div style="font-size:11.5px;margin-top:5px">${d.team_size} people report to you.</div>` : ''}</div>`
     : `<div style="overflow-x:auto"><table>
       <thead><tr>
         <th style="width:30px"><input type="checkbox" onclick="taToggleAll(this.checked)" title="Select every row awaiting approval"></th>
-        <th>Date</th><th>Who</th><th>Where</th><th>Reason &amp; remarks</th>
-        <th class="r">Growth target</th><th class="r">Outstanding</th><th class="r">Our / Comp copies</th><th>Status</th>
+        <th>Due</th><th>Task</th><th>Who</th><th>Where</th><th>Objective &amp; instructions</th>
+        <th class="r">Target</th><th class="r">Outstanding</th><th>Progress</th><th>Status</th>
       </tr></thead><tbody>
       ${rows.map(r => `<tr style="${r.overdue && r.status === 'submitted' ? 'background:#fffbeb' : ''}">
         <td>${r.status === 'submitted'
@@ -7922,34 +8204,36 @@ VIEWS.tour_approvals = () => {
         <td style="white-space:nowrap;font-size:12px">${esc(r.tour_date)}
           ${r.overdue && r.status === 'submitted' ? '<div style="font-size:9.5px;color:#b45309;font-weight:700" title="The date has passed — reject or ask for a re-plan">date passed</div>' : ''}
           ${r.visit_time ? `<div style="font-size:9.5px;color:var(--muted)">${esc(r.visit_time)}</div>` : ''}</td>
+        <td style="font-size:11.5px;max-width:190px;white-space:normal">
+          <b>${esc(TA_PRI_DOT[r.priority] || '')} ${esc(r.subject || r.task_label || '—')}</b>
+          <div style="font-size:10px;color:var(--muted)">${esc(r.task_label || '')}</div></td>
         <td style="font-size:12px"><b>${esc(r.person_name || r.person_code)}</b>
           <div style="font-size:10px;color:var(--muted)">${esc([r.designation, r.unit_name].filter(Boolean).join(' · '))}</div>
           ${r.assigned_by ? `<div style="font-size:9.5px;color:#0ea5e9">assigned by ${esc(r.assigned_by)}</div>` : ''}</td>
-        <td style="font-size:12px;max-width:210px"><b style="color:var(--chart-1)">${esc(r.agency_name || r.target_code || '—')}</b>
+        <td style="font-size:12px;max-width:190px"><b style="color:var(--chart-1)">${esc(r.agency_name || r.target_code || '—')}</b>
           <div style="font-size:10px;color:var(--muted);white-space:normal">${esc([r.dist_name, r.station_name].filter(Boolean).join(' · ') || '—')}</div></td>
-        <td style="font-size:11.5px;max-width:280px;white-space:normal">${esc(r.reason || '—')}
+        <td style="font-size:11.5px;max-width:250px;white-space:normal">${esc(r.objective || r.reason || '—')}
           ${r.remarks ? `<div style="font-size:10.5px;color:var(--muted);margin-top:2px">${esc(r.remarks)}</div>` : ''}</td>
-        <td style="${num}">${r.growth_target != null ? _apFmtN(r.growth_target) + ' cp' : '—'}
-          ${r.expected_recovery ? `<div style="font-size:9.5px;color:var(--muted)">rec ${_apFmtC(r.expected_recovery)}</div>` : ''}</td>
+        <td style="${num}">${r.growth_target != null ? _apFmtN(r.growth_target) + ' cp' : r.expected_recovery ? _apFmtC(r.expected_recovery) : '—'}
+          ${r.growth_target != null && r.expected_recovery ? `<div style="font-size:9.5px;color:var(--muted)">${_apFmtC(r.expected_recovery)}</div>` : ''}</td>
         <td style="${num};color:${(r.outstanding || 0) > 0 ? '#b91c1c' : 'var(--ink)'}">${r.outstanding == null ? '—' : _apFmtC(r.outstanding)}</td>
-        <td style="${num}">${r.our_copies == null && r.competitor_copies == null ? '—'
-          : `${r.our_copies == null ? '—' : _apFmtN(r.our_copies)} / <b style="color:#b45309">${r.competitor_copies == null ? '—' : _apFmtN(r.competitor_copies)}</b>`}
-          ${r.competitor_period ? `<div style="font-size:9.5px;color:var(--muted)">${esc(r.competitor_period)}</div>` : ''}</td>
+        <td style="font-size:11px">${TA_EXEC_CHIP(r.exec_status, r.status)}
+          ${r.completion_remarks ? `<div style="font-size:10px;color:var(--muted);white-space:normal;max-width:170px;margin-top:2px">${esc(r.completion_remarks)}</div>` : ''}</td>
         <td>${chip(r.status)}
           ${r.reject_reason ? `<div style="font-size:9.5px;color:#b91c1c;white-space:normal;max-width:150px">${esc(r.reject_reason)}</div>` : ''}
           ${r.decided_by ? `<div style="font-size:9.5px;color:var(--muted)">by ${esc(r.decided_by)}</div>` : ''}</td>
       </tr>`).join('')}
       </tbody></table></div>
       <div style="font-size:10.5px;color:var(--muted);margin-top:8px">
-        ${rows.length} stop${rows.length === 1 ? '' : 's'}${pend.length ? ` · ${pend.length} awaiting your decision` : ''}
-        · A tour dated before today cannot be approved — reject it or ask for a re-plan.
-        · Competitor copies are the largest single competitor at that agency, from the latest survey period.
+        ${rows.length} task${rows.length === 1 ? '' : 's'}${pend.length ? ` · ${pend.length} awaiting your decision` : ''}
+        · A task dated before today cannot be approved — reject it or ask for a re-plan.
+        · Progress is what the executive has reported from the DCR app; approval is a separate question.
       </div>`;
 
   /* The list comes first and the form after it. An approver opens this screen to see
      what is waiting, not to file something — the form on top pushed the very thing they
      came for below the fold. */
-  return head + sel + note + `<div class="card" style="padding:12px 14px">${body}</div>`
+  return head + sel + note + _taOverview() + `<div class="card" style="padding:12px 14px">${body}</div>`
        + _taAssignPanel();
 };
 

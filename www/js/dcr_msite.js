@@ -219,7 +219,17 @@ const _SR = () => window.SpeechRecognition || window.webkitSpeechRecognition;
    switches Hindi/English per field: the recogniser cannot detect the language itself,
    and these notes are written in both, often by the same person on the same day. */
 const _mic = (k, store) => {
-  if (!_SR()) return '';                       // no silent no-op button
+  /* The mic is always drawn, even where the browser cannot dictate. Hiding it made the
+     feature look absent rather than unavailable — Firefox has never shipped the Web
+     Speech API, so on that browser the button simply was not there and the field looked
+     like any other textarea. It now says so when tapped, which is a short answer instead
+     of no answer. */
+  if (!_SR()) {
+    return `<div class="dcr-mic-wrap">
+      <button type="button" class="dcr-mic off" onclick="dmVoiceUnavailable()"
+        title="Dictation is not available in this browser" aria-label="Dictation unavailable">🎤</button>
+    </div>`;
+  }
   const id = store + ':' + k, on = DM.listening === id;
   return `<div class="dcr-mic-wrap">
     <button type="button" class="dcr-mic ${on ? 'on' : ''}" onclick="dmVoice('${k}','${store}')"
@@ -227,6 +237,11 @@ const _mic = (k, store) => {
     <button type="button" class="dcr-mic-lang" onclick="dmDictLang()"
       title="Dictation language">${DM.dictLang === 'en-IN' ? 'EN' : 'हिं'}</button>
   </div>`;
+};
+window.dmVoiceUnavailable = () => {
+  DM.err = 'Dictation needs Chrome, Edge or the Android app — this browser does not support it. '
+         + 'You can still type in Hindi or English.';
+  render();
 };
 
 const _txt = (k, ph, rows) => `<div class="dcr-dict">
@@ -1288,14 +1303,16 @@ function _dash() {
 window.dmVoice = (key, store) => {
   const SR = _SR(); if (!SR) return;
   const id = (store || 'extra') + ':' + key;
-  const bag = () => (store === 'form' ? DM.form : DM.extra);
+  const bag = () => (store === 'form' ? DM.form : store === 'task' ? (DM.taskRemarks || (DM.taskRemarks = {})) : DM.extra);
   if (DM.listening === id && DM._sr) { try { DM._sr.stop(); } catch (_) {} return; }
   if (DM._sr) { try { DM._sr.stop(); } catch (_) {} }   // only one field listens at a time
   const r = new SR();
   r.lang = DM.dictLang || 'hi-IN'; r.interimResults = false; r.continuous = false;
   r.onresult = e => {
     const txt = Array.from(e.results).map(x => x[0].transcript).join(' ').trim();
-    if (txt) bag()[key] = ((bag()[key] || '') + ' ' + txt).trim();
+    // A task remark is keyed by id — the field is named tk_<id>, the bag is keyed <id>.
+    const bk = store === 'task' ? String(key).replace(/^tk_/, '') : key;
+    if (txt) bag()[bk] = ((bag()[bk] || '') + ' ' + txt).trim();
     DM.listening = null; DM._sr = null; render();
   };
   /* A denied mic permission is the common failure and looks identical to nothing
@@ -1397,10 +1414,124 @@ window.dmEndTrip = async () => { if (!confirm('End duty and close the day?')) re
     DM.day = r.summary; DM.mode = 'dash'; toast(`Day closed · ${r.summary.total_km} km`); await _load(true);
   } catch (e) { DM.err = e.message; render(); } };
 
+/* ══ MY TASKS ══
+   Everything a manager has handed this executive, in the order it actually needs
+   attention: what is late, what is urgent, what is due today, what is coming, what is
+   finished. The buckets are decided by the server, not here, so the phone and the
+   manager's screen cannot disagree about what "overdue" means.
+
+   Each card opens to its full instruction and closes with a remark, because a task
+   marked done with nothing said about it tells the manager only that a box was ticked. */
+const TASK_BUCKETS = [
+  ['overdue',   'Overdue',       '🔴', 'bad'],
+  ['high',      'High priority', '🟠', 'warn'],
+  ['today',     "Today's tasks", '🔵', 'info'],
+  ['upcoming',  'Upcoming',      '⚪', 'mute'],
+  ['completed', 'Completed',     '🟢', 'good'],
+];
+const PRI_DOT = { urgent: '🔴', high: '🟠', normal: '🔵', low: '⚪' };
+
+function _loadTasks(force) {
+  if (DM.tasks && !force) return;
+  if (DM._tasksLoading) return;
+  DM._tasksLoading = true;
+  fetch(`${location.origin}/api/dcr-m/tasks/mine`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { DM.tasks = d && !d.detail ? d : { buckets: {}, counts: {} };
+                 if (d && d.detail) DM.err = d.detail;
+                 DM._tasksLoading = false; render(); })
+    .catch(e => { DM.tasks = { buckets: {}, counts: {} }; DM._tasksLoading = false;
+                  DM.err = String(e.message || e); render(); });
+}
+
+window.dmTaskOpen = id => { DM.taskOpen = DM.taskOpen === id ? null : id; DM.err = null; render(); };
+window.dmTaskBucket = k => { DM.taskBucket = k; DM.taskOpen = null; render(); };
+window.dmTaskRemark = (id, v) => { (DM.taskRemarks || (DM.taskRemarks = {}))[id] = v; };
+window.dmTaskAct = async (id, action) => {
+  if (DM.busy) return;
+  DM.busy = 'task'; DM.err = null; render();
+  try {
+    const body = { id, action };
+    if (action === 'done') body.remarks = (DM.taskRemarks || {})[id] || '';
+    const r = await fetch(`${location.origin}/api/dcr-m/task/progress`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok || d.detail) throw new Error(d.detail || 'Could not update the task');
+    if (action === 'done') { DM.taskOpen = null; toast(T('Task completed')); }
+    if (DM.taskRemarks) delete DM.taskRemarks[id];
+    DM.busy = ''; _loadTasks(true);
+  } catch (e) { DM.err = String(e.message || e); DM.busy = ''; render(); }
+};
+
+function _taskCard(r, bucket) {
+  const open = DM.taskOpen === r.id;
+  const done = r.exec_status === 'done';
+  const started = r.exec_status === 'in_progress';
+  const money = r.expected_recovery ? `₹${Number(r.expected_recovery).toLocaleString('en-IN')}` : '';
+  const copies = r.growth_target ? `+${Number(r.growth_target).toLocaleString('en-IN')} cp` : '';
+  const figure = [money, copies].filter(Boolean).join(' · ');
+  const late = r.days_late > 0 && !done;
+  return `<div class="dcr-card" style="${late ? 'border-left:3px solid var(--d-bad)' : ''}">
+    <div onclick="dmTaskOpen(${r.id})" style="cursor:pointer;display:flex;gap:9px;justify-content:space-between;align-items:flex-start">
+      <div style="min-width:0">
+        <div style="font-size:14px;color:var(--d-ink);font-weight:600">${PRI_DOT[r.priority] || ''} ${esc(r.subject)}</div>
+        <div style="font-size:11.5px;color:var(--d-mut);margin-top:3px">
+          ${esc(T(r.task_label))}${r.target_name ? ' · ' + esc(r.target_name) : ''}
+        </div>
+        <div style="font-size:11.5px;color:var(--d-mut);margin-top:2px">
+          ${T('Due')} ${esc(String(r.due_date).slice(0, 10))}${late ? ` · <span style="color:var(--d-bad);font-weight:700">${r.days_late} ${T(r.days_late === 1 ? 'day late' : 'days late')}</span>` : ''}${figure ? ' · ' + esc(figure) : ''}
+        </div>
+      </div>
+      <span style="flex:none;font-size:11px;color:var(--d-mut)">${open ? '▲' : '▼'}</span>
+    </div>
+    ${open ? `<div style="margin-top:10px;border-top:1px solid var(--d-line);padding-top:9px">
+      ${r.objective ? `<div style="font-size:12.5px;color:var(--d-ink);margin-bottom:6px"><b>${T('Objective')}:</b> ${esc(r.objective)}</div>` : ''}
+      ${r.instructions ? `<div style="font-size:12.5px;color:var(--d-ink);margin-bottom:6px"><b>${T('Instructions')}:</b> ${esc(r.instructions)}</div>` : ''}
+      ${r.assigned_by ? `<div style="font-size:11.5px;color:var(--d-mut);margin-bottom:8px">${T('Assigned by')} ${esc(r.assigned_by)}</div>` : ''}
+      ${done
+        ? `<div style="font-size:12px;color:var(--d-good, #15803d)">✓ ${T('Completed')} ${esc(String(r.completed_at || '').slice(0, 16).replace('T', ' '))}</div>
+           ${r.completion_remarks ? `<div style="font-size:12.5px;color:var(--d-ink);margin-top:4px">${esc(r.completion_remarks)}</div>` : ''}
+           <div style="margin-top:9px">${_btn(T('Reopen'), `dmTaskAct(${r.id},'reopen')`)}</div>`
+        : `<div class="dcr-dict" style="margin-bottom:8px">
+             <textarea id="tk_${r.id}" rows="2" placeholder="${esc(T('What happened? Amount, commitment, next step…'))}"
+               oninput="dmTaskRemark(${r.id},this.value)">${esc((DM.taskRemarks || {})[r.id] || '')}</textarea>
+             ${_mic('tk_' + r.id, 'task')}
+             ${DM.listening === 'task:tk_' + r.id ? `<div class="dcr-listening">● ${DM.dictLang === 'en-IN' ? 'Listening…' : 'सुन रहा है…'}</div>` : ''}
+           </div>
+           <div style="display:flex;gap:8px;flex-wrap:wrap">
+             ${started ? '' : _btn(T('Start'), `dmTaskAct(${r.id},'start')`)}
+             ${_btn(DM.busy === 'task' ? T('Saving…') : T('Mark complete'), `dmTaskAct(${r.id},'done')`, 'pri')}
+           </div>`}
+    </div>` : ''}
+  </div>`;
+}
+
+function _myTasks() {
+  _loadTasks();
+  if (!DM.tasks) return `<div style="padding:26px;text-align:center;color:${K.mut};font-size:13px">${T('Loading your tasks…')}</div>`;
+  const b = DM.tasks.buckets || {}, c = DM.tasks.counts || {};
+  const has = TASK_BUCKETS.filter(([k]) => (b[k] || []).length);
+  if (!has.length) return `<div style="padding:30px 16px;text-align:center;color:${K.mut};font-size:13.5px">
+    ${T('No tasks assigned to you right now.')}</div>`;
+
+  const cur = (DM.taskBucket && (b[DM.taskBucket] || []).length) ? DM.taskBucket : has[0][0];
+  const chips = has.map(([k, label, dot]) => `<button onclick="dmTaskBucket('${k}')"
+    class="dcr-chip ${cur === k ? 'on' : ''}">${dot} ${T(label)} ${(b[k] || []).length}</button>`).join('');
+
+  return `<div style="padding:2px 0 10px">
+    <div class="dcr-chips">${chips}</div>
+    ${(b[cur] || []).map(r => _taskCard(r, cur)).join('')}
+    <div style="font-size:11px;color:${K.mut};text-align:center;margin-top:8px">
+      ${c.total || 0} ${T('tasks in the last 45 days')} · ${c.done || c.completed || 0} ${T('completed')}
+    </div>
+  </div>`;
+}
+
 // ── app-owned bottom bar ────────────────────────────────────────────────────
 window.appBottomNav = screen => {
   if (screen !== 'app_dcr' && !String(screen || '').startsWith('dcrm')) return null;
-  const items = [['', 'Home', '🏠'], ['dash', 'Dashboard', '📊'], ['approvals', 'Approvals', '✅']];
+  const items = [['', 'Home', '🏠'], ['tasks', 'My Tasks', '📌'], ['dash', 'Dashboard', '📊'], ['approvals', 'Approvals', '✅']];
   if (DM.ctx && DM.ctx.trip && DM.ctx.trip.status === 'active') items.push(['end', 'End duty', '🏁']);
   else items.push(['apps', 'Apps', '⋯']);
   return items.map(([k, l, i]) => `<button class="${(DM.mode || '') === k ? 'on' : ''}"
@@ -1410,6 +1541,7 @@ window.appBottomNav = screen => {
 window.dmNav = k => { DM.mode = k || null; DM.err = null; DM.flyout = null;
   if (k === 'dash') DM.day = null;
   if (k === 'approvals') { DM.approved = null; DM.pending = null; DM.mine = null; }
+  if (k === 'tasks') { DM.tasks = null; DM.taskOpen = null; }
   if (S.sideOpen) toggleSide();
   render(); };
 
@@ -1422,7 +1554,8 @@ window.appSideNav = screen => {
   const item = (k, label, icon) => `<button class="nav-item ${DM.mode === k ? 'on' : ''}"
     onclick="dmNav('${k}')"><span class="nico">${icon}</span><span>${label}</span></button>`;
   let h = `<div class="sb-lbl"><span>DCR</span></div>`
-    + item('', 'DCR Home', '📋') + item('dash', 'DCR Dashboard', '📊') + item('approvals', 'Approved Plans', '✅');
+    + item('', 'DCR Home', '📋') + item('tasks', 'My Tasks', '📌')
+    + item('dash', 'DCR Dashboard', '📊') + item('approvals', 'Approved Plans', '✅');
   const allowed = FORMS.filter(f => DM.rights[f.key]);
   if (allowed.length) {
     h += `<div class="sb-lbl"><span>Forms</span></div>`;
@@ -1433,7 +1566,7 @@ window.appSideNav = screen => {
 };
 
 // ── shell ───────────────────────────────────────────────────────────────────
-const TITLES = { plan_tour: 'Plan Tour', agency_visit: 'Agency Visit', agent_feedback: 'Agent Feedback',
+const TITLES = { tasks: 'My Tasks', plan_tour: 'Plan Tour', agency_visit: 'Agency Visit', agent_feedback: 'Agent Feedback',
   calling: 'Calling', center_attn: 'Attendance', hawker_visit: 'Hawker Visit', reader_visit: 'Reader Visit',
   new_area: 'New Area', office_work: 'Office / Other', dash: 'DCR Dashboard', approvals: 'Approved Plans' };
 
@@ -1449,6 +1582,7 @@ VIEWS.dcrm = () => {
       DM.mode === null            ? _home()
     : DM.mode === 'dash'          ? _dash()
     : DM.mode === 'approvals'     ? _approvals()
+    : DM.mode === 'tasks'         ? _myTasks()
     : DM.mode === 'plan_tour'     ? _fPlanTour()
     : DM.mode === 'agency_visit'  ? (DM.pickPlan ? _planPick() : _fAgencyVisit())
     : DM.mode === 'agent_feedback'? _fFeedback()

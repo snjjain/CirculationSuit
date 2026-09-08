@@ -33,6 +33,8 @@
 
 module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
 
+  const { TASK_TYPES, PRIORITIES, isTaskType, typeOf, labelOf, isPriority } = require('./task_types');
+
   const N   = v => Number(v) || 0;
   const S   = (v, n) => (v == null ? null : String(v).trim().slice(0, n) || null);
   const iso = d => (d ? String(d).slice(0, 10) : null);
@@ -968,19 +970,42 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
   /* Create for yourself, or assign to a subordinate. Self-created plans start
      'submitted' and wait for the incharge; a plan an incharge assigns is already their
      decision, so it starts 'approved' and the executive can simply go. */
-  app.post('/api/dcr-m/tour', async (req, res) => {
+  /* Assigning work. A tour is one kind of it — the kind whose target is a route of
+     agencies — so the same handler serves both paths and the type simply defaults to
+     'tour' on the older one. Every task carries a subject, because a subject is the
+     first and sometimes the only thing the executive reads on a phone. */
+  const assignTask = async (req, res) => {
     try {
       const staff = await staffOf(req);
       if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
       const b = req.body || {};
-      if (!isDate(b.tour_date)) return res.status(400).json({ detail: 'tour_date (YYYY-MM-DD) is required' });
+
+      const taskType = String(b.task_type || 'tour');
+      if (!isTaskType(taskType)) return res.status(400).json({ detail: `Unknown task type "${taskType}"` });
+      const tdef = typeOf(taskType);
+
+      const dueDate = b.due_date || b.tour_date;
+      if (!isDate(dueDate)) return res.status(400).json({ detail: 'due_date (YYYY-MM-DD) is required' });
       /* Same rule as approval, for the same reason: an assignment is an instruction to
-         go somewhere, and it cannot be issued for a day that has passed. */
-      if (String(b.tour_date) < today()) {
-        return res.status(400).json({ detail: 'A tour cannot be planned for a date before today.', code: 'past_date' });
+         do something, and it cannot be issued for a day that has passed. */
+      if (String(dueDate) < today()) {
+        return res.status(400).json({ detail: 'A task cannot be assigned for a date before today.', code: 'past_date' });
       }
-      const stops = Array.isArray(b.stops) ? b.stops : [];
-      if (!stops.length) return res.status(400).json({ detail: 'At least one stop is required' });
+
+      const subject = S(b.subject, 300);
+      if (!subject) return res.status(400).json({ detail: 'A subject is required — it is what the executive sees first.' });
+      const priority = isPriority(b.priority) ? String(b.priority) : 'normal';
+      const objective = S(b.objective, 4000);
+      const inputLang = ['hi', 'en'].includes(String(b.input_lang || '')) ? String(b.input_lang) : null;
+
+      /* A task pointed at no particular agency — a campaign, a management errand — is
+         still one task, so it gets one row with an empty target rather than being
+         refused for having no stops. */
+      let stops = Array.isArray(b.stops) ? b.stops.filter(x => x && (x.target_code || x.target_name)) : [];
+      if (!stops.length) {
+        if (tdef.target === 'none' || tdef.target === 'area') stops = [{}];
+        else return res.status(400).json({ detail: 'Choose at least one agency or hawker.' });
+      }
 
       const units = await scopeUnits(req);
       let owner = staff, assigning = false;
@@ -998,6 +1023,8 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         assigning = true;
       }
 
+      /* Assigned work is an instruction and needs nobody's approval; work an executive
+         plans for themselves is a request. */
       const status = assigning ? 'approved' : 'submitted';
 
       /* One visit to an agency per person per day.
@@ -1011,51 +1038,84 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
          re-plan is precisely when the stop has to be entered again. */
       const { rows: liveStops } = await q(
         `SELECT unit_code, target_code FROM dcr_tour_plan
-          WHERE staff_person_code = ? AND tour_date = ?
-            AND status NOT IN ('rejected', 'cancelled')`, [owner.person_code, b.tour_date]);
+          WHERE staff_person_code = ? AND tour_date = ? AND task_type = ?
+            AND status NOT IN ('rejected', 'cancelled')`, [owner.person_code, dueDate, taskType]);
+      /* Scoped to the task TYPE. A collection call and a feedback round at the same
+         agency on the same day are two different jobs, and refusing the second because
+         the first exists would be wrong. */
       const taken = new Set(liveStops.map(r => `${r.unit_code}|${String(r.target_code).toUpperCase()}`));
+
+      /* An area has no master record — finding what is there is usually the point — so
+         the typed locality becomes the target, keyed by a slug of its own name so two
+         different areas on one day are still two different tasks. */
+      const areaSlug = nm => String(nm || 'AREA').toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'AREA';
 
       let n = 0, dupes = [];
       for (let i = 0; i < stops.length; i++) {
         const s = stops[i] || {};
         const unit = S(s.unit_code, 10) || owner.unit_code;
-        if (!unit || !S(s.target_code, 40)) continue;
+        if (!unit) continue;
         if (units && !units.includes(unit)) continue;
-        // Blocks both an existing plan and a repeat inside this same request.
-        const key = `${unit}|${String(S(s.target_code, 40)).toUpperCase()}`;
-        if (taken.has(key)) { dupes.push(S(s.target_name, 300) || S(s.target_code, 40)); continue; }
-        taken.add(key);
+
+        let tType, tCode, tName;
+        if (tdef.target === 'area') {
+          tName = S(s.target_name, 300) || S(b.area, 300);
+          if (!tName) return res.status(400).json({ detail: 'Name the area or locality to visit.' });
+          tType = 'area'; tCode = areaSlug(tName);
+        } else if (tdef.target === 'none') {
+          tType = 'none'; tCode = ''; tName = S(s.target_name, 300) || subject;
+        } else {
+          if (!S(s.target_code, 40)) continue;
+          tType = ['agent', 'hawker'].includes(s.target_type) ? s.target_type
+                : tdef.target === 'hawker' ? 'hawker' : 'agent';
+          tCode = S(s.target_code, 40); tName = S(s.target_name, 300);
+        }
+
+        // Blocks both an existing task of this type and a repeat inside this request.
+        const key = `${unit}|${String(tCode || '').toUpperCase()}`;
+        if (tCode && taken.has(key)) { dupes.push(tName || tCode); continue; }
+        if (tCode) taken.add(key);
+
         await q(
           `INSERT INTO dcr_tour_plan (tour_date, staff_person_code, staff_name, staff_emp_code, unit_code,
              target_type, target_code, target_name, target_extra, visit_time, purpose, description,
              status, seq_no, expected_recovery, outstanding_snap, growth_target,
-             assigned_by, assigned_by_name, approved_by, approved_by_name, approved_at)
-           VALUES (?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?)`,
-          [b.tour_date, owner.person_code, owner.name, owner.emp_code, unit,
-           ['agent', 'hawker'].includes(s.target_type) ? s.target_type : 'agent',
-           S(s.target_code, 40), S(s.target_name, 300), S(s.target_extra, 300),
-           S(s.visit_time, 8), S(s.purpose, 60), S(s.description, 2000),
+             assigned_by, assigned_by_name, approved_by, approved_by_name, approved_at,
+             task_type, subject, priority, objective, exec_status, input_lang)
+           VALUES (?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?)`,
+          [dueDate, owner.person_code, owner.name, owner.emp_code, unit,
+           tType, tCode, tName, S(s.target_extra, 300),
+           S(s.visit_time, 8), S(s.purpose, 60) || labelOf(taskType), S(s.description, 2000),
            status, i + 1,
-           s.expected_recovery == null ? null : Number(s.expected_recovery),
+           s.expected_recovery == null || s.expected_recovery === '' ? null : Number(s.expected_recovery),
            s.outstanding == null ? null : Number(s.outstanding),
-           // What the visit is meant to add, so the approver and the executive are
+           // What the task is meant to add, so the manager and the executive are
            // working to the same number rather than to a remark.
            s.growth_target == null || s.growth_target === '' ? null : Number(s.growth_target),
            assigning ? staff.person_code : null, assigning ? staff.name : null,
            assigning ? staff.person_code : null, assigning ? staff.name : null,
-           assigning ? new Date() : null]);
+           assigning ? new Date() : null,
+           taskType, subject, priority, objective, 'pending', inputLang]);
         n++;
       }
       if (!n && dupes.length) {
         return res.status(409).json({
-          detail: `${dupes.length === 1 ? dupes[0] + ' is' : 'Those agencies are'} already planned for `
-                + `${owner.name} on ${b.tour_date}.`,
+          detail: `${dupes.length === 1 ? dupes[0] + ' already has' : 'Those already have'} `
+                + `a ${labelOf(taskType)} for ${owner.name} on ${dueDate}.`,
           code: 'duplicate_stop', duplicates: dupes });
       }
-      res.json({ ok: true, stops: n, status, for: owner.person_code, assigned: assigning,
+      if (!n) return res.status(400).json({ detail: 'Nothing could be assigned — check the targets and the branch.' });
+      res.json({ ok: true, stops: n, tasks: n, status, task_type: taskType,
+                 task_label: labelOf(taskType), subject, priority, due_date: dueDate,
+                 for: owner.person_code, assigned: assigning,
                  skipped_duplicates: dupes.length, duplicates: dupes });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
-  });
+  };
+  app.post('/api/dcr-m/task', assignTask);
+  app.post('/api/dcr-m/tour', assignTask);   // the older path — same handler, type defaults to 'tour'
+
+  // The catalogue, so the form and the phone render from one definition.
+  app.get('/api/dcr-m/task-types', (req, res) => res.json({ types: TASK_TYPES, priorities: PRIORITIES }));
 
   app.get('/api/dcr-m/tour', async (req, res) => {
     try {
@@ -1163,6 +1223,14 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       else if (status === 'submitted') { where.push(`p.status = 'submitted' AND p.tour_date >= ?`); args.push(today()); }
       else if (status !== 'all') { where.push('p.status = ?'); args.push(status); }
       if (unit) { where.push('p.unit_code = ?'); args.push(unit); }
+      const taskType = isTaskType(req.query.task_type) ? String(req.query.task_type) : null;
+      if (taskType) { where.push('p.task_type = ?'); args.push(taskType); }
+      /* Approval status and execution status answer different questions — "may this go
+         ahead" and "has it been done" — so they filter independently. */
+      const execSt = ['pending', 'in_progress', 'done', 'open'].includes(String(req.query.exec_status || ''))
+        ? String(req.query.exec_status) : null;
+      if (execSt === 'open') where.push("COALESCE(p.exec_status,'pending') <> 'done'");
+      else if (execSt) { where.push("COALESCE(p.exec_status,'pending') = ?"); args.push(execSt); }
       // Decided plans are still worth looking back at; the window keeps that bounded.
       if (status !== 'submitted' && status !== 'lapsed') {
         where.push('p.tour_date >= DATE_SUB(CURDATE(), INTERVAL 45 DAY)');
@@ -1173,7 +1241,9 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
                 p.target_type, p.target_code, p.target_name, p.visit_time, p.purpose,
                 p.description, p.status, p.seq_no, p.growth_target, p.expected_recovery,
                 p.outstanding_snap, p.created_at, p.assigned_by_name,
-                p.approved_by_name, p.approved_at, p.reject_reason
+                p.approved_by_name, p.approved_at, p.reject_reason,
+                p.task_type, p.subject, p.priority, p.objective, p.exec_status,
+                p.completed_at, p.completion_remarks
            FROM dcr_tour_plan p
           WHERE ${where.join(' AND ')}
           ORDER BY p.tour_date, p.staff_name, COALESCE(p.seq_no, 999)
@@ -1229,6 +1299,10 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         const a = agInfo.get(k) || {}, c = compInfo.get(k) || {};
         return {
           id: r.id, tour_date: r.tour_date, status: r.status,
+          task_type: r.task_type || 'tour', task_label: labelOf(r.task_type || 'tour'),
+          subject: r.subject || null, priority: r.priority || 'normal',
+          objective: r.objective || null, exec_status: r.exec_status || 'pending',
+          completed_at: r.completed_at || null, completion_remarks: r.completion_remarks || null,
           person_code: r.staff_person_code, person_name: r.staff_name,
           designation: LEVEL_ROLE[lvlOf.get(r.staff_person_code)] || null,
           unit_code: r.unit_code, unit_name: unitNames[r.unit_code] || r.unit_code,
@@ -1593,6 +1667,238 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
   });
 
   // ══ ATTENDANCE (centre, geofenced) ═════════════════════════════════════════
+  /* MY TASKS — everything assigned to me that is still live, bucketed the way an
+     executive actually triages: what is late, what is urgent, what is due today, what is
+     finished. The buckets are computed here rather than in the browser so the phone and
+     any other client cannot disagree about what "overdue" means.
+
+     A task counts as MINE once it is approved, or once I filed it myself and it was
+     approved — a submitted request awaiting a decision is not yet work to do. */
+  app.get('/api/dcr-m/tasks/mine', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const who = S(req.query.person_code, 20) || staff.person_code;
+      if (who !== staff.person_code) {
+        const team = await subordinates(staff, await scopeUnits(req));
+        if (!team.some(t => t.person_code === who)) return res.status(403).json({ detail: 'Not your team member' });
+      }
+      const days = Math.min(120, Math.max(7, Number(req.query.days) || 45));
+
+      const { rows } = await q(
+        `SELECT p.id, p.tour_date, p.unit_code, p.target_type, p.target_code, p.target_name,
+                p.visit_time, p.purpose, p.description, p.status, p.seq_no,
+                p.growth_target, p.expected_recovery, p.outstanding_snap,
+                p.assigned_by_name, p.task_type, p.subject, p.priority, p.objective,
+                p.exec_status, p.started_at, p.completed_at, p.completion_remarks, p.created_at
+           FROM dcr_tour_plan p
+          WHERE p.staff_person_code = ?
+            AND p.status = 'approved'
+            AND p.tour_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+          ORDER BY p.tour_date, FIELD(p.priority,'urgent','high','normal','low'), COALESCE(p.seq_no, 999)
+          LIMIT 400`, [who, days]);
+
+      const t = today();
+      const PRI_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
+      const rowsOut = rows.map(r => ({
+        id: r.id, due_date: r.tour_date, unit_code: r.unit_code,
+        task_type: r.task_type || 'tour', task_label: labelOf(r.task_type || 'tour'),
+        subject: r.subject || r.purpose || labelOf(r.task_type || 'tour'),
+        priority: r.priority || 'normal',
+        objective: r.objective || null, instructions: r.description || null,
+        target_type: r.target_type, target_code: r.target_code, target_name: r.target_name,
+        visit_time: r.visit_time, purpose: r.purpose,
+        growth_target: r.growth_target, expected_recovery: r.expected_recovery,
+        outstanding: r.outstanding_snap,
+        assigned_by: r.assigned_by_name || null,
+        exec_status: r.exec_status || 'pending',
+        started_at: r.started_at, completed_at: r.completed_at,
+        completion_remarks: r.completion_remarks || null,
+        days_late: r.exec_status === 'done' ? 0
+          : Math.max(0, Math.round((new Date(t) - new Date(String(r.tour_date).slice(0, 10))) / 86400000)),
+      }));
+
+      /* A task belongs to exactly one bucket, checked in this order — a job that is both
+         late and urgent is a late job, because that is the one that has already cost
+         something. */
+      const done      = rowsOut.filter(r => r.exec_status === 'done');
+      const live      = rowsOut.filter(r => r.exec_status !== 'done');
+      const overdue   = live.filter(r => String(r.due_date).slice(0, 10) < t);
+      const rest      = live.filter(r => String(r.due_date).slice(0, 10) >= t);
+      const todayList = rest.filter(r => String(r.due_date).slice(0, 10) === t);
+      const highPri   = rest.filter(r => String(r.due_date).slice(0, 10) > t
+                                      && ['urgent', 'high'].includes(r.priority));
+      const upcoming  = rest.filter(r => String(r.due_date).slice(0, 10) > t
+                                      && !['urgent', 'high'].includes(r.priority));
+      const bySeverity = (a, b) => (PRI_RANK[a.priority] - PRI_RANK[b.priority]) || (b.days_late - a.days_late);
+
+      res.json({
+        person_code: who, today: t,
+        buckets: {
+          overdue:   overdue.sort((a, b) => b.days_late - a.days_late || bySeverity(a, b)),
+          high:      highPri.sort(bySeverity),
+          today:     todayList.sort(bySeverity),
+          upcoming:  upcoming.sort((a, b) => String(a.due_date).localeCompare(String(b.due_date))),
+          completed: done.sort((a, b) => String(b.completed_at || '').localeCompare(String(a.completed_at || ''))),
+        },
+        counts: {
+          overdue: overdue.length, high: highPri.length, today: todayList.length,
+          upcoming: upcoming.length, completed: done.length, total: rowsOut.length,
+        },
+      });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  /* Moving a task along. Only the person it was given to may do it — a manager who wants
+     it closed has to say so to the executive, not tick it off for them. */
+  app.post('/api/dcr-m/task/progress', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const b = req.body || {};
+      const id = Number(b.id);
+      const action = String(b.action || '');
+      if (!id) return res.status(400).json({ detail: 'id is required' });
+      if (!['start', 'done', 'reopen'].includes(action)) {
+        return res.status(400).json({ detail: 'action must be start, done or reopen' });
+      }
+      const { rows } = await q(
+        `SELECT id, staff_person_code, exec_status, status FROM dcr_tour_plan WHERE id = ?`, [id]);
+      const row = rows[0];
+      if (!row) return res.status(404).json({ detail: 'Task not found' });
+      if (row.staff_person_code !== staff.person_code) {
+        return res.status(403).json({ detail: 'That task was not assigned to you' });
+      }
+      if (row.status !== 'approved') {
+        return res.status(409).json({ detail: 'That task is not approved yet', code: 'not_approved' });
+      }
+
+      if (action === 'start') {
+        await q(`UPDATE dcr_tour_plan SET exec_status = 'in_progress',
+                    started_at = COALESCE(started_at, NOW()) WHERE id = ?`, [id]);
+      } else if (action === 'done') {
+        await q(`UPDATE dcr_tour_plan SET exec_status = 'done', completed_at = NOW(),
+                    completion_remarks = ?, started_at = COALESCE(started_at, NOW()) WHERE id = ?`,
+          [S(b.remarks, 2000), id]);
+      } else {
+        await q(`UPDATE dcr_tour_plan SET exec_status = 'in_progress',
+                    completed_at = NULL WHERE id = ?`, [id]);
+      }
+      res.json({ ok: true, id, exec_status: action === 'done' ? 'done' : 'in_progress' });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  /* TASK STATUS for whoever is above the work — a reporting incharge over their own
+     downline, an admin over everything. The same rows the executive sees on the phone,
+     counted the ways a manager asks about them: by person, by agency, by hawker, by task
+     type, by branch. Grouping is done here rather than in the browser so a "12 open"
+     on one screen cannot be a different twelve on another.
+
+     Admin without a downline sees the whole scope; anyone else sees their own team, the
+     same recursive downline the approval queue uses. */
+  app.get('/api/dcr-m/tasks/overview', async (req, res) => {
+    try {
+      const isAdmin = !!(req.auth && req.auth.isAdmin);
+      const staff = await staffOf(req);
+      if (!staff && !isAdmin) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const units = await scopeUnits(req);
+      const team = staff ? await subordinates(staff, units) : [];
+      const codes = team.map(t => t.person_code);
+      /* An incharge's own tasks belong in their view too — work assigned to them by
+         someone above is still work they are answerable for. */
+      if (staff && !codes.includes(staff.person_code)) codes.push(staff.person_code);
+      const anyone = isAdmin && !team.length;
+      if (!codes.length && !anyone) return res.json({ rows: [], counts: {}, groups: {}, team_size: 0 });
+
+      const days = Math.min(180, Math.max(7, Number(req.query.days) || 60));
+      const where = anyone ? ['1=1'] : [`p.staff_person_code IN (${codes.map(() => '?').join(',')})`];
+      const args = anyone ? [] : [...codes];
+      if (anyone && Array.isArray(units) && units.length) {
+        where.push(`p.unit_code IN (${units.map(() => '?').join(',')})`); args.push(...units);
+      }
+      where.push("p.status = 'approved'");
+      where.push('p.tour_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)'); args.push(days);
+
+      const unit = S(req.query.unit_code, 8) || null;
+      if (unit) { where.push('p.unit_code = ?'); args.push(unit); }
+      const taskType = isTaskType(req.query.task_type) ? String(req.query.task_type) : null;
+      if (taskType) { where.push('p.task_type = ?'); args.push(taskType); }
+      const execSt = ['pending', 'in_progress', 'done', 'open'].includes(String(req.query.exec_status || ''))
+        ? String(req.query.exec_status) : null;
+      if (execSt === 'open') where.push("COALESCE(p.exec_status,'pending') <> 'done'");
+      else if (execSt) { where.push("COALESCE(p.exec_status,'pending') = ?"); args.push(execSt); }
+      const person = S(req.query.person_code, 20) || null;
+      if (person) { where.push('p.staff_person_code = ?'); args.push(person); }
+
+      const { rows } = await q(
+        `SELECT p.id, p.tour_date, p.staff_person_code, p.staff_name, p.unit_code,
+                p.target_type, p.target_code, p.target_name, p.task_type, p.subject,
+                p.priority, p.objective, p.description, p.exec_status, p.started_at,
+                p.completed_at, p.completion_remarks, p.assigned_by_name,
+                p.expected_recovery, p.growth_target
+           FROM dcr_tour_plan p
+          WHERE ${where.join(' AND ')}
+          ORDER BY p.tour_date DESC, FIELD(p.priority,'urgent','high','normal','low')
+          LIMIT 800`, args);
+
+      const t = today();
+      const out = rows.map(r => {
+        const st = r.exec_status || 'pending';
+        const late = st !== 'done' && String(r.tour_date).slice(0, 10) < t;
+        return {
+          id: r.id, due_date: r.tour_date, unit_code: r.unit_code,
+          person_code: r.staff_person_code, person_name: r.staff_name,
+          task_type: r.task_type || 'tour', task_label: labelOf(r.task_type || 'tour'),
+          subject: r.subject || null, priority: r.priority || 'normal',
+          objective: r.objective || null, instructions: r.description || null,
+          target_type: r.target_type, target_code: r.target_code, target_name: r.target_name,
+          exec_status: st, overdue: late,
+          days_late: late ? Math.round((new Date(t) - new Date(String(r.tour_date).slice(0, 10))) / 86400000) : 0,
+          started_at: r.started_at, completed_at: r.completed_at,
+          completion_remarks: r.completion_remarks || null,
+          assigned_by: r.assigned_by_name || null,
+          expected_recovery: r.expected_recovery, growth_target: r.growth_target,
+        };
+      });
+
+      // One pass, several ways of asking the same question.
+      const tally = (keyFn, labelFn) => {
+        const m = new Map();
+        out.forEach(r => {
+          const k = keyFn(r); if (k == null || k === '') return;
+          const e = m.get(k) || { key: k, label: labelFn(r), total: 0, pending: 0, in_progress: 0, done: 0, overdue: 0 };
+          e.total++; e[r.exec_status === 'done' ? 'done' : r.exec_status === 'in_progress' ? 'in_progress' : 'pending']++;
+          if (r.overdue) e.overdue++;
+          m.set(k, e);
+        });
+        return [...m.values()].sort((a, b) => (b.overdue - a.overdue) || (b.total - a.total));
+      };
+
+      res.json({
+        today: t, team_size: team.length, scope: anyone ? 'all' : 'downline',
+        counts: {
+          total: out.length,
+          pending: out.filter(r => r.exec_status === 'pending').length,
+          in_progress: out.filter(r => r.exec_status === 'in_progress').length,
+          done: out.filter(r => r.exec_status === 'done').length,
+          overdue: out.filter(r => r.overdue).length,
+        },
+        groups: {
+          executive: tally(r => r.person_code, r => r.person_name || r.person_code),
+          agency:    tally(r => r.target_type === 'agent'  ? `${r.unit_code}|${r.target_code}` : null,
+                           r => r.target_name || r.target_code),
+          hawker:    tally(r => r.target_type === 'hawker' ? `${r.unit_code}|${r.target_code}` : null,
+                           r => r.target_name || r.target_code),
+          area:      tally(r => r.target_type === 'area'   ? `${r.unit_code}|${r.target_code}` : null,
+                           r => r.target_name || r.target_code),
+          task_type: tally(r => r.task_type, r => r.task_label),
+          branch:    tally(r => r.unit_code, r => r.unit_code),
+        },
+        rows: out,
+      });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
   app.post('/api/dcr-m/attendance', async (req, res) => {
     try {
       const staff = await staffOf(req);

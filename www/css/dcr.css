@@ -172,6 +172,9 @@
 .dcr-mic { width: 34px; height: 32px; font-size: 15px; }
 .dcr-mic-lang { min-width: 34px; height: 32px; padding: 0 7px; font-size: 11.5px; font-weight: 600; }
 .dcr-mic:active, .dcr-mic-lang:active { background: var(--d-soft); }
+/* Drawn but inert — the browser cannot dictate, and a missing button read as a
+   missing feature. Tapping it says why. */
+.dcr-mic.off { opacity: .45; }
 .dcr-mic.on { background: var(--d-bad-bg); border-color: var(--d-bad); color: var(--d-bad);
   animation: dcrPulse 1.1s ease-in-out infinite; }
 @keyframes dcrPulse { 50% { opacity: .55; } }
@@ -221,7 +224,12 @@
 /* Unapproved plan: visible so the executive knows it is filed, dimmed and inert
    so it does not read as something they can act on. */
 /* Active / Closed filter above the picker list. */
-.dcr-chips { display: flex; gap: 7px; margin-bottom: 10px; }
+/* Five task buckets do not fit across a phone, so the row scrolls rather than wrapping
+   into two lines that push the first card off the screen. */
+.dcr-chips { display: flex; gap: 7px; margin-bottom: 10px; overflow-x: auto;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
+.dcr-chips::-webkit-scrollbar { display: none; }
+.dcr-chips > .dcr-chip { flex: 0 0 auto; white-space: nowrap; }
 .dcr-chip { border: 1px solid var(--d-line); background: var(--d-card); color: var(--d-mut);
   border-radius: 20px; padding: 6px 14px; font: inherit; font-size: 12.5px; font-weight: 500;
   text-transform: none; letter-spacing: normal; cursor: pointer; min-height: 34px; }
