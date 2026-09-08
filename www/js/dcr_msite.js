@@ -1124,8 +1124,16 @@ function _hawkerPanel() {
   const cell = (k, v) => (v == null || v === '' || v === 0)
     ? '' : `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
   const tel = String(h.mobile || '').replace(/\D/g, '').slice(-10);
-  const trendTone = h.supply_trend_pct == null ? 'var(--d-ink)'
-    : h.supply_trend_pct < 0 ? 'var(--d-bad)' : 'var(--d-ok)';
+  /* A bare "0%" beside a number reads as an error, not as "unchanged" — the card showed
+     "84 0%" for a hawker who lifts exactly 84 copies every day, which is the most stable
+     supply on the round and looked like a fault. The comparison is named, and no movement
+     is said in words. */
+  const p = h.supply_trend_pct;
+  const trendTxt = p == null ? ''
+    : p === 0 ? `<span style="font-size:11px;color:var(--d-mut);font-weight:400"> · ${T('no change')}</span>`
+    : `<span style="font-size:11px;color:${p < 0 ? 'var(--d-bad)' : 'var(--d-ok)'};font-weight:400"> · ${p > 0 ? '▲' : '▼'} ${Math.abs(p)}%</span>`;
+  const trendTip = p == null ? T('Copies per day over the days he lifted, last 30 days')
+    : T('Copies per day over the days he lifted, last 30 days, against the 30 days before');
   return `<div class="dcr-auto">
     <div style="display:flex;justify-content:space-between;gap:9px;align-items:flex-start">
       <div style="min-width:0">
@@ -1143,8 +1151,7 @@ function _hawkerPanel() {
       ${cell(T('Centre'), esc(h.centre || ''))}
       ${cell(T('Vendor mobile'), tel ? esc(h.mobile) : '')}
       ${cell(T('Centre incharge'), esc(h.centre_incharge || ''))}
-      ${cell(T('Copies / day'), _NN(h.daily_copies) + (h.supply_trend_pct == null ? ''
-        : ` <span style="font-size:11px;color:${trendTone};font-weight:400">${h.supply_trend_pct > 0 ? '+' : ''}${h.supply_trend_pct}%</span>`))}
+      ${cell(`<span title="${esc(trendTip)}">${T('Copies / day')}</span>`, _NN(h.daily_copies) + trendTxt)}
       ${cell(T('This month'), _NN(h.month_copies) + ' cp')}
       ${cell(T('Beat boys'), h.beat_boys == null ? '' : _NN(h.beat_boys))}
       ${cell(T('Other newspapers'), h.other_newspaper_copies == null ? '' : _NN(h.other_newspaper_copies) + ' cp')}
