@@ -1158,21 +1158,35 @@ function _approvals() {
   return (inch ? _pendingQueue() : '') + _myPlans() + _todaysApproved();
 }
 
+/* A plan whose date has passed can no longer be approved — the server refuses it — so it
+   is not a decision anyone still has, and showing it as "Awaiting approval" is simply
+   wrong. It leaves both lists, and a single line says how many lapsed so the backlog is
+   acknowledged rather than swallowed at midnight. Same rule as the web board. */
+const _dcrToday = () => new Date().toISOString().slice(0, 10);
+const _isLapsed = r => String(r.tour_date || '').slice(0, 10) < _dcrToday();
+const _lapsedNote = (n, whose) => n ? `<div class="dcr-card" style="font-size:11.5px;color:var(--d-mut);text-align:center">
+  ${n} ${whose === 'mine' ? T(n === 1 ? 'of my plans lapsed — the date passed before it was approved'
+                                      : 'of my plans lapsed — the date passed before they were approved')
+                          : T(n === 1 ? 'team plan lapsed — too old to approve now'
+                                      : 'team plans lapsed — too old to approve now')}</div>` : '';
+
 function _pendingQueue() {
   _loadPending();
-  const rows = DM.pending;
-  if (!rows) return _sec('Waiting for my approval') + `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">${T('Loading…')}</div>`;
+  const all = DM.pending;
+  if (!all) return _sec('Waiting for my approval') + `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">${T('Loading…')}</div>`;
+  const rows = all.filter(r => !_isLapsed(r));
+  const lapsed = all.length - rows.length;
   if (!rows.length) {
     return _sec('Waiting for my approval') + `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut);text-align:center">
-      Nothing waiting on you${DM.teamSize ? ` · ${DM.teamSize} in your team` : ''}.</div>`;
+      Nothing waiting on you${DM.teamSize ? ` · ${DM.teamSize} in your team` : ''}.</div>` + _lapsedNote(lapsed, 'team');
   }
-  return _sec(`Waiting for my approval · ${rows.length}`) + rows.map(r => `<div class="dcr-card">
+  return _sec(`Waiting for my approval · ${rows.length}`) + _lapsedNote(lapsed, 'team') + rows.map(r => `<div class="dcr-card">
     <div style="display:flex;justify-content:space-between;gap:9px;align-items:flex-start;margin-bottom:8px">
       <div style="min-width:0">
         <div style="font-size:14.5px;font-weight:650;color:var(--d-ink)">${esc(r.staff_name || r.staff_person_code)}</div>
         <div style="font-size:11.5px;color:var(--d-mut);margin-top:2px">${esc(r.role || '')}${r.unit_code ? ' · ' + esc(r.unit_code) : ''} · ${esc(String(r.tour_date))}</div>
       </div>
-      ${r.overdue ? _tag('Overdue', 'bad') : _tag(`${r.stops} ${r.stops === 1 ? 'stop' : 'stops'}`, 'info')}
+      ${_tag(`${r.stops} ${r.stops === 1 ? 'stop' : 'stops'}`, 'info')}
     </div>
     <div style="font-size:12px;color:var(--d-mut);margin-bottom:9px;line-height:1.5">${esc(r.targets || '')}</div>
     ${Number(r.outstanding) > 0 ? `<div style="font-size:11.5px;color:var(--d-mut);margin-bottom:9px">Outstanding on route ${_INR(r.outstanding)}${Number(r.expected_recovery) > 0 ? ` · expects ${_INR(r.expected_recovery)}` : ''}</div>` : ''}
@@ -1189,10 +1203,12 @@ function _myPlans() {
   _loadMine();
   const rows = DM.mine;
   if (!rows) return '';
-  const open = rows.filter(r => ['submitted', 'rejected'].includes(r.status));
-  if (!open.length) return '';
+  const openAll = rows.filter(r => ['submitted', 'rejected'].includes(r.status));
+  const open = openAll.filter(r => !_isLapsed(r));
+  const lapsed = openAll.length - open.length;
+  if (!open.length) return _lapsedNote(lapsed, 'mine');
   const appr = DM.ctx && DM.ctx.approver;
-  return _sec('My tour plans') + open.map(r => `<div class="dcr-card">
+  return _sec('My tour plans') + _lapsedNote(lapsed, 'mine') + open.map(r => `<div class="dcr-card">
     <div style="display:flex;justify-content:space-between;gap:9px;align-items:flex-start">
       <div style="min-width:0">
         <div style="font-size:14px;color:var(--d-ink)">${esc(r.target_name || r.target_code)}</div>
