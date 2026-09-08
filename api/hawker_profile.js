@@ -116,15 +116,40 @@ module.exports = function registerHawkerProfile({ app, q, getScopeUnitCodes }) {
       /* The reporting line, read from the centre incharge's own mapping rather than the
          stale field_officer columns on hawker_master. exec_hierarchy_mapping is synced
          from Oracle, so a change in the ERP shows here on the next sync instead of
-         living on in a copied name. */
-      const { rows: chainRows } = master.center_incharge_code
+         living on in a copied name.
+
+         Anchored on the CENTRE, not the hawker record. A hawker belongs to a centre, the
+         centre has an incharge, and that incharge reports to an edition incharge — so
+         where the hawker's own row carries no incharge, the centre's supply feed is
+         asked who is running it. */
+      let ciCode = master.center_incharge_code || null;
+      let ciName = master.center_incharge_name || null;
+      if (!ciCode && master.hawker_center_code) {
+        const { rows: cr } = await q(
+          `SELECT center_incharge ci, center_incharge_name ci_name
+             FROM hawker_supply
+            WHERE loc_id = ? AND hwk_cent_code = ?
+              AND center_incharge IS NOT NULL AND center_incharge <> ''
+            ORDER BY supply_date DESC LIMIT 1`,
+          [unit, master.hawker_center_code]);
+        if (cr[0]) { ciCode = cr[0].ci; ciName = ciName || cr[0].ci_name; }
+      }
+
+      /* Matched on (unit, code) first and on the code alone second. 1,779 hawkers sit in
+         a branch whose centre incharge Oracle maps under a different unit_code; refusing
+         the looser match left them with no reporting line at all over what is only a
+         bookkeeping difference. */
+      const { rows: chainRows } = ciCode
         ? await q(`SELECT edtn_incharge, edtn_incharge_name, circ_incharge_name, zonal_head_name,
                           vp_circulation_name
                      FROM exec_hierarchy_mapping
-                    WHERE unit_code = ? AND exec_code = ? LIMIT 1`,
-            [unit, master.center_incharge_code])
+                    WHERE exec_code = ?
+                      AND edtn_incharge_name IS NOT NULL AND edtn_incharge_name <> ''
+                    ORDER BY (unit_code = ?) DESC LIMIT 1`, [ciCode, unit])
         : { rows: [] };
       const chain = chainRows[0] || {};
+      // A centre incharge found through the centre still belongs on the card.
+      if (ciName && !master.center_incharge_name) master.center_incharge_name = ciName;
       // Surfaced to the detail groups under the underscore keys declared above.
       master._edtn_incharge_name = chain.edtn_incharge_name || null;
       master._circ_incharge_name = chain.circ_incharge_name || null;
@@ -239,7 +264,9 @@ module.exports = function registerHawkerProfile({ app, q, getScopeUnitCodes }) {
           unit_code: unit, unit_name: master.unit_name,
           hawker_center_code: master.hawker_center_code,
           hawker_center_name: master.hawker_center_name,
-          center_incharge_code: master.center_incharge_code,
+          // ciCode, not master's — it carries the centre-derived incharge where the
+          // hawker's own row has none.
+          center_incharge_code: ciCode || null,
           center_incharge_name: master.center_incharge_name,
           edtn_incharge_code: chain.edtn_incharge || null,
           edtn_incharge_name: chain.edtn_incharge_name || null,
