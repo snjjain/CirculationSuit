@@ -1902,6 +1902,85 @@ function _apVisitRow(v) {
   </div>`;
 }
 
+/* ══ One description of an agency, built once and rendered twice ══
+   The full page and the flyout panel were assembled independently and had drifted apart.
+   The panel knew about Overdue, the agency's address and class, the six-month bill /
+   net-receipt table and the six-month average-supply table. The page knew about nearby
+   agencies, the month bars and the list of receipts. Whichever one you opened you were
+   missing something the other had — for one agency, on one screen, that is a
+   discrepancy like any other. Both now read from this. */
+function _apModel(d) {
+  const id = d.identity || {}, m = d.metrics || {}, orx = d.opportunity_risk || {};
+  const mm = _msMap();
+  const ms = (mm && mm.available && mm.agency && mm.agency[`${id.unit_code}|${id.agcd}`]) || null;
+  const MN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const mn = lbl => { const x = /^(\d{4})-(\d{2})$/.exec(String(lbl || '')); return x ? `${MN[+x[2] - 1]} ${x[1]}` : String(lbl || '—'); };
+  const t = d.trends || {};
+
+  const kpis = [
+    { icon: '📦', label: 'Current Supply', value: _apFmtN(m.current_supply) + ' cp', sub: 'copies/day', status: 'info' },
+    { icon: '📈', label: 'Supply Trend',
+      value: m.supply_trend_pct == null ? '—' : (m.supply_trend_pct >= 0 ? '▲ ' : '▼ ') + Math.abs(m.supply_trend_pct) + '%',
+      sub: 'vs last month',
+      status: m.supply_trend_pct == null ? 'mute' : m.supply_trend_pct >= 0 ? 'good' : 'bad',
+      tone: m.supply_trend_pct == null ? null : m.supply_trend_pct >= 0 ? '#15803d' : '#b91c1c' },
+    { icon: '💳', label: 'Collection Efficiency',
+      value: m.collection_efficiency_pct == null ? '—' : m.collection_efficiency_pct + '%',
+      sub: 'net receipt over bill',
+      status: m.collection_efficiency_pct == null ? 'mute' : m.collection_efficiency_pct >= 80 ? 'good' : m.collection_efficiency_pct >= 50 ? 'warn' : 'bad' },
+    { icon: '💰', label: 'Outstanding', value: _apFmtC(m.outstanding), sub: 'current balance',
+      status: m.outstanding > 100000 ? 'bad' : m.outstanding > 0 ? 'warn' : 'good',
+      tone: (m.outstanding || 0) > 0 ? '#b91c1c' : null },
+  ];
+  // Overdue is the balance less this month's bill — owed, but not yet late.
+  if (m.overdue != null) kpis.push({ icon: '⏰', label: 'Overdue', value: _apFmtC(m.overdue),
+    sub: 'excludes this month’s bill', status: (m.overdue || 0) > 0 ? 'bad' : 'good',
+    tone: (m.overdue || 0) > 0 ? '#b91c1c' : null });
+  kpis.push({ icon: '🎯', label: 'Growth Headroom', value: '+' + _apFmtN(m.growth_potential_copies) + ' cp',
+    sub: 'to its own 30-day peak', status: m.growth_potential_copies > 0 ? 'info' : 'mute' });
+  kpis.push({ icon: '🗓', label: 'Last Visit', value: _apDaysAgo(m.last_visit_days_ago), sub: m.last_visit_date || '',
+    status: m.last_visit_days_ago == null ? 'bad' : m.last_visit_days_ago <= 7 ? 'good' : m.last_visit_days_ago <= 21 ? 'warn' : 'bad' });
+  if (ms) {
+    kpis.push({ icon: '📊', label: 'Market Share', value: ms.share_pct == null ? '—' : ms.share_pct + '%',
+      sub: `of ${_apFmtN(ms.total_mkt)} mkt copies · ${mm.period}`,
+      status: ms.share_pct == null ? 'mute' : ms.share_pct >= 50 ? 'good' : 'bad',
+      tone: ms.share_pct != null && ms.share_pct < 50 ? '#b91c1c' : '#15803d' });
+    if (ms.top_comp) kpis.push({ icon: '⚔️', label: 'Top Competitor', value: esc(ms.top_comp),
+      sub: _apFmtN(ms.top_comp_copies) + ' cp', status: 'warn', tone: '#b45309', pre: true });
+  }
+  if (orx.score != null) kpis.push({ icon: '⭐', label: 'Rating Score', value: String(orx.score),
+    sub: 'agency rating engine', status: 'info' });
+
+  const facts = [
+    ['Code', id.agcd], ['Branch', id.unit_name || id.unit_code], ['District', id.dist_name],
+    ['City', id.city_name], ['Station', id.station_name || id.station_code],
+    ['Address', id.address], ['Mobile', id.mobile_no1],
+    ['Class', id.ag_class_name], ['ERP status', id.ag_status],
+    ['Executive', id.exec_name, id.exec_code], ['Supplying since', id.supply_start_dt],
+    ['Executive base', id.exec_location ? (id.exec_location.address || (id.exec_location.lat + ', ' + id.exec_location.lng)) : ''],
+  ].filter(f => f[1]);
+
+  const nba = Array.isArray(d.next_best_action) ? d.next_best_action
+            : d.next_best_action ? [typeof d.next_best_action === 'string' ? d.next_best_action : (d.next_best_action.action || '')]
+            : [];
+
+  return {
+    id, m, orx, ms, status: d.status, mn, kpis, facts,
+    brief: (d.ai_brief && (typeof d.ai_brief === 'string' ? d.ai_brief : d.ai_brief.summary)) || '',
+    nba: nba.filter(Boolean),
+    tags: orx.tags || [],
+    ledger:  (t.ledger_months || []).slice(0, 6),
+    /* Copies per day over the days the agency actually supplied — the same basis as the
+       Avg. Supply column everywhere else, so a mid-month start is not read as a slump. */
+    supply6: (t.supply_history || []).slice(0, 6).map(r => ({
+      month: r.month, avg: r.supply_days > 0 ? Math.round(r.total_supply / r.supply_days) : 0,
+      total: r.total_supply, days: r.supply_days })),
+    supplyHist: t.supply_history || [], collHist: t.collection_history || [],
+    visits: d.visits || [], nearby: d.nearby || [], issues: d.issues || [],
+    coll: d.collection_recent || [],
+  };
+}
+
 VIEWS.agency_profile = () => {
   const st = apState();
   _apFetch();
@@ -1910,40 +1989,35 @@ VIEWS.agency_profile = () => {
   if (!st.data) return header + `<div class="card pad" style="color:var(--ink-2)">Loading ${esc(st.name || 'agency')} profile…</div>`;
 
   const d = st.data, id = d.identity, m = d.metrics, orisk = d.opportunity_risk;
+  const mo = _apModel(d);
   const ss = AP_STATUS_STYLE[d.status] || AP_STATUS_STYLE.Healthy;
   const idLine = [id.dist_name, id.city_name, id.unit_name, id.exec_name].filter(Boolean).map(esc).join(' &nbsp;·&nbsp; ');
+
+  const factsGrid = mo.facts.map(([k, v, execCode]) => `<div style="display:flex;gap:8px;font-size:11.5px;line-height:1.8;min-width:0">
+      <span style="flex:none;width:104px;color:var(--ink-3)">${k}</span>
+      ${execCode
+        ? `<a onclick="ccFlyExec('${esc(String(execCode)).replace(/'/g, "\\'")}','${esc(String(v)).replace(/'/g, "\\'")}')" title="Open executive performance" style="cursor:pointer;color:var(--primary);text-decoration:underline;text-underline-offset:2px">${esc(String(v))}</a>`
+        : `<span style="min-width:0;word-break:break-word">${esc(String(v))}</span>`}
+    </div>`).join('');
 
   const identityCard = `<div class="card" style="padding:18px;margin-bottom:14px">
     <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:flex-start">
       <div>
         <div style="font-size:20px;font-weight:800">${esc(id.ag_name)}</div>
         <div style="font-size:12px;color:var(--ink-2);margin-top:3px">${idLine}</div>
-        <div style="font-size:11px;color:var(--ink-3);margin-top:2px">Code ${esc(id.agcd)} · ${esc(id.unit_code)}${(id.station_name || id.station_code) ? ' · Station ' + esc(id.station_name || id.station_code) : ''}${id.mobile_no1 ? ' · 📞 ' + esc(id.mobile_no1) : ''}</div>
-        ${id.exec_location ? `<div style="font-size:11px;color:var(--ink-3);margin-top:2px">👔 Executive base: ${esc(id.exec_location.address || (id.exec_location.lat + ', ' + id.exec_location.lng))}</div>` : ''}
       </div>
-      <div style="background:${ss.bg};color:${ss.color};border-radius:10px;padding:8px 16px;font-weight:700;font-size:13px;white-space:nowrap">${ss.icon} ${esc(d.status)}</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${mo.orx.score != null ? `<span style="font-size:12px;color:var(--ink-2)">Score <b style="color:var(--ink)">${mo.orx.score}</b></span>` : ''}
+        <div style="background:${ss.bg};color:${ss.color};border-radius:10px;padding:8px 16px;font-weight:700;font-size:13px;white-space:nowrap">${ss.icon} ${esc(d.status)}</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:2px 18px;margin-top:12px;padding-top:11px;border-top:1px solid var(--border)">
+      ${factsGrid}
     </div>
   </div>`;
 
-  const trendArrow = m.supply_trend_pct == null ? '' : m.supply_trend_pct >= 0 ? '▲' : '▼';
-  const trendStatus = m.supply_trend_pct == null ? 'mute' : m.supply_trend_pct >= 0 ? 'good' : 'bad';
-  const collStatus = m.collection_efficiency_pct == null ? 'mute' : m.collection_efficiency_pct >= 80 ? 'good' : m.collection_efficiency_pct >= 50 ? 'warn' : 'bad';
-  const visitStatus = m.last_visit_days_ago == null ? 'bad' : m.last_visit_days_ago <= 7 ? 'good' : m.last_visit_days_ago <= 21 ? 'warn' : 'bad';
   const chips = `<div class="vz-kgrid" style="margin-bottom:14px">
-    ${vzKpi({ icon: '📦', label: 'Current Supply', value: _apFmtN(m.current_supply) + ' cp', status: 'info' })}
-    ${vzKpi({ icon: '📈', label: 'Supply Trend', value: (m.supply_trend_pct == null ? '—' : trendArrow + ' ' + Math.abs(m.supply_trend_pct) + '%'), sub: 'vs last month', status: trendStatus })}
-    ${vzKpi({ icon: '💳', label: 'Collection Efficiency', value: (m.collection_efficiency_pct == null ? '—' : m.collection_efficiency_pct + '%'), status: collStatus })}
-    ${vzKpi({ icon: '💰', label: 'Outstanding', value: _apFmtC(m.outstanding), status: m.outstanding > 100000 ? 'bad' : m.outstanding > 0 ? 'warn' : 'good' })}
-    ${vzKpi({ icon: '🎯', label: 'Growth Potential', value: '+' + _apFmtN(m.growth_potential_copies) + ' cp', status: m.growth_potential_copies > 0 ? 'info' : 'mute' })}
-    ${vzKpi({ icon: '🗓', label: 'Last Visit', value: _apDaysAgo(m.last_visit_days_ago), sub: m.last_visit_date || '', status: visitStatus })}
-    ${(() => {
-      const mm = _msMap();
-      const e = mm && mm.available && mm.agency && mm.agency[`${id.unit_code}|${id.agcd}`];
-      if (!e) return '';
-      return vzKpi({ icon: '📊', label: 'Market Share', value: e.share_pct == null ? '—' : e.share_pct + '%',
-          sub: `of ${_apFmtN(e.total_mkt)} mkt copies · ${mm.period}`, status: e.share_pct == null ? 'mute' : e.share_pct >= 50 ? 'good' : 'bad' })
-        + (e.top_comp ? vzKpi({ icon: '⚔️', label: 'Top Competitor', value: esc(e.top_comp), sub: _apFmtN(e.top_comp_copies) + ' cp', status: 'warn' }) : '');
-    })()}
+    ${mo.kpis.map(k => vzKpi({ icon: k.icon, label: k.label, value: k.value, sub: k.sub || '', status: k.status })).join('')}
   </div>`;
 
   const brief = `<div class="card" style="padding:16px;margin-bottom:14px;border-left:4px solid ${ss.color}">
@@ -1987,7 +2061,40 @@ VIEWS.agency_profile = () => {
       </table></div>`
     : `<div style="color:var(--ink-2);font-size:12px">No collection transactions in the last 90 days</div>`;
 
+  /* Bill against net receipt, month by month, on the ERP's own ledger — the same basis
+     as the Collection Efficiency chip above, so the card and the table cannot disagree.
+     This and the average-supply table existed only in the flyout. */
+  const ledgerBody = mo.ledger.length
+    ? `<table class="tbl" style="font-size:12px;width:100%">
+        <thead><tr><th style="text-align:left">Month</th><th class="r">Bill</th><th class="r">Net receipt</th><th class="r">%</th></tr></thead>
+        <tbody>${mo.ledger.map(r => `<tr>
+          <td>${esc(mo.mn(r.month))}</td>
+          <td class="r">${_apFmtC(r.bill)}</td>
+          <td class="r"><b>${_apFmtC(r.net_receipt)}</b></td>
+          <td class="r" style="color:${r.pct == null ? 'var(--ink-2)' : r.pct < 60 ? 'var(--red)' : r.pct < 85 ? 'var(--gold-d)' : 'var(--grn)'};font-weight:700">${r.pct == null ? '—' : r.pct + '%'}</td>
+        </tr>`).join('')}</tbody></table>`
+    : `<div style="color:var(--ink-2);font-size:12px">No billing snapshots for this agency yet</div>`;
+
+  const supplyTblBody = mo.supply6.length
+    ? `<table class="tbl" style="font-size:12px;width:100%">
+        <thead><tr><th style="text-align:left">Month</th><th class="r">Avg / day</th><th class="r">Total copies</th><th class="r">Days</th></tr></thead>
+        <tbody>${mo.supply6.map(r => `<tr>
+          <td>${esc(mo.mn(r.month))}</td>
+          <td class="r"><b>${_apFmtN(r.avg)}</b></td>
+          <td class="r">${_apFmtN(r.total)}</td>
+          <td class="r" style="color:var(--ink-2)">${_apFmtN(r.days)}</td>
+        </tr>`).join('')}</tbody></table>`
+    : `<div style="color:var(--ink-2);font-size:12px">No supply recorded in this period</div>`;
+
+  const nbaBody = mo.nba.length
+    ? `<ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.7">${mo.nba.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`
+    : `<div style="color:var(--ink-2);font-size:12px">Nothing outstanding to act on</div>`;
+
   const sixCards = `<div class="two" style="margin-bottom:14px">
+      ${_apCard('💵', 'Bill &amp; Net Receipt — last 6 months', ledgerBody)}
+      ${_apCard('📦', 'Average Supply — last 6 months', supplyTblBody)}
+    </div>
+    <div class="two" style="margin-bottom:14px">
       ${_apCard('📈', 'Performance Trends', perfBody)}
       ${_apCard('🚀', 'Opportunity &amp; Risk', riskBody)}
     </div>
@@ -1997,14 +2104,12 @@ VIEWS.agency_profile = () => {
     </div>
     <div class="two" style="margin-bottom:14px">
       ${_apCard('⚠️', 'Issues &amp; Complaints', issuesBody)}
-      ${_apCard('💰', 'Collection Insights', collBody)}
+      ${_apCard('💰', 'Collection Receipts', collBody)}
     </div>`;
 
   const nba = `<div class="card" style="padding:16px;border-left:4px solid var(--gold-d)">
     <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-2);margin-bottom:8px">🧠 AI Next Best Action</div>
-    <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.7">
-      ${d.next_best_action.map(a => `<li>${esc(a)}</li>`).join('')}
-    </ul>
+    ${nbaBody}
   </div>`;
 
   return header + identityCard + chips + brief + sixCards + nba;
@@ -4549,7 +4654,17 @@ function _ccCIFetch(x, execCode, unitCode) {
   if (x.ciLoading || x.ciData) return;
   x.ciLoading = true;
   const uc = unitCode || '';
-  const url = `${api.base}/api/command/ci-panel?exec_code=${encodeURIComponent(execCode)}&unit_code=${encodeURIComponent(uc)}`;
+  /* Ask for the window the screen behind this panel is already showing. Without it the
+     panel defaulted to month-to-date while the branch table was on last month, so the
+     same centre incharge carried two different supply figures on one screen. */
+  const cc = _ccState() || {};
+  const wp = new URLSearchParams();
+  wp.set('exec_code', execCode); wp.set('unit_code', uc);
+  if (cc.asOn)    wp.set('as_on',   cc.asOn);
+  if (cc.compare) wp.set('compare', cc.compare);
+  if (cc.range)   wp.set('range',   cc.range);
+  if (cc.range === 'custom' && cc.rangeFrom && cc.rangeTo) { wp.set('range_from', cc.rangeFrom); wp.set('range_to', cc.rangeTo); }
+  const url = `${api.base}/api/command/ci-panel?${wp.toString()}`;
   fetch(url, { headers: api.h() })
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(d => { x.ciData = d; x.ciLoading = false; if (_ccFlyLive()) render(); })
@@ -5158,7 +5273,11 @@ function _ccFlyExecPanel(x) {
   const isCentreOnly = !book && !N_(e.total_supply) && !N_(e.total_outstanding);
   if (isCentreOnly) {
     // Trigger CI data fetch if not yet loaded
-    _ccCIFetch(x, e.executive_code || x.execCode, e.units || '');
+    /* The BRANCH CODE, not e.units — that column is a display name ("JAIPUR RP"), and a
+       centre incharge's exec-perf row comes back empty anyway, so this was sending an
+       empty scope and reading the whole country: slow, and the copies-per-day divisor
+       became the national calendar instead of the branch's. */
+    _ccCIFetch(x, e.executive_code || x.execCode, x.unitCode || e.main_unit || '');
     if (x.ciLoading) return `<div style="padding:26px;text-align:center;color:#64748b;font-size:13px">Loading centre data…</div>`;
     if (x.ciData && x.ciData._err) return `<div style="padding:20px;color:#b91c1c;font-size:13px">Could not load centre data.<div style="color:#64748b;font-size:11.5px;margin-top:4px">${esc(x.ciData._err)}</div></div>`;
     const ci = x.ciData || {};
@@ -5170,7 +5289,9 @@ function _ccFlyExecPanel(x) {
       const m = t.match(/(\d{2}:\d{2})/);
       lastEntryStr = m ? m[1] : t.slice(11, 16);
     }
-    const txnNote = ci.txn_count_today ? ` (${ci.txn_count_today})` : '';
+    /* The bare "(225)" beside the time meant nothing to a reader — it is the count of
+       hawker supply entries booked that day, so it says so. */
+    const txnNote = ci.txn_count_today ? ` · ${_ccN(ci.txn_count_today)} entries` : '';
 
     // Recent attendance / visit rows table
     const attnTypeLabel = t => t === 'V' ? '🚶 Visit' : '✓ Attn';
@@ -5203,6 +5324,9 @@ function _ccFlyExecPanel(x) {
         ${centerLabel ? `<span style="font-size:11px;font-weight:700;color:#0f172a">${esc(centerLabel)}</span>` : ''}
       </div>
       <div style="font-size:11px;color:#64748b;margin-bottom:12px">Cash sale is collected upfront — collection is always 100% for city centres</div>
+      ${ci.window_from ? `<div style="font-size:10.5px;color:#94a3b8;margin:-8px 0 11px">
+        Avg/day over ${esc(ci.window_from)} → ${esc(ci.window_to)}${ci.prev_from ? `, compared with ${esc(ci.prev_from)} → ${esc(ci.prev_to)}` : ''}
+      </div>` : ''}
       <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:14px">
         ${kpi('Centres managed', ci.centres != null ? _ccN(ci.centres) : '—', '#0ea5e9')}
         ${ci.hawkers
@@ -5214,8 +5338,9 @@ function _ccFlyExecPanel(x) {
               <div style="font-size:15px;font-weight:800;color:#0ea5e9;margin-top:2px;font-variant-numeric:tabular-nums">${_ccN(ci.hawkers)}</div>
             </div>`
           : kpi('Hawkers', '—', '#0ea5e9')}
-        ${kpi('Supply (today)', ci.supply_cur != null ? _ccN(ci.supply_cur) + ' cp' : '—')}
+        ${kpi('Supply (avg/day)', ci.supply_cur != null ? _ccN(ci.supply_cur) + ' cp' : '—')}
         ${kpi('Growth vs prev', ci.growth_pct != null ? (ci.growth_pct > 0 ? '+' : '') + ci.growth_pct + '%' : '—', growClr)}
+        ${kpi('Supply (today)', ci.supply_today != null ? _ccN(ci.supply_today) + ' cp' : '—')}
         ${kpi('Collection %', '100%', '#15803d')}
         ${kpi('Outstanding', '₹0', '#94a3b8')}
         ${kpi('Last receipt entry', lastEntryStr + txnNote, ci.last_entry_today ? '#0f172a' : '#94a3b8')}
@@ -5417,6 +5542,7 @@ function _ccFlyAgencyPanel(a) {
   if (a.loading) return `<div style="padding:26px;text-align:center;color:#64748b;font-size:13px">Loading ${esc(a.name)}…</div>`;
   if (a.err || !a.data) return `<div style="padding:20px;color:#b91c1c;font-size:13px">Could not load this agency.<div style="color:#64748b;font-size:11.5px;margin-top:5px">${esc(a.err || 'No data returned.')}</div></div>`;
   const d = a.data, id = d.identity || {}, m = d.metrics || {}, orx = d.opportunity_risk || {};
+  const mo = _apModel(d);
   const stl = AP_STATUS_STYLE[d.status] || AP_STATUS_STYLE['Underperforming'];
   const pct = v => (v == null ? '—' : (v > 0 ? '+' : '') + v + '%');
   const kpi = (label, val, tone) => `<div style="background:#f8fafc;border:1px solid #eef2f7;border-radius:9px;padding:8px 10px">
@@ -5497,21 +5623,7 @@ function _ccFlyAgencyPanel(a) {
       ${id.ag_status ? `<span style="font-size:10.5px;color:#64748b">· ${esc(id.ag_status)}</span>` : ''}
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
-      ${kpi('Supply', _apFmtN(m.current_supply) + ' cp')}
-      ${kpi('Supply trend', pct(m.supply_trend_pct), (m.supply_trend_pct || 0) < 0 ? '#b91c1c' : '#15803d')}
-      ${kpi('Collection', m.collection_efficiency_pct == null ? '—' : m.collection_efficiency_pct + '%')}
-      ${kpi('Outstanding', _apFmtC(m.outstanding), (m.outstanding || 0) > 0 ? '#b91c1c' : '#0f172a')}
-      ${m.overdue != null ? kpi('Overdue', _apFmtC(m.overdue), (m.overdue || 0) > 0 ? '#b91c1c' : '#0f172a') : ''}
-      ${kpi('Growth headroom', _apFmtN(m.growth_potential_copies) + ' cp')}
-      ${kpi('Last visit', _apDaysAgo(m.last_visit_days_ago))}
-      ${(() => {
-        const mm = _msMap();
-        const e = mm && mm.available && mm.agency && mm.agency[`${id.unit_code}|${id.agcd}`];
-        if (!e) return '';
-        return kpi('Market share', (e.share_pct == null ? '—' : e.share_pct + '%'),
-            e.share_pct != null && e.share_pct < 50 ? '#b91c1c' : '#15803d')
-          + (e.top_comp ? kpi('Top competitor', `${esc(e.top_comp)} · ${_apFmtN(e.top_comp_copies)} cp`, '#b45309') : '');
-      })()}
+      ${mo.kpis.map(k => kpi(k.label, k.pre ? k.value : k.value, k.tone)).join('')}
     </div>
     ${tags ? `<div style="margin-top:10px">${tags}</div>` : ''}
     ${sec('Agency', `<div>
@@ -5532,6 +5644,30 @@ function _ccFlyAgencyPanel(a) {
       ? miniTable(['Month', 'Avg / day', 'Total copies', 'Days'], supRows)
       : `<div style="font-size:11.5px;color:#94a3b8">No supply recorded in this period.</div>`)}
     ${sec('Recent visits', visitTableHtml)}
+    ${/* Everything below existed only on the full page. A flyout that answers most of a
+          question is worse than one that answers all of it — the reader cannot tell
+          which parts are missing. */ ''}
+    ${sec('Supply &amp; collection by month', (mo.supplyHist.length || mo.collHist.length)
+      ? `<div style="font-size:10.5px;color:#94a3b8;margin-bottom:4px">Supply (copies/month)</div>
+         ${_apMonthBars(mo.supplyHist, 'total_supply', '#0ea5e9')}
+         <div style="font-size:10.5px;color:#94a3b8;margin:9px 0 4px">Collection (₹/month)</div>
+         ${_apMonthBars(mo.collHist, 'collection', '#16a34a')}`
+      : '')}
+    ${sec('Opportunity &amp; risk', orx.expected_outcome
+      ? `<div style="font-size:12px;color:#0f172a;line-height:1.6"><b>Expected outcome:</b> ${esc(orx.expected_outcome)}</div>
+         ${orx.decline_pct != null ? `<div style="font-size:11.5px;color:#64748b;margin-top:4px">30-day peak: ${_apFmtN(orx.peak30_supply)} cp · change ${orx.decline_pct}%</div>` : ''}`
+      : '')}
+    ${sec('Nearby agencies', mo.nearby.length
+      ? mo.nearby.map(n => `<div onclick="openAgencyProfile('${qs(id.unit_code)}','${qs(n.agcd)}','${qs(n.ag_name)}')"
+            style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:11.5px;padding:5px 0;border-top:1px solid #f1f5f9">
+            <span><b style="color:#1e3a8a">${esc(n.ag_name)}</b> <span style="color:#94a3b8">${n.distance_km} km</span></span>
+            <span style="color:${n.outstanding > 0 ? '#b91c1c' : '#94a3b8'};font-variant-numeric:tabular-nums">${n.outstanding > 0 ? _apFmtC(n.outstanding) : ''}</span>
+          </div>`).join('')
+      : `<div style="font-size:11.5px;color:#94a3b8">No agencies within 5km with a GPS fix on record</div>`)}
+    ${sec('Collection receipts', mo.coll.length
+      ? miniTable(['Date', 'Mode', 'Amount'], mo.coll.slice(0, 10).map(c => [
+          esc(c.date), `<span style="color:#64748b">${esc(c.payment_mode || '—')}</span>`, _apFmtC(c.amount)]))
+      : `<div style="font-size:11.5px;color:#94a3b8">No collection transactions in the last 90 days</div>`)}
   </div>`;
 }
 

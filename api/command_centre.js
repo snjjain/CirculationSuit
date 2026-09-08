@@ -2212,7 +2212,7 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
       if (!execCode) return res.status(400).json({ detail: 'exec_code required' });
       const unitCode = String(req.query.unit_code || '').trim();
 
-      const { asOn, prev } = await resolveDates(req.query.as_on, req.query.compare);
+      const { asOn, prev, mode } = await resolveDates(req.query.as_on, req.query.compare);
       const win = resolveRangeWindow(asOn, req.query.range || 'mtd');
 
       const today = asOn;
@@ -2221,16 +2221,28 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
       const ucWhereCa = unitCode ? ' AND unit_code = ?' : '';
       const ucPCa    = unitCode ? [unitCode] : [];
 
-      // execCode (e.g. E01827) is the circulation exec code from exec_master/hawker_supply.
-      // dcr_center_attendance.emp_code (e.g. R02073) is the Oracle HR employee code — different system.
-      // Resolve by matching center_incharge_name (from hawker_supply) against executive_name in dcr_center_attendance.
-      // Bound by supply_date: idx_hs_ci covers center_incharge alone, so an unbounded
-      // lookup walks every row this CI has ever had across 10.9M rows (~40 s). Narrowing
-      // to the two dates the panel already reads lets idx_hs_unit/idx_hs_date drive it (~0.1 s).
+      /* execCode (e.g. E01827) is the circulation exec code from exec_master/hawker_supply.
+         dcr_center_attendance.emp_code (e.g. R02073) is the Oracle HR employee code — a
+         different system — so the two are matched through the person's name.
+
+         This lookup is bound to the two dates it actually needs. It used to read
+         BETWEEN prev AND asOn, which sounds narrow but is not: the default comparison is
+         the same date LAST YEAR, so it scanned a full year of a 10.9M-row table and cost
+         34 seconds on its own — the whole reason this panel sat on "Loading centre
+         data…". Two exact dates let the date index drive it. */
       const { rows: nameRows } = await q(
         `SELECT MAX(center_incharge_name) exec_name FROM hawker_supply
-         WHERE center_incharge = ? AND supply_date BETWEEN ? AND ?${unitCode ? ' AND loc_id = ?' : ''}`,
-        [execCode, prev, asOn, ...(unitCode ? [unitCode] : [])]);
+         WHERE center_incharge = ? AND supply_date IN (?, ?)${unitCode ? ' AND loc_id = ?' : ''}`,
+        [execCode, asOn, prev, ...(unitCode ? [unitCode] : [])]);
+
+      /* The centres this incharge holds now. Resolved once here rather than as a join
+         inside the supply scan: joining hawker_supply to itself across two windows made
+         the planner walk both, and cost 13 s where a code list costs a fraction. */
+      const { rows: centreRows } = await q(
+        `SELECT DISTINCT hwk_cent_code cent FROM hawker_supply FORCE INDEX (idx_hs_cover_range)
+          WHERE center_incharge = ?${ucWhere} AND supply_date BETWEEN ? AND ?`,
+        [execCode, ...ucP, win.from, win.to]);
+      const myCentres = centreRows.map(r => r.cent).filter(x => x != null && x !== '');
       const execName = nameRows[0]?.exec_name || null;
       let empCode = execCode; // fallback
       if (execName) {
@@ -2240,7 +2252,21 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
         if (empRows[0]?.emp_code) empCode = empRows[0].emp_code;
       }
 
-      const [hawker, attnSummary, attnRows, receipt, survey] = await Promise.all([
+      /* The comparison window: the same number of days ending at the comparison anchor.
+         Growth was one day against one day — 7 Sept this year against 7 Sept last year —
+         and for a centre incharge who has moved centre, or on a date whose feed is thin,
+         that produces nonsense: GAJENDRA SHEKHAWAT read +3229.3% because the single
+         comparison day held 740 copies against today's 24,637. Every other supply figure
+         in this suite is copies per day across a window, and the branch table behind this
+         very panel showed him at -1.9% for the same period. Two numbers for one person on
+         one screen is not a rounding difference. */
+      const _cf = String(req.query.compare_from || '').trim();
+      const _ct = String(req.query.compare_to || '').trim();
+      const _isD = x => /^\d{4}-\d{2}-\d{2}$/.test(x);
+      const prevWin = (_isD(_cf) && _isD(_ct)) ? { from: _cf, to: _ct } : _shiftWindow(win, mode);
+      const prevFrom = prevWin.from, prevTo = prevWin.to;
+
+      const [hawker, avgs, wdays, attnSummary, attnRows, receipt, survey] = await Promise.all([
         q(`SELECT loc_id unit_code, MAX(center_incharge_name) exec_name,
                   SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) cur,
                   SUM(CASE WHEN supply_date = ? THEN sup_copies ELSE 0 END) prv,
@@ -2253,6 +2279,34 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
              AND supply_date IN (?, ?)
            GROUP BY loc_id`,
           [asOn, prev, asOn, asOn, asOn, asOn, execCode, ...ucP, asOn, prev]),
+
+        /* THE CENTRE, NOT THE PERSON — the same rule the branch table behind this panel
+           uses. Incharges move and centres do not, so both windows are read for the
+           centres this person holds now. Comparing a person's own two windows compares
+           two different sets of centres, which is how GAJENDRA SHEKHAWAT came to read
+           +3229% against a near-zero base while the row behind him said -1.9%.
+
+           Copies divide by the BRANCH's supplying days, not the centre's: a centre that
+           changed hands mid-month splits its days across two incharge codes, and dividing
+           each part by its own short window overstates the rate at both ends. */
+        myCentres.length
+          ? q(`SELECT CASE WHEN supply_date BETWEEN ? AND ? THEN 'cur' ELSE 'prv' END w,
+                      SUM(sup_copies) copies
+                 FROM hawker_supply
+                WHERE hwk_cent_code IN (${myCentres.map(() => '?').join(',')})${ucWhere}
+                  AND (supply_date BETWEEN ? AND ? OR supply_date BETWEEN ? AND ?)
+                GROUP BY w`,
+              [win.from, win.to, ...myCentres, ...ucP, win.from, win.to, prevFrom, prevTo])
+          : Promise.resolve({ rows: [] }),
+
+        // The branch's publishing days in each window — the divisor for both averages.
+        q(`SELECT CASE WHEN supply_date BETWEEN ? AND ? THEN 'cur' ELSE 'prv' END w,
+                  COUNT(DISTINCT supply_date) days
+             FROM hawker_supply
+            WHERE 1=1${ucWhere}
+              AND (supply_date BETWEEN ? AND ? OR supply_date BETWEEN ? AND ?)
+            GROUP BY w`,
+          [win.from, win.to, ...ucP, win.from, win.to, prevFrom, prevTo]),
 
         // Center attendance summary: attn_type A=attendance, V=visit (use empCode from hierarchy_master)
         q(`SELECT
@@ -2299,6 +2353,11 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
       const cur = N(h.cur), prv = N(h.prv);
       const lastEntry = rc.last_entry ? String(rc.last_entry).slice(0, 19) : null;
 
+      const _w = {}; avgs.rows.forEach(r => { _w[r.w] = N(r.copies); });
+      const _d = {}; wdays.rows.forEach(r => { _d[r.w] = N(r.days); });
+      const avgCur  = _d.cur ? Math.round(N(_w.cur) / _d.cur) : null;
+      const avgPrev = _d.prv ? Math.round(N(_w.prv) / _d.prv) : null;
+
       const recentAttn = attnRows.rows.map(r => ({
         date: r.attn_date ? String(r.attn_date).slice(0, 10) : null,
         type: r.attn_type || 'A',
@@ -2315,8 +2374,12 @@ module.exports = function installCommandCentre({ app, q, getScopeUnitCodes }) {
         exec_name: h.exec_name || execCode,
         unit_code: h.unit_code || unitCode,
         as_on: asOn,
-        supply_cur: cur, supply_prev: prv,
-        growth_pct: r1(pct(cur, prv)),
+        // Today's copies stay available, but growth is measured on the windows.
+        supply_today: cur, supply_cur: avgCur != null ? avgCur : cur, supply_prev: avgPrev != null ? avgPrev : prv,
+        supply_day_cur: cur, supply_day_prev: prv,
+        window_from: win.from, window_to: win.to, window_label: win.label,
+        prev_from: prevFrom, prev_to: prevTo,
+        growth_pct: (avgCur != null && avgPrev != null) ? r1(pct(avgCur, avgPrev)) : null,
         centres: N(h.centres), hawkers: N(h.hawkers),
         center_name: h.center_name || null,
         cent_code: h.cent_code || null,
