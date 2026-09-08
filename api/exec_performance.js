@@ -252,6 +252,56 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
     return fetchPromise;
   }
 
+  /* What the whole selected scope carries, regardless of who it is booked to.
+     The executive tables can only ever cover agencies whose executive is active and
+     designated EXEC in the ERP; everything else disappears from them. For Jaipur RP in
+     August that is 85% of the branch's agent supply — 353 agencies still sitting on
+     executives Oracle flags inactive, several of them literally named "NOT APPLICABLE".
+     Reporting only the covered part put 21,34,354 on a card the Command Centre answers
+     with 4,76,725, and there is no reading of "Collection" or "Supply" under which two
+     screens may differ for one branch. So the strip reports the branch, and says how
+     much of it currently has a named executive behind it. */
+  const _scCache = new Map(), _scInflight = new Map();
+  async function scopeTotals(from, to, unitList) {
+    const key = `${from}|${to}|${unitList === null ? '__all__' : [...unitList].sort().join(',')}`;
+    const hit = _scCache.get(key);
+    if (hit && (Date.now() - hit.ts) < CACHE_TTL) return hit.data;
+    if (_scInflight.has(key)) return _scInflight.get(key);
+
+    const p = (async () => {
+      const sdCl = unitCl('unit_code', unitList);
+      const [sup, ou, coll] = await Promise.all([
+        // Copies per day on the suite's rule: each unit divides by its own publishing days.
+        q(`SELECT unit_code, SUM(sup_copy) tot, COUNT(DISTINCT supply_date) d
+             FROM supply_data
+            WHERE supply_date BETWEEN ? AND ?${sdCl.cl}
+            GROUP BY unit_code`, [from, to, ...sdCl.p]),
+        q(`SELECT SUM(cl_amt) os FROM agency_outstanding
+            WHERE period_label = 'CURRENT'${sdCl.cl}`, sdCl.p),
+        collBasis({ from, to, unitCodes: unitList, groupBy: 'unit' }),
+      ]);
+      const supply_total = sup.rows.reduce((a, r) => a + N(r.tot), 0);
+      const supply_avg   = sup.rows.reduce((a, r) => a + (N(r.d) ? Math.round(N(r.tot) / N(r.d)) : 0), 0);
+      const data = {
+        supply_total, supply_avg,
+        outstanding: N(ou.rows[0] && ou.rows[0].os),
+        collection:  coll.totals.net_receipt,
+        billed:      coll.totals.billed,
+        collection_known: coll.known,
+      };
+      _scCache.set(key, { data, ts: Date.now() });
+      _scInflight.delete(key);
+      if (_scCache.size > 50) {
+        const cut = Date.now() - CACHE_TTL * 2;
+        for (const [k, v] of _scCache) if (v.ts < cut) _scCache.delete(k);
+      }
+      return data;
+    })();
+    p.catch(() => _scInflight.delete(key));
+    _scInflight.set(key, p);
+    return p;
+  }
+
   // ══ FILTERS ══
   app.get('/api/exec-perf/filters', async (req, res) => {
     try {
@@ -283,26 +333,44 @@ module.exports = function registerExecPerf({ app, q, getScopeUnitCodes }) {
     try {
       const { from, to } = parseDates(req.query);
       const unitList = await buildUnitList(req);
-      const all = await execMetrics(from, to, unitList);
+      const [all, scope] = await Promise.all([
+        execMetrics(from, to, unitList),
+        scopeTotals(from, to, unitList),
+      ]);
 
-      // Aggregate
+      // What the named, active executives account for.
       const execCount   = new Set(all.map(r => r.executive_code)).size;
       const agencyCount = all.reduce((s, r) => s + r.agency_count, 0);
-      const totalSup    = all.reduce((s, r) => s + r.total_supply, 0);
-      const totalCol    = all.reduce((s, r) => s + r.total_collection, 0);
-      const totalOu     = all.reduce((s, r) => s + r.total_outstanding, 0);
-      const totalBilled = all.reduce((s, r) => s + (r.total_billed || 0), 0);
+      const covSupTot   = all.reduce((s, r) => s + r.total_supply, 0);
+      const covSupAvg   = all.reduce((s, r) => s + r.avg_supply, 0);
+      const covCol      = all.reduce((s, r) => s + r.total_collection, 0);
+      const covOu       = all.reduce((s, r) => s + r.total_outstanding, 0);
+      const covBilled   = all.reduce((s, r) => s + (r.total_billed || 0), 0);
+
+      const colTot = scope.collection_known ? scope.collection : covCol;
+      const bilTot = scope.collection_known ? scope.billed     : covBilled;
 
       res.json({
         from, to,
         exec_count:        execCount,
         agency_count:      agencyCount,
-        total_supply:      totalSup,
-        total_collection:  totalCol,
-        total_billed:      totalBilled || null,
-        // Recovery for the whole set, on the same basis as each row.
-        collection_pct:    totalBilled > 0 ? R1((totalCol / totalBilled) * 100) : null,
-        total_outstanding: totalOu,
+
+        /* Headline = the whole branch/state, the same figure the Command Centre reports
+           for this scope. Supply is copies per day, never a window total: a total grows
+           with the length of the range and cannot be compared with anything. */
+        avg_supply:        scope.supply_avg,
+        total_supply:      scope.supply_total,
+        total_collection:  colTot,
+        total_billed:      bilTot || null,
+        collection_pct:    bilTot > 0 ? R1((colTot / bilTot) * 100) : null,
+        total_outstanding: scope.outstanding,
+
+        // The share of each that has a named active executive behind it.
+        covered_avg_supply:   covSupAvg,
+        covered_total_supply: covSupTot,
+        covered_collection:   covCol,
+        covered_outstanding:  covOu,
+        covered_supply_pct:   scope.supply_avg > 0 ? R1((covSupAvg / scope.supply_avg) * 100) : null,
       });
     } catch (e) { res.status(500).json({ detail: String(e) }); }
   });

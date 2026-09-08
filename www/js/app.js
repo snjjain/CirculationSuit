@@ -12804,15 +12804,28 @@ function epQS(extra) {
   return '?' + p.toString();
 }
 
-// Save live filter DOM values back to st.filters before any render() wipes them
+/* Save live filter DOM values back to st.filters before any render() wipes them.
+   A select can only report the filter it is actually able to show. The state and unit
+   lists arrive from /filters after the first paint, so until they land both selects hold
+   nothing but the empty "All …" option and read back as "". Taking that at face value
+   silently cleared a real filter: the strip had already fetched Jaipur RP, the dropdown
+   then said "All States", and the growth card — which loads later — fetched all-India.
+   One screen, two scopes, neither labelled correctly. So a select is only believed once
+   it actually offers the value we are holding. */
 function epSnapshotFilters() {
-  const g = id => { const el = document.getElementById(id); return el ? el.value : null; };
-  const f = epState().filters;
-  const from = g('ep-from'), to = g('ep-to'), state = g('ep-state'), unit = g('ep-unit');
-  if (from  !== null) f.from      = from;
-  if (to    !== null) f.to        = to;
-  if (state !== null) f.state     = state;
-  if (unit  !== null) f.unit_code = unit;
+  const el   = id => document.getElementById(id);
+  const f    = epState().filters;
+  const from = el('ep-from'), to = el('ep-to');
+  if (from) f.from = from.value;
+  if (to)   f.to   = to.value;
+  const take = (sel, cur) => {
+    if (!sel) return cur;
+    if (!cur) return sel.value;                     // nothing to lose
+    const offered = [...sel.options].some(o => o.value === cur);
+    return offered ? sel.value : cur;               // list not loaded yet — keep what we have
+  };
+  f.state     = take(el('ep-state'), f.state);
+  f.unit_code = take(el('ep-unit'),  f.unit_code);
 }
 
 function epFetch(key, path, extra) {
@@ -12982,7 +12995,23 @@ window.epClearFilters = () => {
   render();
 };
 
-window.epStateChange = v => { epSnapshotFilters(); epState().filters.state = v; epState().filters.unit_code = ''; render(); };
+/* Changing the scope has to drop what was loaded for the old one. Without this the
+   dropdown moved to "All States" while every card still held the branch it was showing a
+   moment ago — the filter said one thing and the numbers meant another. */
+window.epStateChange = v => {
+  epSnapshotFilters();
+  const f = { ...epState().filters, state: v, unit_code: '' };
+  epClearCache();
+  S.live.ep.filters = f;
+  render();
+};
+window.epUnitChange = v => {
+  epSnapshotFilters();
+  const f = { ...epState().filters, unit_code: v };
+  epClearCache();
+  S.live.ep.filters = f;
+  render();
+};
 window.epSortList = (col, dir) => { const st = epState(); st.listSort = col; st.listSortDir = dir; st.list = null; st._listKey = ''; render(); };
 window.epListPage = p => { const st = epState(); st.listPage = p; st.list = null; st._listKey = ''; render(); };
 window.epSearchList = (() => {
@@ -13012,7 +13041,7 @@ function epFilterPanel() {
     ${(opts.states || []).map(s => `<option value="${esc(s)}" ${f.state === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}
   </select>`;
 
-  const selUnit = `<select id="ep-unit" class="inp" style="font-size:12px;padding:5px 6px">
+  const selUnit = `<select id="ep-unit" class="inp" style="font-size:12px;padding:5px 6px" onchange="epUnitChange(this.value)">
     <option value="">All Units${f.state ? ' in ' + esc(f.state) : ''}</option>
     ${visibleUnits.map(u => `<option value="${esc(u.unit_code)}" ${f.unit_code === u.unit_code ? 'selected' : ''}>${esc(u.unit_name)}</option>`).join('')}
   </select>`;
@@ -13059,14 +13088,28 @@ function epKpiGrid() {
   epFetch('kpis', 'kpis');
   if (!st.kpis) return `<div style="height:80px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px">Loading KPIs…</div>`;
   const k = st.kpis;
+  /* The strip reports the SCOPE — the branch or state named in the filters, the same
+     figures the Command Centre gives for it. The executive table below can only cover
+     agencies whose executive is active and designated EXEC in the ERP, so each card also
+     says how much of the scope that is. Where the two differ the gap is agencies still
+     booked to an executive Oracle has flagged inactive, not a different way of counting. */
+  const cov  = k.covered_supply_pct;
+  const gapN = (k.avg_supply || 0) - (k.covered_avg_supply || 0);
+  const covSub = cov == null ? 'Copies per day'
+    : `${epFmtN(k.covered_avg_supply)} cp/day (${cov}%) under a named executive`;
   return `<div class="vz-kgrid" style="margin-bottom:16px">
-    ${vzKpi({ icon: '👤', label: 'Executives',       value: epFmtN(k.exec_count),        status: 'info', sub: `${epFmtN(k.agency_count)} agencies` })}
-    ${vzKpi({ icon: '📦', label: 'Avg. Supply / day', value: epFmtN(k.avg_supply != null ? k.avg_supply : k.total_supply), status: 'info', sub: `${epFmtN(k.total_supply)} copies · ${esc(k.from)} – ${esc(k.to)}` })}
+    ${vzKpi({ icon: '👤', label: 'Executives',       value: epFmtN(k.exec_count),        status: 'info', sub: `${epFmtN(k.agency_count)} agencies with an active executive` })}
+    ${vzKpi({ icon: '📦', label: 'Avg. Supply / day', value: epFmtN(k.avg_supply != null ? k.avg_supply : k.total_supply), status: 'info', sub: covSub })}
     ${epGrowthCard()}
-    ${vzKpi({ icon: '₹',  label: 'Collection',       value: epFmtC(k.total_collection),   status: 'good', sub: 'Period total' })}
+    ${vzKpi({ icon: '₹',  label: 'Collection',       value: epFmtC(k.total_collection),   status: 'good',
+              sub: k.covered_collection != null && k.covered_collection !== k.total_collection
+                   ? `${epFmtC(k.covered_collection)} under a named executive` : 'Net receipt · period total' })}
     ${vzKpi({ icon: '⚠',  label: 'Outstanding',      value: epFmtC(k.total_outstanding),  status: 'bad',  sub: 'Current balance' })}
     ${epDcrCard()}
-  </div>`;
+  </div>
+  ${gapN > 0 ? `<div class="card" style="padding:8px 14px;margin:-8px 0 14px;font-size:11.5px;color:var(--ink-2)">
+    ⚠ ${epFmtN(gapN)} cp/day (${cov == null ? '' : (100 - cov).toFixed(1) + '% '}of this scope) sits on agencies whose executive is inactive in the ERP — those agencies are counted in the totals above but cannot appear in the executive table below until they are reassigned in Oracle.
+  </div>` : ''}`;
 }
 
 // ── Ranking cards ─────────────────────────────────────────────────────────────
