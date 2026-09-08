@@ -638,7 +638,8 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         q(`SELECT hawker_id, hawker_name, actual_name, unit_code, unit_name,
                   hawker_center_code, hawker_center_name, center_incharge_name,
                   mobile_no, whatsappno, catagory, hawker_type, isactive,
-                  beat_boys, newspapers_carried, other_newspaper_copies,
+                  beat_boys, beat_boys_src, beat_boys_at,
+                  newspapers_carried, other_newspaper_copies,
                   copies_self_delivered, transport_mode, payment_nature, payment_mode,
                   distribution_area, city, addr2, addr3, addr4
              FROM hawker_master WHERE unit_code = ? AND hawker_id = ? LIMIT 1`, [unit, id]),
@@ -680,6 +681,8 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         category: m.catagory, hawker_type: m.hawker_type,
         is_active: String(m.isactive || '').toUpperCase() === 'Y',
         beat_boys: m.beat_boys == null || m.beat_boys === '' ? null : N(m.beat_boys),
+        beat_boys_src: m.beat_boys_src || null,   // 'app' when a visit set it
+        beat_boys_at: m.beat_boys_at ? String(m.beat_boys_at).slice(0, 16).replace('T', ' ') : null,
         newspapers_carried: m.newspapers_carried == null || m.newspapers_carried === '' ? null : N(m.newspapers_carried),
         other_newspaper_copies: m.other_newspaper_copies == null || m.other_newspaper_copies === '' ? null : N(m.other_newspaper_copies),
         copies_self_delivered: m.copies_self_delivered == null || m.copies_self_delivered === '' ? null : N(m.copies_self_delivered),
@@ -2233,6 +2236,42 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
          b.extra ? JSON.stringify(b.extra).slice(0, 60000) : null,
          S(b.device_id, 80)]);
       const { rows: idr } = await q(`SELECT LAST_INSERT_ID() id`);
+
+      /* BEAT BOYS BACK TO THE MASTER.
+         Oracle has this for 138 hawkers of 11,042; the executive in front of the man has
+         it for whoever he is looking at. So a count entered on the visit updates
+         hawker_master, and every screen that reads the column — the hawker card, the
+         360 profile, any report — sees it without knowing anything happened here.
+
+         Written only when it actually differs, so a form submitted unchanged does not
+         manufacture an edit. beat_boys_src = 'app' tells the daily Oracle sync to leave
+         it alone; without that marker tomorrow morning would replace the count with
+         Oracle's blank. hawker_field_edit keeps the name against the change. */
+      if (form === 'hawker_visit' && tt === 'hawker' && code) {
+        const raw = (b.extra || {}).beat_boys;
+        const val = raw == null || String(raw).trim() === '' ? null : parseInt(raw, 10);
+        if (val != null && !isNaN(val) && val >= 0 && val <= 999) {
+          const { rows: hm } = await q(
+            `SELECT beat_boys FROM hawker_master WHERE unit_code = ? AND hawker_id = ? LIMIT 1`,
+            [unit, code]);
+          if (hm[0]) {
+            const before = hm[0].beat_boys == null ? null : Number(hm[0].beat_boys);
+            if (before !== val) {
+              await q(
+                `UPDATE hawker_master
+                    SET beat_boys = ?, beat_boys_src = 'app', beat_boys_at = NOW(), beat_boys_by = ?
+                  WHERE unit_code = ? AND hawker_id = ?`,
+                [val, staff.person_code, unit, code]);
+              await q(
+                `INSERT INTO hawker_field_edit (unit_code, hawker_id, field_name, old_value,
+                   new_value, edited_by, edited_name, visit_id)
+                 VALUES (?,?,'beat_boys',?,?,?,?,?)`,
+                [unit, code, before == null ? null : String(before), String(val),
+                 staff.person_code, staff.name, N(idr[0].id)]);
+            }
+          }
+        }
+      }
 
       // A reader visit or a new-area survey is a lead by another name, so it lands in
       // the lead pipeline too instead of being buried inside a visit row.

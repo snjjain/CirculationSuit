@@ -547,9 +547,19 @@ async function sync() {
        family size, income, transport, payment behaviour. A truncate-and-reload would
        silently wipe the hand-entered half every morning, so the daily run may only
        overwrite the columns it is the authority for. Everything else is left alone. */
+    /* beat_boys is the one Oracle column the field may overrule. Oracle carries a figure
+       for 138 hawkers of 11,042; the executive standing at the stall has it for whoever
+       he is looking at, and the mobile app writes it back. Without this line the next
+       morning's run would replace that count with Oracle's blank, and the number would
+       vanish overnight every time it was collected.
+
+       Ownership passes one way and only on evidence: Oracle keeps the column until a
+       person in the field sets it (beat_boys_src = 'app'), after which the field's figure
+       stands. hawker_field_edit records who changed it and to what. */
+    const APP_OWNED = { beat_boys: "beat_boys = IF(beat_boys_src = 'app', beat_boys, VALUES(beat_boys))" };
     const UPDATE_SET = COL_LIST.split(',').map(s => s.trim()).filter(Boolean)
       .filter(c => c !== 'hawker_id')            // the match key never updates itself
-      .map(c => `${c} = VALUES(${c})`)
+      .map(c => APP_OWNED[c] || `${c} = VALUES(${c})`)
       .concat('last_seen_at = NOW()')
       .join(', ');
 

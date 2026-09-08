@@ -1216,6 +1216,18 @@ function _paperTable() {
   </div>`;
 }
 
+/* Where the figure on screen came from, and what changing it does. A number pre-filled
+   with no account of itself is one an executive either trusts blindly or retypes for no
+   reason; either way the master never improves. */
+function _beatHint() {
+  const h = DM.hawker;
+  if (!h) return 'Ask him how many beat boys work under him';
+  if (h.beat_boys == null) return 'Not recorded yet — what you enter is saved to the hawker master';
+  return h.beat_boys_src === 'app'
+    ? `Recorded from a visit${h.beat_boys_at ? ' on ' + h.beat_boys_at.slice(0, 10) : ''} — correct it if it has changed`
+    : 'From the ERP — correct it if it is wrong, and the master is updated';
+}
+
 function _fHawkerVisit() {
   _loadHawkerCentres();
   const centres = DM.hCentres || [];
@@ -1238,7 +1250,7 @@ function _fHawkerVisit() {
 
     _sec('Meeting') +
     _f('Meeting agenda', _txt('subject', 'What is this visit about?', 2), true) +
-    _row(_f('No. of beat boys', _xin('beat_boys', '0', 'number')),
+    _row(_f('No. of beat boys', _xin('beat_boys', '0', 'number'), false, _beatHint()),
          _f('Was the hawker met?', _sel('met', [['yes', 'Yes, met in person'], ['no', 'No, not available']], 'Select', true))) +
 
     _sec('Outstanding & collection') +
