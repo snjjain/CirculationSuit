@@ -205,11 +205,21 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       `SELECT person_code, person_name, employee_code, unit_code, hierarchy_level
        FROM hierarchy_master WHERE person_code = ? LIMIT 1`, [pc]);
     const h = rows[0] || {};
+    /* The branch NAME, not just its code. Forms print this back to the executive, and
+       "JA0" tells a person standing in Jaipur nothing that "JAIPUR RP" does not. */
+    let unitName = null;
+    if (h.unit_code) {
+      const { rows: un } = await q(
+        `SELECT MAX(unit_name) unit_name FROM agency_master WHERE unit = ?`, [h.unit_code])
+        .catch(() => ({ rows: [] }));
+      unitName = (un[0] && un[0].unit_name) || null;
+    }
     return {
       person_code: pc,
       name: h.person_name || (req.auth.name || pc),
       emp_code: h.employee_code || null,
       unit_code: h.unit_code || null,
+      unit_name: unitName || h.unit_code || null,
       level: h.hierarchy_level != null ? Number(h.hierarchy_level) : req.auth.hierarchyLevel,
     };
   }
@@ -523,10 +533,15 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         return res.json({ rows, type, status });
       }
 
+      // Narrowed to one centre when the form has asked for it.
+      const centre = S(req.query.centre, 30) || null;
       const { rows } = await q(
         `SELECT hm.unit_code, hm.hawker_id target_code,
                 COALESCE(hm.actual_name, hm.hawker_name) target_name,
-                hm.hawker_center_name centre, hm.mobile_no mobile, hm.payment_nature,
+                hm.hawker_center_code centre_code, hm.hawker_center_name centre,
+                hm.mobile_no mobile, hm.payment_nature, hm.beat_boys,
+                hm.newspapers_carried, hm.other_newspaper_copies, hm.unit_name,
+                hm.center_incharge_name centre_incharge,
                 loc.lat, loc.lng, loc.source loc_source,
                 lv.last_visit, lv.last_outcome
          FROM hawker_master hm
@@ -537,10 +552,40 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
                     FROM dcr_visit WHERE target_type='hawker' GROUP BY unit_code, target_code) lv
            ON lv.unit_code = hm.unit_code AND lv.target_code = hm.hawker_id
          WHERE 1=1 ${uList.length ? `AND hm.unit_code IN (${uList.map(() => '?').join(',')})` : ''}
+           ${centre ? 'AND hm.hawker_center_code = ?' : ''}
            ${term ? 'AND (hm.hawker_name LIKE ? OR hm.actual_name LIKE ? OR hm.hawker_id = ?)' : ''}
          ORDER BY hm.hawker_name LIMIT ${lim}`,
-        [...uList, ...(term ? [`%${term}%`, `%${term}%`, term] : [])]);
-      res.json({ rows, type });
+        [...uList, ...(centre ? [centre] : []), ...(term ? [`%${term}%`, `%${term}%`, term] : [])]);
+      res.json({ rows, type, centre });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  /* The centres a hawker can belong to, read from hawker_master itself rather than
+     cash_depot_master: attendance is marked at a depot, but a hawker is booked to the
+     centre named on their own record, and the two lists are not the same. Choosing the
+     centre first is what makes the hawker list short enough to pick from — a branch has
+     hundreds of hawkers and a centre has tens. */
+  app.get('/api/dcr-m/hawker-centres', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const units = await scopeUnits(req);
+      const unit = S(req.query.unit, 10) || staff.unit_code;
+      if (units && unit && !units.includes(unit)) {
+        return res.status(403).json({ detail: 'Outside your branch scope' });
+      }
+      const list = unit ? [unit] : (units || []);
+      if (!list.length) return res.json({ rows: [] });
+      const { rows } = await q(
+        `SELECT hm.unit_code, hm.hawker_center_code centre_code,
+                MAX(COALESCE(NULLIF(hm.hawker_center_name,''), hm.hawker_center_code)) centre_name,
+                COUNT(*) hawkers
+           FROM hawker_master hm
+          WHERE hm.unit_code IN (${list.map(() => '?').join(',')})
+            AND hm.hawker_center_code IS NOT NULL AND hm.hawker_center_code <> ''
+          GROUP BY hm.unit_code, hm.hawker_center_code
+          ORDER BY centre_name LIMIT 400`, list);
+      res.json({ rows, unit });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
@@ -574,6 +619,93 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
      year, not that month's billing, so one month is the difference between consecutive
      snapshots — the same telescoping the collections reports use. Taking the raw column
      would overstate a month's bill several times over by mid-year. */
+  /* Everything the hawker visit form fills in once a hawker is chosen — the same idea as
+     the agency panel above it, so the executive standing at the stall sees who they are
+     talking to, what he lifts, and what he owes, without opening anything.
+
+     Lifting is copies per day over the days he actually lifted, not a month total
+     divided by thirty: a hawker who takes nothing on Sundays is not a hawker whose
+     supply fell. */
+  app.get('/api/dcr-m/hawker/:unit/:id', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const unit = S(req.params.unit, 10), id = S(req.params.id, 40);
+      const units = await scopeUnits(req);
+      if (units && !units.includes(unit)) return res.status(403).json({ detail: 'Outside your branch scope' });
+
+      const [master, sup30, supPrev, supMonth, lastSup, lastVisitR, monthsR] = await Promise.all([
+        q(`SELECT hawker_id, hawker_name, actual_name, unit_code, unit_name,
+                  hawker_center_code, hawker_center_name, center_incharge_name,
+                  mobile_no, whatsappno, catagory, hawker_type, isactive,
+                  beat_boys, newspapers_carried, other_newspaper_copies,
+                  copies_self_delivered, transport_mode, payment_nature, payment_mode,
+                  distribution_area, city, addr2, addr3, addr4
+             FROM hawker_master WHERE unit_code = ? AND hawker_id = ? LIMIT 1`, [unit, id]),
+        q(`SELECT SUM(sup_copies) copies, COUNT(DISTINCT supply_date) days, SUM(net_amount) amount
+             FROM hawker_supply WHERE loc_id = ? AND hawker_id = ?
+              AND supply_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)`, [unit, id]),
+        q(`SELECT SUM(sup_copies) copies, COUNT(DISTINCT supply_date) days
+             FROM hawker_supply WHERE loc_id = ? AND hawker_id = ?
+              AND supply_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+              AND supply_date <  DATE_SUB(CURDATE(), INTERVAL 30 DAY)`, [unit, id]),
+        q(`SELECT SUM(sup_copies) copies, COUNT(DISTINCT supply_date) days, SUM(net_amount) amount
+             FROM hawker_supply WHERE loc_id = ? AND hawker_id = ?
+              AND supply_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')`, [unit, id]),
+        q(`SELECT MAX(supply_date) d FROM hawker_supply WHERE loc_id = ? AND hawker_id = ?`, [unit, id]),
+        q(`SELECT visit_date, outcome, remarks FROM dcr_visit
+            WHERE unit_code = ? AND target_type = 'hawker' AND target_code = ?
+            ORDER BY visit_date DESC, id DESC LIMIT 1`, [unit, id]),
+        q(`SELECT DATE_FORMAT(supply_date,'%Y-%m') month, SUM(sup_copies) copies,
+                  COUNT(DISTINCT supply_date) days, SUM(net_amount) amount
+             FROM hawker_supply WHERE loc_id = ? AND hawker_id = ?
+              AND supply_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+            GROUP BY month ORDER BY month DESC LIMIT 6`, [unit, id]),
+      ]);
+
+      const m = master.rows[0];
+      if (!m) return res.status(404).json({ detail: 'Hawker not found' });
+      const rate = r => (r && N(r.days) > 0) ? Math.round(N(r.copies) / N(r.days)) : null;
+      const cur = rate(sup30.rows[0]), prv = rate(supPrev.rows[0]);
+      const lv = lastVisitR.rows[0] || {};
+      const lastSupply = lastSup.rows[0] && lastSup.rows[0].d ? String(lastSup.rows[0].d).slice(0, 10) : null;
+
+      res.json({
+        hawker_id: m.hawker_id, unit_code: m.unit_code, unit_name: m.unit_name || m.unit_code,
+        hawker_name: m.actual_name || m.hawker_name, erp_name: m.hawker_name,
+        centre_code: m.hawker_center_code, centre: m.hawker_center_name || m.hawker_center_code,
+        centre_incharge: m.center_incharge_name || null,
+        mobile: m.mobile_no && String(m.mobile_no) !== '0' ? m.mobile_no : null,
+        whatsapp: m.whatsappno && String(m.whatsappno) !== '0' ? m.whatsappno : null,
+        category: m.catagory, hawker_type: m.hawker_type,
+        is_active: String(m.isactive || '').toUpperCase() === 'Y',
+        beat_boys: m.beat_boys == null || m.beat_boys === '' ? null : N(m.beat_boys),
+        newspapers_carried: m.newspapers_carried == null || m.newspapers_carried === '' ? null : N(m.newspapers_carried),
+        other_newspaper_copies: m.other_newspaper_copies == null || m.other_newspaper_copies === '' ? null : N(m.other_newspaper_copies),
+        copies_self_delivered: m.copies_self_delivered == null || m.copies_self_delivered === '' ? null : N(m.copies_self_delivered),
+        transport_mode: m.transport_mode, payment_nature: m.payment_nature, payment_mode: m.payment_mode,
+        area: m.distribution_area, city: m.city,
+        // The street is split across three columns in the ERP; nobody wants three lines.
+        address: [m.addr2, m.addr3, m.addr4].map(x => String(x || '').trim()).filter(Boolean).join(', ') || null,
+        daily_copies: cur, prev_daily_copies: prv,
+        supply_trend_pct: (cur != null && prv) ? Math.round(((cur - prv) / prv) * 1000) / 10 : null,
+        month_copies: N(supMonth.rows[0] && supMonth.rows[0].copies),
+        month_days: N(supMonth.rows[0] && supMonth.rows[0].days),
+        month_amount: N(supMonth.rows[0] && supMonth.rows[0].amount),
+        amount_30d: N(sup30.rows[0] && sup30.rows[0].amount),
+        last_supply: lastSupply,
+        days_since_supply: lastSupply
+          ? Math.round((new Date(today()) - new Date(lastSupply)) / 86400000) : null,
+        last_visit: lv.visit_date ? String(lv.visit_date).slice(0, 10) : null,
+        last_outcome: lv.outcome || null,
+        months: monthsR.rows.map(r => ({
+          month: r.month, copies: N(r.copies), days: N(r.days), amount: N(r.amount),
+          avg_per_day: N(r.days) ? Math.round(N(r.copies) / N(r.days)) : 0,
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
   app.get('/api/dcr-m/agency/:unit/:code', async (req, res) => {
     try {
       const staff = await staffOf(req);
@@ -1422,6 +1554,14 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
       const b = req.body || {};
       if (!b.id || !isDate(b.tour_date)) return res.status(400).json({ detail: 'id and tour_date are required' });
+      /* A reason, the same as cancelling. A stop that moves is a plan that did not
+         happen, and the incharge who approved it is entitled to know why — without one
+         the plan simply appears on a different day with no account of the change. */
+      const why = S(b.reason, 500);
+      if (!why) return res.status(400).json({ detail: 'A reason is required to move a planned visit.' });
+      if (String(b.tour_date) < today()) {
+        return res.status(400).json({ detail: 'A visit cannot be moved to a date before today.', code: 'past_date' });
+      }
 
       const { rows } = await q(`SELECT * FROM dcr_tour_plan WHERE id = ? LIMIT 1`, [Number(b.id)]);
       if (!rows[0]) return res.status(404).json({ detail: 'Plan not found' });
@@ -1436,9 +1576,10 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
 
       await q(
         `UPDATE dcr_tour_plan SET tour_date = ?,
-           description = CONCAT(COALESCE(description,''), ' [moved from ', DATE_FORMAT(tour_date,'%Y-%m-%d'), ']')
-         WHERE id = ?`, [b.tour_date, Number(b.id)]);
-      res.json({ ok: true, id: Number(b.id), tour_date: b.tour_date });
+           description = CONCAT(COALESCE(description,''), ' [moved from ',
+             DATE_FORMAT(tour_date,'%Y-%m-%d'), ' — ', ?, ']')
+         WHERE id = ?`, [b.tour_date, why, Number(b.id)]);
+      res.json({ ok: true, id: Number(b.id), tour_date: b.tour_date, reason: why });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
@@ -2119,6 +2260,47 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
 
   /* Which forms this user may open. The dashboard shows an icon per permitted form, so
      this is the single place that decides — the UI never invents an entitlement. */
+  /* FOLLOW-UPS THAT HAVE COME DUE.
+     A visit where the hawker or agent was not found ends with a date to come back. That
+     date is the whole point of recording it, so on the day it arrives the app has to say
+     so — otherwise the commitment lives in a row nobody reads and the revisit never
+     happens. Anything on or before today counts: a follow-up missed on Tuesday is more
+     urgent on Wednesday, not gone. */
+  app.get('/api/dcr-m/followups', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const { rows } = await q(
+        `SELECT v.id, v.visit_date, v.unit_code, v.target_type, v.target_code, v.target_name,
+                v.next_followup_date, v.next_action, v.outcome, v.remarks, v.form_type,
+                v.amount_collected, v.outstanding_amount
+           FROM dcr_visit v
+          WHERE v.staff_person_code = ?
+            AND v.next_followup_date IS NOT NULL
+            AND v.next_followup_date <= CURDATE()
+            AND v.next_followup_date >= DATE_SUB(CURDATE(), INTERVAL 45 DAY)
+            /* Cleared once the same target has been seen again on or after the due date —
+               the revisit IS the closure, so nothing extra has to be ticked. */
+            AND NOT EXISTS (
+              SELECT 1 FROM dcr_visit v2
+               WHERE v2.staff_person_code = v.staff_person_code
+                 AND v2.target_type = v.target_type AND v2.target_code = v.target_code
+                 AND v2.unit_code = v.unit_code
+                 AND v2.visit_date >= v.next_followup_date
+                 AND v2.id <> v.id)
+          ORDER BY v.next_followup_date, v.id LIMIT 60`, [staff.person_code]);
+      const t = today();
+      res.json({
+        today: t,
+        rows: rows.map(r => ({
+          ...r,
+          due: String(r.next_followup_date).slice(0, 10),
+          days_late: Math.max(0, Math.round((new Date(t) - new Date(String(r.next_followup_date).slice(0, 10))) / 86400000)),
+        })),
+      });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
   app.get('/api/dcr-m/rights', async (req, res) => {
     try {
       const staff = await staffOf(req);

@@ -439,7 +439,9 @@ function _home() {
     </div>` : (running ? `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut);text-align:center">${T('No approved plan today — use a form below to record any visit.')}</div>` : '');
 
   const allowed = FORMS.filter(f => DM.rights && DM.rights[f.key]);
-  if (!allowed.length) return hero + kpis + trip + `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">${T('No forms have been assigned to you.')}</div>`;
+  /* Above the forms grid: a promise already made outranks a form not yet opened. */
+  const fups = _followupBanner();
+  if (!allowed.length) return hero + kpis + trip + fups + `<div class="dcr-card" style="font-size:12.5px;color:var(--d-mut)">${T('No forms have been assigned to you.')}</div>`;
 
   const TINT = { plan_tour: '#fff4e6', agency_visit: '#fff4e6', calling: '#eff8ff',
                  center_attn: '#ecfdf3', hawker_visit: '#ecfdf3', reader_visit: '#ecfdf3',
@@ -450,7 +452,7 @@ function _home() {
       <span class="nm">${T(f.name)}</span></button>`).join('')}
   </div>`;
 
-  return hero + ach + kpis + trip + list + grid;
+  return hero + ach + kpis + trip + fups + list + grid;
 }
 
 /* Reschedule / cancel. A plan an executive cannot change is a plan they work around
@@ -468,9 +470,14 @@ window.dmPlanMenu = id => {
 window.dmReschedule = async id => {
   const d = prompt('Move this visit to which date? (YYYY-MM-DD)', _DAY());
   if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+  if (d < _DAY()) { DM.err = 'A visit cannot be moved to a date before today.'; DM.flyout = null; render(); return; }
+  /* A reason, the same as cancelling asks for. A stop that moves is a plan that did not
+     happen on the day it was approved for, and the incharge is entitled to know why. */
+  const why = prompt('Why is this visit being moved?');
+  if (!why || !String(why).trim()) return;
   try {
     await _api('/tour/reschedule', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, tour_date: d }) });
+      body: JSON.stringify({ id, tour_date: d, reason: String(why).trim() }) });
     DM.flyout = null; DM.plan = null; DM.dashLoaded = false; DM.approved = null;
     toast('Moved to ' + d); _loadDash();
   } catch (e) { DM.err = e.message; DM.flyout = null; render(); }
@@ -562,11 +569,15 @@ window.dmFeedbackBack = save => {
 
 // ── target picker (flyout) ──────────────────────────────────────────────────
 async function _loadTargets(type) {
-  const key = `${type}|${DM.search}|${DM.targetStatus || 'active'}`;
+  // The chosen centre narrows the hawker list; it means nothing for an agency.
+  const centre = (type === 'hawker' && DM.extra.centre_code) ? String(DM.extra.centre_code) : '';
+  const key = `${type}|${DM.search}|${DM.targetStatus || 'active'}|${centre}`;
   if (DM.targetsKey === key && DM.targets) return;
   DM.targetsKey = key;
   DM.targetsBusy = true;
-  try { const r = await _api(`/targets?type=${type}&limit=60&status=${DM.targetStatus || 'active'}${DM.search ? '&q=' + encodeURIComponent(DM.search) : ''}`);
+  try { const r = await _api(`/targets?type=${type}&limit=60&status=${DM.targetStatus || 'active'}`
+          + `${centre ? '&centre=' + encodeURIComponent(centre) : ''}`
+          + `${DM.search ? '&q=' + encodeURIComponent(DM.search) : ''}`);
         DM.targets = r.rows || []; DM.targetsNote = r.note || null; }
   catch (e) { DM.targets = []; DM.targetsNote = e.message; }
   DM.targetsBusy = false;
@@ -645,7 +656,8 @@ function _pickField(type, label) {
         <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.target_name || s.target_code)}</span>
         <span style="color:var(--d-info);font-size:12px;flex:none">change</span></div>`
     : `<div class="dcr-in" onclick="${open}" style="cursor:pointer;color:var(--d-faint)">${T('Tap to choose…')}</div>`, true)
-    + (type === 'agent' && s ? _autoPanel() : '');
+    + (type === 'agent' && s ? _autoPanel() : '')
+    + (type === 'hawker' && s ? _hawkerPanel() : '');
 }
 
 /* What the ERP already knows, shown the moment an agency is picked. The executive
@@ -1064,14 +1076,194 @@ function _fCentreAttn() {
     _btn(DM.busy ? 'Marking…' : 'Mark attendance', "dmSubmit('center_attn')", 'ok', DM.busy ? 'disabled' : '');
 }
 
+/* ══ Hawker: centre first, then the man ══
+   A branch has hundreds of hawkers and a centre has tens, so the centre is asked first
+   and the hawker list is drawn from it. Picking blind through a branch-wide list is how
+   the wrong hawker gets a visit recorded against him. */
+function _loadHawkerCentres() {
+  const u = (DM.ctx && DM.ctx.staff && DM.ctx.staff.unit_code) || '';
+  if (DM.hCentresKey === u) return;
+  DM.hCentresKey = u; DM.hCentres = null;
+  _api(`/hawker-centres${u ? `?unit=${encodeURIComponent(u)}` : ''}`)
+    .then(d => { DM.hCentres = (d && d.rows) || []; render(); })
+    .catch(() => { DM.hCentres = []; render(); });
+}
+window.dmHawkerCentre = v => {
+  DM.extra.centre_code = v || '';
+  // A hawker chosen under the previous centre is no longer an answer to this question.
+  DM.form._target = null; DM.hawker = null; DM.targets = null; DM.targetsKey = '';
+  render();
+};
+
+/* The hawker's own card, in the shape the agency card already uses on the visit above
+   it — name, where he sells, a Call button, and the handful of figures that decide what
+   the conversation is about. */
+function _loadHawker(unit, id) {
+  const k = `${unit}|${id}`;
+  if (DM.hawkerKey === k) return;
+  DM.hawkerKey = k; DM.hawker = null; DM.hawkerLoading = true;
+  _api(`/hawker/${encodeURIComponent(unit)}/${encodeURIComponent(id)}`)
+    .then(d => { DM.hawker = d && !d.detail ? d : null; DM.hawkerLoading = false;
+                 if (d && d.beat_boys != null && (DM.extra.beat_boys == null || DM.extra.beat_boys === '')) {
+                   DM.extra.beat_boys = String(d.beat_boys);   // the master's figure, there to be corrected
+                 }
+                 render(); })
+    .catch(() => { DM.hawker = null; DM.hawkerLoading = false; render(); });
+}
+window.dmHawkerCard = () => dmFly({ title: T('Hawker detail'), body: _hawkerCardBody });
+
+function _hawkerPanel() {
+  const t = DM.form._target;
+  if (!t) return '';
+  _loadHawker(t.unit_code || (DM.ctx && DM.ctx.staff && DM.ctx.staff.unit_code), t.target_code);
+  const h = DM.hawker;
+  if (DM.hawkerLoading) return `<div class="dcr-auto" style="font-size:12.5px;color:var(--d-mut)">${T('Loading hawker details…')}</div>`;
+  if (!h) return '';
+  const cell = (k, v) => (v == null || v === '' || v === 0)
+    ? '' : `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  const tel = String(h.mobile || '').replace(/\D/g, '').slice(-10);
+  const trendTone = h.supply_trend_pct == null ? 'var(--d-ink)'
+    : h.supply_trend_pct < 0 ? 'var(--d-bad)' : 'var(--d-ok)';
+  return `<div class="dcr-auto">
+    <div style="display:flex;justify-content:space-between;gap:9px;align-items:flex-start">
+      <div style="min-width:0">
+        <div style="font-size:14.5px;font-weight:650;color:var(--d-ink)">${esc(h.hawker_name || '')}</div>
+        <div style="font-size:11.5px;color:var(--d-mut);margin-top:2px">${esc([h.centre, h.area || h.city].filter(Boolean).join(' · '))}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex:none">
+        ${tel.length === 10 ? `<a href="tel:+91${tel}" class="dcr-tag info" style="text-decoration:none;padding:6px 11px;font-size:12px">📞 ${T('Call')}</a>` : ''}
+        <button onclick="dmHawkerCard()" class="dcr-tag" style="padding:6px 11px;font-size:12px;border:1px solid var(--d-line);background:#fff;cursor:pointer">📇 ${T('Hawker detail')}</button>
+      </div>
+    </div>
+    ${!h.is_active ? `<div class="dcr-closed"><b>${T('Inactive in the ERP.')}</b> ${T('Check whether he is still lifting before recording copies.')}</div>` : ''}
+    <div class="g">
+      ${cell(T('Unit'), esc(h.unit_name || ''))}
+      ${cell(T('Centre'), esc(h.centre || ''))}
+      ${cell(T('Vendor mobile'), tel ? esc(h.mobile) : '')}
+      ${cell(T('Centre incharge'), esc(h.centre_incharge || ''))}
+      ${cell(T('Copies / day'), _NN(h.daily_copies) + (h.supply_trend_pct == null ? ''
+        : ` <span style="font-size:11px;color:${trendTone};font-weight:400">${h.supply_trend_pct > 0 ? '+' : ''}${h.supply_trend_pct}%</span>`))}
+      ${cell(T('This month'), _NN(h.month_copies) + ' cp')}
+      ${cell(T('Beat boys'), h.beat_boys == null ? '' : _NN(h.beat_boys))}
+      ${cell(T('Other newspapers'), h.other_newspaper_copies == null ? '' : _NN(h.other_newspaper_copies) + ' cp')}
+      ${cell(T('Payment'), esc(h.payment_nature || h.payment_mode || ''))}
+      ${cell(T('Last supply'), h.last_supply ? esc(h.last_supply) + (h.days_since_supply ? ` · ${h.days_since_supply}d` : '') : '')}
+      ${cell(T('Last visit'), h.last_visit ? esc(h.last_visit) : '')}
+    </div></div>`;
+}
+
+function _hawkerCardBody() {
+  const h = DM.hawker;
+  if (!h) return `<div style="font-size:12.5px;color:var(--d-mut)">${T('Choose a hawker first.')}</div>`;
+  const tile = (k, v, tone, sub) => `<div style="background:var(--d-soft,#f6f8fb);border-radius:10px;padding:9px 11px">
+    <div style="font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--d-mut)">${k}</div>
+    <div style="font-size:15px;font-weight:700;color:${tone || 'var(--d-ink)'};margin-top:2px">${v}</div>
+    ${sub ? `<div style="font-size:10.5px;color:var(--d-mut);margin-top:1px">${sub}</div>` : ''}</div>`;
+  const fact = (k, v) => (v == null || v === '') ? '' : `<div style="display:flex;gap:9px;font-size:12px;line-height:1.75">
+    <span style="flex:none;width:118px;color:var(--d-mut)">${k}</span><span style="color:var(--d-ink);min-width:0">${v}</span></div>`;
+  const tone = h.supply_trend_pct == null ? null : h.supply_trend_pct < 0 ? 'var(--d-bad)' : 'var(--d-ok)';
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${tile(T('Copies / day'), _NN(h.daily_copies), null, T('over the days he lifted, last 30'))}
+      ${tile(T('Trend'), h.supply_trend_pct == null ? '—' : (h.supply_trend_pct > 0 ? '+' : '') + h.supply_trend_pct + '%', tone, T('vs the 30 days before'))}
+      ${tile(T('This month'), _NN(h.month_copies) + ' cp', null, `${h.month_days || 0} ${T('days')}`)}
+      ${tile(T('Value this month'), _INR(h.month_amount), null, T('cash sale, at cover price'))}
+    </div>
+    <div style="margin-top:12px">
+      ${fact(T('Unit'), esc(h.unit_name || ''))}
+      ${fact(T('Centre'), esc(h.centre || ''))}
+      ${fact(T('Centre incharge'), esc(h.centre_incharge || ''))}
+      ${fact(T('Vendor mobile'), esc(h.mobile || ''))}
+      ${fact(T('WhatsApp'), esc(h.whatsapp || ''))}
+      ${fact(T('Type / category'), esc([h.hawker_type, h.category].filter(Boolean).join(' · ')))}
+      ${fact(T('Beat boys'), h.beat_boys == null ? '' : _NN(h.beat_boys))}
+      ${fact(T('Newspapers carried'), h.newspapers_carried == null ? '' : _NN(h.newspapers_carried))}
+      ${fact(T('Other newspaper copies'), h.other_newspaper_copies == null ? '' : _NN(h.other_newspaper_copies))}
+      ${fact(T('Delivers himself'), h.copies_self_delivered == null ? '' : _NN(h.copies_self_delivered) + ' cp')}
+      ${fact(T('Transport'), esc(h.transport_mode || ''))}
+      ${fact(T('Payment nature'), esc(h.payment_nature || ''))}
+      ${fact(T('Area'), esc([h.area, h.city].filter(Boolean).join(' · ')))}
+      ${fact(T('Address'), esc(h.address || ''))}
+      ${fact(T('ERP name'), h.erp_name && h.erp_name !== h.hawker_name ? esc(h.erp_name) : '')}
+      ${fact(T('Last supply'), esc(h.last_supply || ''))}
+      ${fact(T('Last visit'), esc([h.last_visit, h.last_outcome].filter(Boolean).join(' · ')))}
+    </div>
+    ${_agMonthTable(T('Supply — last 6 months'), [T('Month'), T('Avg/day'), T('Copies'), T('Days')],
+      (h.months || []).map(r => [_mn(r.month), _NN(r.avg_per_day), _NN(r.copies), _NN(r.days)]),
+      T('No supply recorded.'))}`;
+}
+
+/* ══ Other newspaper supply — filled in by the executive ══
+   Nothing in our data knows what a hawker carries for other publishers; the man himself
+   does, and this is the visit where he is asked. Rows are free-form for that reason. */
+window.dmPaperAdd = () => { const r = _papers(); r.push({ paper: '', copies: '' }); render(); };
+window.dmPaperDel = i => { const r = _papers(); r.splice(i, 1); render(); };
+window.dmPaperSet = (i, k, v) => { const r = _papers(); if (r[i]) r[i][k] = v; if (k !== 'paper') render(); };
+function _papers() { return DM.extra._papers || (DM.extra._papers = []); }
+function _paperTable() {
+  const rows = _papers();
+  const cell = 'width:100%;padding:9px 10px;border:1px solid var(--d-line);border-radius:9px;font-size:13.5px;background:var(--d-card);color:var(--d-ink)';
+  return `<div style="margin-bottom:12px">
+    ${rows.length ? rows.map((r, i) => `<div style="display:flex;gap:7px;margin-bottom:7px;align-items:center">
+      <input style="${cell};flex:1" placeholder="${esc(T('Newspaper'))}" value="${esc(r.paper || '')}"
+        oninput="dmPaperSet(${i},'paper',this.value)">
+      <input style="${cell};width:96px" type="number" min="0" inputmode="numeric" placeholder="${esc(T('Copies'))}"
+        value="${esc(r.copies || '')}" oninput="dmPaperSet(${i},'copies',this.value)">
+      <button type="button" onclick="dmPaperDel(${i})" style="flex:none;width:38px;height:38px;border-radius:9px;
+        border:1px solid var(--d-line);background:var(--d-card);color:var(--d-bad);font-size:16px;cursor:pointer">×</button>
+    </div>`).join('') : `<div style="font-size:12px;color:var(--d-mut);margin-bottom:7px">${T('Ask him what else he carries and how many.')}</div>`}
+    <button type="button" onclick="dmPaperAdd()" class="dcr-tag" style="padding:8px 13px;font-size:12.5px;
+      border:1px solid var(--d-line);background:var(--d-card);cursor:pointer">+ ${T('Add newspaper')}</button>
+  </div>`;
+}
+
 function _fHawkerVisit() {
-  return _sec('Hawker visit') + _pickField('hawker', 'Hawker') +
+  _loadHawkerCentres();
+  const centres = DM.hCentres || [];
+  const unitName = (DM.ctx && DM.ctx.staff && (DM.ctx.staff.unit_name || DM.ctx.staff.unit_code)) || '';
+  const outcome = DM.form.outcome || '';
+  const copiesMoved = ['Copies increased', 'Copies decreased'].includes(outcome);
+  /* Whether the man was actually found. Everything that follows — the phone call, the
+     date to come back — hangs off this one answer, so it is asked plainly rather than
+     inferred from an outcome like "Hawker unavailable". */
+  const notMet = DM.extra.met === 'no';
+
+  return _sec('Hawker visit') +
+    (unitName ? `<div style="font-size:11.5px;color:var(--d-mut);margin:-4px 0 10px">${T('Branch')}: <b style="color:var(--d-ink)">${esc(unitName)}</b></div>` : '') +
+    _f('Centre', `<select onchange="dmHawkerCentre(this.value)">
+        <option value="">${esc(DM.hCentres ? T('All centres in my branch') : T('Loading centres…'))}</option>
+        ${centres.map(c => `<option value="${esc(c.centre_code)}"${DM.extra.centre_code === c.centre_code ? ' selected' : ''}>${esc(c.centre_name)} (${c.hawkers})</option>`).join('')}
+      </select>`, true, 'Choose the centre first — the hawker list comes from it') +
+    _pickField('hawker', 'Hawker') +
     _row(_f('Date', _in('visit_date', '', 'date')), _f('Time', _in('check_in', '', 'time'))) +
+
+    _sec('Meeting') +
+    _f('Meeting agenda', _txt('subject', 'What is this visit about?', 2), true) +
+    _row(_f('No. of beat boys', _xin('beat_boys', '0', 'number')),
+         _f('Was the hawker met?', _sel('met', [['yes', 'Yes, met in person'], ['no', 'No, not available']], 'Select', true))) +
+
     _sec('Outstanding & collection') +
     _row(_f('Outstanding (₹)', _in('outstanding_amount', '0', 'number')), _f('Collected (₹)', _in('amount_collected', '0', 'number'))) +
     _f('Mode', _sel('pay_mode', ['Cash', 'UPI', 'Cheque'], 'Mode', true)) +
     _f('Outcome', _sel('outcome', ['Payment collected', 'Promise to pay', 'No payment', 'Copies increased',
       'Copies decreased', 'Complaint pending', 'Hawker unavailable', 'Other'], '-- Select --'), true) +
+    /* Only when copies actually moved. A number asked for on every visit is a number
+       typed without thinking; asked only here, it means something. */
+    (copiesMoved ? _f(outcome === 'Copies increased' ? 'Copies increased by' : 'Copies decreased by',
+        _in('copies_committed', '0', 'number'), true,
+        outcome === 'Copies increased' ? 'How many copies were added' : 'How many copies were dropped') : '') +
+
+    _sec('Other newspaper supply') + _paperTable() +
+
+    _sec('Calling outcome') +
+    _f('Calling outcome', _sel('call_outcome', ['Spoke on phone', 'Not reachable', 'Will call back',
+      'Phone switched off', 'Wrong number', 'Not applicable — met in person'], '-- Select --'), true,
+      'What came of the call, if you had to phone him') +
+    (notMet
+      ? _row(_f('Follow-up date', _in('next_followup_date', '', 'date'), true),
+             _f('Follow-up for', _sel('next_action', ['Recovery', 'Copy growth', 'Complaint', 'Verification', 'Other'], 'Select')))
+        + `<div style="font-size:11.5px;color:var(--d-warn,#b45309);margin:-4px 0 11px">${T('He was not met — set a date to go back. You will be reminded on that day.')}</div>`
+      : '') +
+
     _f('Remarks', _txt('remarks', '', 2)) + _photo('Photo with hawker', 'Optional') + _geoLine() +
     _btn(DM.busy ? 'Submitting…' : 'Submit visit', "dmSubmit('hawker_visit')", 'ok', DM.busy ? 'disabled' : '');
 }
@@ -1403,12 +1595,26 @@ window.dmSubmit = async form => {
         payment_mode: DM.extra.pay_mode, payment_type: DM.extra.pay_type,
         receipt_no: DM.form.receipt_no, copies_committed: DM.form.copies_committed,
         growth_start: DM.form.growth_start, dues_clear_by: DM.form.dues_clear_by,
-        next_followup_date: DM.form.next_followup_date,
+        next_followup_date: DM.form.next_followup_date, next_action: DM.form.next_action,
         check_in: DM.form.check_in, check_out: DM.form.check_out,
         work_type: DM.form.work_type, location: DM.form.location, assigned_by: DM.form.assigned_by,
         attendees: DM.form.attendees, subject: DM.form.subject, plan_id: DM.form.plan_id || null,
         selfie_id: DM.photo && DM.photo.id ? DM.photo.id : null,
-        extra: form === 'agent_feedback' ? { ...DM.extra, fb_set: DM.fbSet, health: _health(DM.extra) } : DM.extra };
+        /* The other-newspaper rows go up as a clean list — blank rows an executive added
+           and did not fill are not data, and the scratch key they were edited under does
+           not belong in the record. */
+        extra: form === 'agent_feedback'
+          ? { ...DM.extra, fb_set: DM.fbSet, health: _health(DM.extra) }
+          : (() => {
+              const e = { ...DM.extra };
+              const rows = (e._papers || [])
+                .filter(r => String(r.paper || '').trim() || String(r.copies || '').trim())
+                .map(r => ({ paper: String(r.paper || '').trim(),
+                             copies: r.copies === '' || r.copies == null ? null : Number(r.copies) }));
+              delete e._papers;
+              if (rows.length) e.other_papers = rows;
+              return e;
+            })() };
       const r = await _api('/form', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       toast(r.visit_mode === 'call' ? 'Call report saved' : 'Submitted'
         + (r.geofence && r.geofence.within === 0 ? ` · ${_NN(r.geofence.distance_m)} m away` : ''));
@@ -1542,6 +1748,54 @@ function _myTasks() {
       ${c.total || 0} ${T('tasks in the last 45 days')} · ${c.done || c.completed || 0} ${T('completed')}
     </div>
   </div>`;
+}
+
+/* ══ Follow-ups that have come due ══
+   A visit where the man was not found ends with a date to come back. The date is the
+   whole point of writing it down, so on the day it arrives the app says so — otherwise
+   the promise lives in a row nobody opens. Revisit reopens the right form with the
+   target already chosen, which is the difference between a reminder and a nudge that
+   costs three taps to act on. */
+function _loadFollowups() {
+  if (DM.fups || DM._fupsLoading) return;
+  DM._fupsLoading = true;
+  _api('/followups')
+    .then(d => { DM.fups = (d && d.rows) || []; DM._fupsLoading = false; render(); })
+    .catch(() => { DM.fups = []; DM._fupsLoading = false; render(); });
+}
+window.dmRevisit = async (type, unit, code, name) => {
+  dmOpen(type === 'hawker' ? 'hawker_visit' : 'agency_visit');
+  DM.form._target = { unit_code: unit, target_code: code, target_name: name };
+  DM.extra.revisit_of = code;
+  render();
+  // Same detail the picker would have loaded, so the form opens complete.
+  if (type === 'agent') {
+    DM.agency = null; DM.agencyLoading = true; render();
+    try { DM.agency = await _api(`/agency/${encodeURIComponent(unit)}/${encodeURIComponent(code)}`); }
+    catch (_) { DM.agency = null; }
+    DM.agencyLoading = false; render();
+  }
+};
+function _followupBanner() {
+  _loadFollowups();
+  const rows = DM.fups || [];
+  if (!rows.length) return '';
+  return _sec(`Follow-ups due · ${rows.length}`) + rows.slice(0, 6).map(r => `<div class="dcr-card"
+    style="border-left:3px solid ${r.days_late > 0 ? 'var(--d-bad)' : 'var(--d-warn,#b45309)'}">
+    <div style="display:flex;justify-content:space-between;gap:9px;align-items:flex-start;margin-bottom:7px">
+      <div style="min-width:0">
+        <div style="font-size:14px;font-weight:650;color:var(--d-ink)">${esc(r.target_name || r.target_code)}</div>
+        <div style="font-size:11.5px;color:var(--d-mut);margin-top:2px">
+          ${T('Due')} ${esc(r.due)}${r.days_late > 0 ? ` · <span style="color:var(--d-bad);font-weight:700">${r.days_late} ${T(r.days_late === 1 ? 'day late' : 'days late')}</span>` : ` · ${T('today')}`}
+          ${r.next_action ? ' · ' + esc(r.next_action) : ''}</div>
+      </div>
+      ${_tag(r.target_type === 'hawker' ? T('Hawker') : T('Agency'), 'info')}
+    </div>
+    ${r.outcome ? `<div style="font-size:11.5px;color:var(--d-mut);margin-bottom:8px">${T('Last time')}: ${esc(r.outcome)}${r.remarks ? ' — ' + esc(String(r.remarks).slice(0, 90)) : ''}</div>` : ''}
+    <button class="dcr-btn ok" style="width:100%"
+      onclick="dmRevisit('${_Q(r.target_type)}','${_Q(r.unit_code)}','${_Q(r.target_code)}','${_Q(r.target_name || '')}')">
+      ${T('Revisit now')}</button>
+  </div>`).join('');
 }
 
 // ── app-owned bottom bar ────────────────────────────────────────────────────
