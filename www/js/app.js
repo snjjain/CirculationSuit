@@ -7842,8 +7842,16 @@ window.taAsgType = v => {
   render();
 };
 window.taAssignClose = () => { const a = _taAsg(); a.open = false; a.err = null; render(); };
-window.taAsgSet = (k, v) => { const a = _taAsg(); a[k] = v; render(); };
-window.taStopSet = (i, k, v) => { const a = _taAsg(); if (a.stops[i]) a.stops[i][k] = v; if (k !== 'description') render(); };
+/* A free-text box must not re-render the form on every keystroke. render() rebuilds the
+   panel, the input is a new element, and the caret is gone — the subject, the objective
+   and the instructions could each be typed one character at a time only. The value is
+   kept in state and the DOM is left alone; nothing on screen depends on these while they
+   are being typed. Selects and dates DO re-render, because the form's shape follows
+   them. */
+const TA_FREE_TEXT = new Set(['subject', 'objective', 'area']);
+window.taAsgSet = (k, v) => { const a = _taAsg(); a[k] = v; if (!TA_FREE_TEXT.has(k)) render(); };
+const TA_STOP_TEXT = new Set(['description', 'target_name', 'growth_target', 'expected_recovery']);
+window.taStopSet = (i, k, v) => { const a = _taAsg(); if (a.stops[i]) a.stops[i][k] = v; if (!TA_STOP_TEXT.has(k)) render(); };
 window.taStopAdd = () => { const a = _taAsg(); a.stops.push(_taBlankStop()); render(); };
 window.taStopDel = i => { const a = _taAsg(); a.stops.splice(i, 1); if (!a.stops.length) taStopAdd(); render(); };
 
@@ -7858,19 +7866,32 @@ function _taLoadTeam() {
 }
 /* Searched against the API rather than filtered in the browser, so the incharge can only
    pick an agency inside the branches they are allowed to read. */
+/* Searching re-renders when the results land, which replaces the box being typed into.
+   The caret is put back where it was afterwards, so a name longer than the debounce can
+   actually be typed — without this the field lost focus every 300ms. */
+function _taRestoreSearch(i) {
+  requestAnimationFrame(() => {
+    const el = document.getElementById(`ta-search-${i}`);
+    if (!el) return;
+    const at = el.value.length;
+    el.focus(); try { el.setSelectionRange(at, at); } catch (_) {}
+  });
+}
 window.taSearch = (() => { let t; return (i, v) => {
   const a = _taAsg(); a.q = v; a.stopIdx = i; clearTimeout(t);
-  if (!String(v).trim()) { a.found = null; render(); return; }
-  a.searching = true; render();
+  // No render while typing — only when results arrive, and the caret is restored then.
+  if (!String(v).trim()) { a.found = null; a.searching = false; return; }
   t = setTimeout(async () => {
+    a.searching = true;
     try {
       const st = _taState();
       const u = st.unit ? `&unit=${encodeURIComponent(st.unit)}` : '';
-      const r = await fetch(`${location.origin}/api/dcr-m/targets?type=agent&limit=25&q=${encodeURIComponent(v)}${u}`, { headers: api.h() });
+      const type = (_taTypeDef(a.task_type) || {}).target === 'hawker' ? 'hawker' : 'agent';
+      const r = await fetch(`${location.origin}/api/dcr-m/targets?type=${type}&limit=25&q=${encodeURIComponent(v)}${u}`, { headers: api.h() });
       const d = await r.json();
-      a.found = (d && d.rows) || []; a.searching = false; render();
-    } catch (e) { a.found = []; a.searching = false; render(); }
-  }, 300);
+      a.found = (d && d.rows) || []; a.searching = false; render(); _taRestoreSearch(i);
+    } catch (e) { a.found = []; a.searching = false; render(); _taRestoreSearch(i); }
+  }, 350);
 }; })();
 window.taPick = (i, code, name, unit) => {
   const a = _taAsg();
@@ -8004,7 +8025,7 @@ function _taAssignPanel() {
       ? `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 9px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font-size:12.5px">
            <span><b>${esc(sp.target_name)}</b> <span style="color:#94a3b8">${esc(sp.target_code)} · ${esc(sp.unit_code)}</span></span>
            <button onclick="taStopSet(${i},'target_code','')" style="border:0;background:none;color:#0ea5e9;font-size:11.5px;cursor:pointer">change</button></div>`
-      : `<input style="${inp}" placeholder="Type an agency name or code…" value="${esc(a.stopIdx === i ? a.q : '')}" oninput="taSearch(${i},this.value)">
+      : `<input id="ta-search-${i}" style="${inp}" placeholder="Type a name or code…" value="${esc(a.stopIdx === i ? a.q : '')}" oninput="taSearch(${i},this.value)">
          ${a.stopIdx === i && a.searching ? `<div style="font-size:11.5px;color:#94a3b8;padding:5px 2px">Searching…</div>` : ''}
          ${a.stopIdx === i && a.found ? (a.found.length
             ? `<div style="max-height:150px;overflow:auto;border:1px solid #e2e8f0;border-radius:7px;margin-top:5px">
@@ -8162,6 +8183,85 @@ function _taOverview() {
 window.taOvToggle = () => { const st = _taState(); st.ovOpen = !st.ovOpen; if (st.ovOpen) st.ov = null; render(); };
 window.taOvGroup = k => { const st = _taState(); st.ovGroup = k; render(); };
 
+/* ══ The conversation on a task, from the manager's side ══
+   A completed task used to be final however wrong it was: the manager who assigned it had
+   nowhere to say "that is not what I asked for" and no way to send it back. Both sides
+   now write to one thread, and every status change lands in it, so the record reads as
+   what happened rather than as a final state with no account of how it got there. */
+function _taThread() {
+  const st = _taState();
+  return st.thread || (st.thread = { id: null, data: null, loading: false, text: '', busy: false, err: null });
+}
+window.taOpenThread = id => {
+  const th = _taThread();
+  th.id = id; th.data = null; th.text = ''; th.err = null; th.loading = true;
+  render();
+  fetch(`${location.origin}/api/dcr-m/task/${id}/thread`, { headers: api.h() })
+    .then(r => r.json())
+    .then(d => { th.data = d && d.detail ? { _err: d.detail } : d; th.loading = false; render(); })
+    .catch(e => { th.data = { _err: String(e && e.message || e) }; th.loading = false; render(); });
+};
+window.taCloseThread = () => { const th = _taThread(); th.id = null; th.data = null; render(); };
+window.taThreadText = v => { _taThread().text = v; };   // no render — the caret stays put
+window.taThreadSend = async (action) => {
+  const th = _taThread();
+  const txt = String(th.text || '').trim();
+  if (!txt && action !== 'reopen') { th.err = 'Write something before sending it.'; render(); return; }
+  if (action === 'reopen' && !txt) { th.err = 'Say what needs doing differently before sending it back.'; render(); return; }
+  th.busy = true; th.err = null; render();
+  try {
+    const path = action === 'reopen' ? '/api/dcr-m/task/progress' : '/api/dcr-m/task/remark';
+    const body = action === 'reopen' ? { id: th.id, action: 'reopen', remarks: txt } : { id: th.id, remark: txt };
+    const r = await fetch(`${location.origin}${path}`, {
+      method: 'POST', headers: { ...api.h(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok || d.detail) throw new Error(d.detail || 'Could not send that');
+    th.text = ''; th.busy = false;
+    const st = _taState(); st.data = null; st._key = ''; st.ov = null;   // the board's status has moved
+    taOpenThread(th.id);
+  } catch (e) { th.err = String(e.message || e); th.busy = false; render(); }
+};
+
+function _taThreadPanel() {
+  const th = _taThread();
+  if (!th.id) return '';
+  const d = th.data;
+  const inp = 'width:100%;padding:7px 10px;border:1px solid var(--brd,#cbd5e1);border-radius:8px;font-size:12.5px;background:#fff;color:#0f172a';
+  const verb = { start: 'started', done: 'marked complete', reopen: 'sent back', comment: '' };
+  const body = th.loading ? `<div style="padding:18px;text-align:center;color:var(--muted);font-size:12.5px">Loading…</div>`
+    : !d ? ''
+    : d._err ? `<div style="color:#b91c1c;font-size:12.5px">${esc(d._err)}</div>`
+    : `${!(d.rows || []).length
+        ? `<div style="font-size:12.5px;color:var(--muted);padding:6px 0">Nothing said on this task yet.</div>`
+        : (d.rows || []).map(r => `<div style="margin-bottom:9px;padding-left:9px;border-left:2px solid ${r.by_side === 'manager' ? '#b45309' : 'var(--border)'}">
+            <div style="font-size:11px;color:var(--muted)">
+              <b style="color:var(--ink)">${esc(r.by_name || r.by_code || '')}</b>
+              ${r.by_side === 'manager' ? ' · incharge' : ' · executive'}
+              ${verb[r.action] ? ' · ' + verb[r.action] : ''} · ${esc(r.at)}</div>
+            ${r.remark ? `<div style="font-size:12.5px;margin-top:2px">${esc(r.remark)}</div>` : ''}
+          </div>`).join('')}`;
+
+  const isDone = d && d.task && d.task.exec_status === 'done';
+  return `<div class="card" style="padding:14px 16px;margin-bottom:12px;border:1px solid #c7d7fe;background:#f8fbff">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px">
+      <div><b style="font-size:13.5px">${esc((d && d.task && d.task.subject) || 'Task remarks')}</b>
+        <div style="font-size:11px;color:var(--muted)">${esc([(d && d.task && d.task.owner), (d && d.task && d.task.target_name)].filter(Boolean).join(' · '))}</div></div>
+      <button onclick="taCloseThread()" style="border:0;background:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1">&times;</button>
+    </div>
+    ${body}
+    <div style="margin-top:10px">
+      <textarea rows="2" style="${inp};resize:vertical" placeholder="Reply, or say what needs doing differently…"
+        oninput="taThreadText(this.value)">${esc(th.text || '')}</textarea>
+    </div>
+    ${th.err ? `<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:8px;padding:7px 10px;font-size:12px;margin-top:8px">${esc(th.err)}</div>` : ''}
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:9px">
+      <button class="btn sm" ${th.busy ? 'disabled' : ''} onclick="taThreadSend('comment')">${th.busy ? 'Sending…' : 'Send remark'}</button>
+      ${isDone ? `<button class="btn sm" ${th.busy ? 'disabled' : ''} onclick="taThreadSend('reopen')"
+        style="background:#fffbeb;color:#b45309;border-color:#fde68a" title="Send it back to be done again — a reason is required">↩ Send back</button>` : ''}
+    </div>
+  </div>`;
+}
+
 VIEWS.tour_approvals = () => {
   const st = _taState();
   _taLoad();
@@ -8252,7 +8352,8 @@ VIEWS.tour_approvals = () => {
           ${r.growth_target != null && r.expected_recovery ? `<div style="font-size:9.5px;color:var(--muted)">${_apFmtC(r.expected_recovery)}</div>` : ''}</td>
         <td style="${num};color:${(r.outstanding || 0) > 0 ? '#b91c1c' : 'var(--ink)'}">${r.outstanding == null ? '—' : _apFmtC(r.outstanding)}</td>
         <td style="font-size:11px">${TA_EXEC_CHIP(r.exec_status, r.status)}
-          ${r.completion_remarks ? `<div style="font-size:10px;color:var(--muted);white-space:normal;max-width:170px;margin-top:2px">${esc(r.completion_remarks)}</div>` : ''}</td>
+          ${r.completion_remarks ? `<div style="font-size:10px;color:var(--muted);white-space:normal;max-width:170px;margin-top:2px">${esc(r.completion_remarks)}</div>` : ''}
+          ${r.status === 'approved' ? `<div style="margin-top:3px"><a onclick="taOpenThread(${r.id})" style="cursor:pointer;color:var(--primary);font-size:10.5px;text-decoration:underline;text-underline-offset:2px">Remarks${r.exec_status === 'done' ? ' / send back' : ''}</a></div>` : ''}</td>
         <td>${chip(r.status)}
           ${r.reject_reason ? `<div style="font-size:9.5px;color:#b91c1c;white-space:normal;max-width:150px">${esc(r.reject_reason)}</div>` : ''}
           ${r.decided_by ? `<div style="font-size:9.5px;color:var(--muted)">by ${esc(r.decided_by)}</div>` : ''}</td>
@@ -8267,7 +8368,7 @@ VIEWS.tour_approvals = () => {
   /* The list comes first and the form after it. An approver opens this screen to see
      what is waiting, not to file something — the form on top pushed the very thing they
      came for below the fold. */
-  return head + sel + note + _taOverview() + `<div class="card" style="padding:12px 14px">${body}</div>`
+  return head + sel + note + _taThreadPanel() + _taOverview() + `<div class="card" style="padding:12px 14px">${body}</div>`
        + _taAssignPanel();
 };
 

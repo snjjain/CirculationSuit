@@ -1,7 +1,7 @@
 /* Patrika Vitran Suite — offline cache */
-const CACHE = "patrika-vitran-v380";
+const CACHE = "patrika-vitran-v381";
 const ASSETS = [
-  "./", "./index.html", "./css/app.css?v=15", "./js/data.js?v=21", "./js/app.js?v=350", "./css/dcr.css?v=11", "./js/dcr_msite.js?v=30",
+  "./", "./index.html", "./css/app.css?v=15", "./js/data.js?v=21", "./js/app.js?v=351", "./css/dcr.css?v=11", "./js/dcr_msite.js?v=31",
   "./manifest.webmanifest", "./assets/patrika-logo.png", "./assets/icon-192.png", "./assets/icon-512.png"
 ];
 self.addEventListener("install", e => {

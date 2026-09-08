@@ -1699,6 +1699,21 @@ function _loadTasks(force) {
 }
 
 window.dmTaskOpen = id => { DM.taskOpen = DM.taskOpen === id ? null : id; DM.err = null; render(); };
+/* Straight from the task into the visit it is asking for, with the agency or hawker
+   already chosen. Finding the same name again by hand is how a task and its visit end up
+   recorded against different agencies. */
+window.dmTaskVisit = async (id, type, unit, code, name) => {
+  dmOpen(type === 'hawker' ? 'hawker_visit' : 'agency_visit');
+  DM.form._target = { unit_code: unit, target_code: code, target_name: name };
+  DM.extra.for_task_id = id;
+  render();
+  if (type === 'agent') {
+    DM.agency = null; DM.agencyLoading = true; render();
+    try { DM.agency = await _api(`/agency/${encodeURIComponent(unit)}/${encodeURIComponent(code)}`); }
+    catch (_) { DM.agency = null; }
+    DM.agencyLoading = false; render();
+  }
+};
 window.dmTaskBucket = k => { DM.taskBucket = k; DM.taskOpen = null; render(); };
 window.dmTaskRemark = (id, v) => { (DM.taskRemarks || (DM.taskRemarks = {}))[id] = v; };
 window.dmTaskAct = async (id, action) => {
@@ -1714,9 +1729,55 @@ window.dmTaskAct = async (id, action) => {
     if (!r.ok || d.detail) throw new Error(d.detail || 'Could not update the task');
     if (action === 'done') { DM.taskOpen = null; toast(T('Task completed')); }
     if (DM.taskRemarks) delete DM.taskRemarks[id];
+    if (DM.threads) delete DM.threads[id];   // the action just added a line to it
     DM.busy = ''; _loadTasks(true);
   } catch (e) { DM.err = String(e.message || e); DM.busy = ''; render(); }
 };
+
+/* ══ The conversation on a task ══
+   A task used to end at one closing remark, so a manager who disagreed with it had
+   nowhere to say so and the executive had nothing to answer. Both sides write here, every
+   status change lands here too, and the card shows it in order — the record reads as what
+   happened rather than as a final state with no account of how it got there. */
+function _loadThread(id) {
+  const bag = DM.threads || (DM.threads = {});
+  if (bag[id] || (DM._threadBusy && DM._threadBusy[id])) return;
+  (DM._threadBusy || (DM._threadBusy = {}))[id] = true;
+  _api(`/task/${id}/thread`)
+    .then(d => { bag[id] = d && !d.detail ? d : { rows: [] }; delete DM._threadBusy[id]; render(); })
+    .catch(() => { bag[id] = { rows: [] }; delete DM._threadBusy[id]; render(); });
+}
+window.dmTaskSay = async id => {
+  const txt = (DM.taskRemarks || {})[id];
+  if (!txt || !String(txt).trim()) { DM.err = T('Write something before sending it.'); render(); return; }
+  DM.busy = 'task'; render();
+  try {
+    await _api('/task/remark', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, remark: String(txt).trim() }) });
+    delete DM.taskRemarks[id];
+    if (DM.threads) delete DM.threads[id];
+    DM.busy = ''; _loadThread(id); render();
+  } catch (e) { DM.err = e.message; DM.busy = ''; render(); }
+};
+const _SIDE = { owner: '', manager: '' };
+function _threadBlock(id) {
+  _loadThread(id);
+  const t = (DM.threads || {})[id];
+  if (!t) return `<div style="font-size:11.5px;color:var(--d-mut);padding:6px 0">${T('Loading remarks…')}</div>`;
+  const rows = t.rows || [];
+  if (!rows.length) return '';
+  const verb = { start: T('started'), done: T('marked complete'), reopen: T('sent back'), comment: '' };
+  return `<div style="margin-top:9px;border-top:1px solid var(--d-line);padding-top:8px">
+    <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--d-mut);margin-bottom:6px">${T('Remarks')}</div>
+    ${rows.map(r => `<div style="margin-bottom:7px;padding-left:8px;border-left:2px solid ${r.by_side === 'manager' ? 'var(--d-warn,#b45309)' : 'var(--d-line)'}">
+      <div style="font-size:11px;color:var(--d-mut)">
+        <b style="color:var(--d-ink)">${esc(r.by_name || r.by_code || '')}</b>
+        ${r.by_side === 'manager' ? ` · ${T('incharge')}` : ''}
+        ${verb[r.action] ? ` · ${verb[r.action]}` : ''} · ${esc(r.at)}</div>
+      ${r.remark ? `<div style="font-size:12.5px;color:var(--d-ink);margin-top:2px">${esc(r.remark)}</div>` : ''}
+    </div>`).join('')}
+  </div>`;
+}
 
 function _taskCard(r, bucket) {
   const open = DM.taskOpen === r.id;
@@ -1731,7 +1792,7 @@ function _taskCard(r, bucket) {
       <div style="min-width:0">
         <div style="font-size:14px;color:var(--d-ink);font-weight:600">${PRI_DOT[r.priority] || ''} ${esc(r.subject)}</div>
         <div style="font-size:11.5px;color:var(--d-mut);margin-top:3px">
-          ${esc(T(r.task_label))}${r.target_name ? ' · ' + esc(r.target_name) : ''}
+          ${esc(T(r.task_label))}${r.target_name ? ' · ' + esc(r.target_name) : ''}${r.remark_count ? ` · 💬 ${r.remark_count}` : ''}
         </div>
         <div style="font-size:11.5px;color:var(--d-mut);margin-top:2px">
           ${T('Due')} ${esc(String(r.due_date).slice(0, 10))}${late ? ` · <span style="color:var(--d-bad);font-weight:700">${r.days_late} ${T(r.days_late === 1 ? 'day late' : 'days late')}</span>` : ''}${figure ? ' · ' + esc(figure) : ''}
@@ -1743,20 +1804,30 @@ function _taskCard(r, bucket) {
       ${r.objective ? `<div style="font-size:12.5px;color:var(--d-ink);margin-bottom:6px"><b>${T('Objective')}:</b> ${esc(r.objective)}</div>` : ''}
       ${r.instructions ? `<div style="font-size:12.5px;color:var(--d-ink);margin-bottom:6px"><b>${T('Instructions')}:</b> ${esc(r.instructions)}</div>` : ''}
       ${r.assigned_by ? `<div style="font-size:11.5px;color:var(--d-mut);margin-bottom:8px">${T('Assigned by')} ${esc(r.assigned_by)}</div>` : ''}
+      ${/* A task pointed at an agency or a hawker is a visit waiting to be made, so it
+            opens the visit form with the target already chosen rather than leaving the
+            executive to find the name again. */ ''}
+      ${['agent', 'hawker'].includes(r.target_type) && r.target_code && !done
+        ? `<div style="margin-bottom:9px">${_btn(`${r.target_type === 'hawker' ? T('Open hawker visit') : T('Open agency visit')} →`,
+             `dmTaskVisit(${r.id},'${_Q(r.target_type)}','${_Q(r.unit_code)}','${_Q(r.target_code)}','${_Q(r.target_name || '')}')`)}</div>`
+        : ''}
       ${done
-        ? `<div style="font-size:12px;color:var(--d-good, #15803d)">✓ ${T('Completed')} ${esc(String(r.completed_at || '').slice(0, 16).replace('T', ' '))}</div>
-           ${r.completion_remarks ? `<div style="font-size:12.5px;color:var(--d-ink);margin-top:4px">${esc(r.completion_remarks)}</div>` : ''}
-           <div style="margin-top:9px">${_btn(T('Reopen'), `dmTaskAct(${r.id},'reopen')`)}</div>`
-        : `<div class="dcr-dict" style="margin-bottom:8px">
-             <textarea id="tk_${r.id}" rows="2" placeholder="${esc(T('What happened? Amount, commitment, next step…'))}"
-               oninput="dmTaskRemark(${r.id},this.value)">${esc((DM.taskRemarks || {})[r.id] || '')}</textarea>
-             ${_mic('tk_' + r.id, 'task')}
-             ${DM.listening === 'task:tk_' + r.id ? `<div class="dcr-listening">● ${DM.dictLang === 'en-IN' ? 'Listening…' : 'सुन रहा है…'}</div>` : ''}
-           </div>
-           <div style="display:flex;gap:8px;flex-wrap:wrap">
-             ${started ? '' : _btn(T('Start'), `dmTaskAct(${r.id},'start')`)}
-             ${_btn(DM.busy === 'task' ? T('Saving…') : T('Mark complete'), `dmTaskAct(${r.id},'done')`, 'pri')}
-           </div>`}
+        ? `<div style="font-size:12px;color:var(--d-ok, #15803d)">✓ ${T('Completed')} ${esc(String(r.completed_at || '').slice(0, 16).replace('T', ' '))}</div>`
+        : ''}
+      ${_threadBlock(r.id)}
+      <div class="dcr-dict" style="margin:9px 0 8px">
+        <textarea id="tk_${r.id}" rows="2" placeholder="${esc(done ? T('Add a remark…') : T('What happened? Amount, commitment, next step…'))}"
+          oninput="dmTaskRemark(${r.id},this.value)">${esc((DM.taskRemarks || {})[r.id] || '')}</textarea>
+        ${_mic('tk_' + r.id, 'task')}
+        ${DM.listening === 'task:tk_' + r.id ? `<div class="dcr-listening">● ${DM.dictLang === 'en-IN' ? 'Listening…' : 'सुन रहा है…'}</div>` : ''}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${_btn(T('Send remark'), `dmTaskSay(${r.id})`)}
+        ${done
+          ? _btn(T('Reopen'), `dmTaskAct(${r.id},'reopen')`)
+          : `${started ? '' : _btn(T('Start'), `dmTaskAct(${r.id},'start')`)}
+             ${_btn(DM.busy === 'task' ? T('Saving…') : T('Mark complete'), `dmTaskAct(${r.id},'done')`, 'pri')}`}
+      </div>
     </div>` : ''}
   </div>`;
 }

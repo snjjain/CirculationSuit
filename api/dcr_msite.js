@@ -1840,7 +1840,8 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
                 p.visit_time, p.purpose, p.description, p.status, p.seq_no,
                 p.growth_target, p.expected_recovery, p.outstanding_snap,
                 p.assigned_by_name, p.task_type, p.subject, p.priority, p.objective,
-                p.exec_status, p.started_at, p.completed_at, p.completion_remarks, p.created_at
+                p.exec_status, p.started_at, p.completed_at, p.completion_remarks, p.created_at,
+                (SELECT COUNT(*) FROM dcr_task_remark r WHERE r.task_id = p.id) remark_count
            FROM dcr_tour_plan p
           WHERE p.staff_person_code = ?
             AND p.status = 'approved'
@@ -1861,6 +1862,7 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         growth_target: r.growth_target, expected_recovery: r.expected_recovery,
         outstanding: r.outstanding_snap,
         assigned_by: r.assigned_by_name || null,
+        remark_count: N(r.remark_count),
         exec_status: r.exec_status || 'pending',
         started_at: r.started_at, completed_at: r.completed_at,
         completion_remarks: r.completion_remarks || null,
@@ -1899,8 +1901,27 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
-  /* Moving a task along. Only the person it was given to may do it — a manager who wants
-     it closed has to say so to the executive, not tick it off for them. */
+  /* Who may touch a task: the person it was given to, or someone above them who can send
+     it back. A manager still cannot tick it off for the executive — 'done' is the owner's
+     word — but "that is not what I asked for" is the manager's, and without a way to say
+     it a completed task was simply final however wrong it was. */
+  async function taskAccess(req, staff, id) {
+    const { rows } = await q(
+      `SELECT id, staff_person_code, staff_name, exec_status, status, subject, unit_code,
+              target_type, target_code, target_name, assigned_by
+         FROM dcr_tour_plan WHERE id = ?`, [id]);
+    const row = rows[0];
+    if (!row) return { err: [404, 'Task not found'] };
+    if (row.staff_person_code === staff.person_code) return { row, side: 'owner' };
+    if (req.auth && req.auth.isAdmin) return { row, side: 'manager' };
+    const team = await subordinates(staff, await scopeUnits(req));
+    if (team.some(t => t.person_code === row.staff_person_code)) return { row, side: 'manager' };
+    return { err: [403, 'That task is not yours and not your team\'s'] };
+  }
+  const addRemark = (id, staff, side, action, remark) => q(
+    `INSERT INTO dcr_task_remark (task_id, by_code, by_name, by_side, action, remark)
+     VALUES (?,?,?,?,?,?)`, [id, staff.person_code, staff.name, side, action, S(remark, 2000)]);
+
   app.post('/api/dcr-m/task/progress', async (req, res) => {
     try {
       const staff = await staffOf(req);
@@ -1912,15 +1933,21 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       if (!['start', 'done', 'reopen'].includes(action)) {
         return res.status(400).json({ detail: 'action must be start, done or reopen' });
       }
-      const { rows } = await q(
-        `SELECT id, staff_person_code, exec_status, status FROM dcr_tour_plan WHERE id = ?`, [id]);
-      const row = rows[0];
-      if (!row) return res.status(404).json({ detail: 'Task not found' });
-      if (row.staff_person_code !== staff.person_code) {
-        return res.status(403).json({ detail: 'That task was not assigned to you' });
-      }
+      const acc = await taskAccess(req, staff, id);
+      if (acc.err) return res.status(acc.err[0]).json({ detail: acc.err[1] });
+      const { row, side } = acc;
       if (row.status !== 'approved') {
         return res.status(409).json({ detail: 'That task is not approved yet', code: 'not_approved' });
+      }
+      // Doing the work, and saying it is done, belong to whoever was given it.
+      if (action !== 'reopen' && side !== 'owner') {
+        return res.status(403).json({ detail: 'Only the person the task was given to can start or complete it.' });
+      }
+      /* Sending a task back has to say why. A reopen with no reason is the executive
+         finding the work undone again with nothing to go on. */
+      const remark = S(b.remarks, 2000);
+      if (action === 'reopen' && side === 'manager' && !remark) {
+        return res.status(400).json({ detail: 'Say what needs doing differently before sending it back.' });
       }
 
       if (action === 'start') {
@@ -1929,12 +1956,51 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
       } else if (action === 'done') {
         await q(`UPDATE dcr_tour_plan SET exec_status = 'done', completed_at = NOW(),
                     completion_remarks = ?, started_at = COALESCE(started_at, NOW()) WHERE id = ?`,
-          [S(b.remarks, 2000), id]);
+          [remark, id]);
       } else {
-        await q(`UPDATE dcr_tour_plan SET exec_status = 'in_progress',
-                    completed_at = NULL WHERE id = ?`, [id]);
+        await q(`UPDATE dcr_tour_plan SET exec_status = 'in_progress', completed_at = NULL WHERE id = ?`, [id]);
       }
-      res.json({ ok: true, id, exec_status: action === 'done' ? 'done' : 'in_progress' });
+      if (remark || action !== 'start') await addRemark(id, staff, side, action, remark);
+      res.json({ ok: true, id, side, exec_status: action === 'done' ? 'done' : 'in_progress' });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  /* A remark that changes nothing — a question, an answer, a note on the way. Both sides
+     write to the same thread, so neither has to guess what the other has said. */
+  app.post('/api/dcr-m/task/remark', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const id = Number((req.body || {}).id);
+      const remark = S((req.body || {}).remark, 2000);
+      if (!id) return res.status(400).json({ detail: 'id is required' });
+      if (!remark) return res.status(400).json({ detail: 'Write something before sending it.' });
+      const acc = await taskAccess(req, staff, id);
+      if (acc.err) return res.status(acc.err[0]).json({ detail: acc.err[1] });
+      await addRemark(id, staff, acc.side, 'comment', remark);
+      res.json({ ok: true, id });
+    } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
+  });
+
+  // The whole conversation on one task, oldest first — it reads as a history, not a feed.
+  app.get('/api/dcr-m/task/:id/thread', async (req, res) => {
+    try {
+      const staff = await staffOf(req);
+      if (!staff) return res.status(401).json({ detail: 'Not a mapped staff member' });
+      const id = Number(req.params.id);
+      const acc = await taskAccess(req, staff, id);
+      if (acc.err) return res.status(acc.err[0]).json({ detail: acc.err[1] });
+      const { rows } = await q(
+        `SELECT id, by_code, by_name, by_side, action, remark, created_at
+           FROM dcr_task_remark WHERE task_id = ? ORDER BY id`, [id]);
+      res.json({
+        id, my_side: acc.side,
+        task: { subject: acc.row.subject, owner: acc.row.staff_name,
+                target_type: acc.row.target_type, target_code: acc.row.target_code,
+                target_name: acc.row.target_name, unit_code: acc.row.unit_code,
+                exec_status: acc.row.exec_status || 'pending' },
+        rows: rows.map(r => ({ ...r, at: String(r.created_at).slice(0, 16).replace('T', ' ') })),
+      });
     } catch (e) { res.status(500).json({ detail: String(e.message || e) }); }
   });
 
