@@ -189,6 +189,12 @@ module.exports = function installAuth({ app, q, LEVEL_META, getScopeUnitCodes, g
       scopeLabel,
       roleLabel: meta.roleLabel,
       role: meta.role,
+      /* Which dashboard this person launches. Decided here, from the ROLE, because the
+         hierarchy level is not ordered by seniority — 5 is VP Circulation and 4 is Zonal
+         Head, so the browser's old `level <= 4` test dropped the most senior circulation
+         person in the company onto the field-staff launcher. */
+      appKind: ['admin', 'edition_incharge', 'circ_incharge', 'zonal_head', 'vp'].includes(meta.role)
+        ? 'management' : 'field',
       dashboard:  perm && perm.dashboard !== null && perm.dashboard !== undefined ? Boolean(perm.dashboard) : meta.dashboard,
       modules:    perm && perm.modules     ? safeJSON(perm.modules, meta.modules) : meta.modules,
       navScreens: perm && perm.nav_screens ? safeJSON(perm.nav_screens, null)     : null,

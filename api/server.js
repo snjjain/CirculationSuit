@@ -4762,6 +4762,7 @@ require('./telegram')({ app, q });
 
 // ── Executive Performance Dashboard ───────────────────────────────────────────
 require('./exec_performance')({ app, q, getScopeUnitCodes });
+require('./home_stats')({ app, q, getScopeUnitCodes });
 
 // ── Monthly Target Management ──────────────────────────────────────────────────
 require('./exec_targets')({ app, q, getScopeUnitCodes });

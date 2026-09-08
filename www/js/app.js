@@ -420,18 +420,30 @@ function toggleTheme() {
 (function initTheme() { const t = localStorage.getItem("patrika_theme"); if (t) document.documentElement.dataset.theme = t; })();
 
 /* ---------- hierarchy-aware home stats ---------- */
+/* The four figures under the greeting, from the database.
+
+   They were a lookup table of invented numbers keyed on hierarchy level: Admin's card
+   read "12 Branches · 124 Agents · 4.1L+ Copies/day" against a real 36 branches, 27,645
+   agencies and 23.5 lakh copies a day, and a VP's read "4 Agents · 24 Hawkers · 3.2k
+   Rural readers" against his entire circulation. Nothing on this suite may be made up,
+   least of all the first thing seen after signing in.
+
+   Scoped server-side, so a Zonal Head's figures cover his zone and an Edition Incharge's
+   cover his branch. Dashes while the request is in flight — a placeholder that looks like
+   a number is how the invented ones survived this long. */
 function homeStats(u) {
-  const hl = u.hierarchyLevel || 99;
-  if (hl === 1)  return [["5", "Zones"], ["12", "Branches"], ["124", "Agents"], ["4.1L+", "Copies/day"]];
-  if (hl === 2)  return [["5", "Zones"], ["12", "Branches"], ["38", "Agencies"], ["5.1L", "Copies/day"]];
-  if (hl === 3)  return [["4", "Branches"], ["38", "Agencies"], ["82", "Hawkers"], ["1.1L", "Copies/day"]];
-  if (hl === 4)  return [["6", "Routes"], ["14", "Hawkers"], ["4,820", "Copies/day"], ["38", "Agencies"]];
-  if (hl === 5)  return [["4", "Agents"], ["24", "Hawkers"], ["3.2k", "Rural readers"], ["₹1.2L", "Outstanding"]];
-  if (hl === 6)  return [["6", "Centers"], ["58", "Hawkers"], ["8.6k", "City readers"], ["₹96k", "Due today"]];
-  if (hl === 7)  return [["4", "Visits today"], ["2", "Agents"], ["62", "Leads (month)"], ["₹22k", "Collected"]];
-  if (hl === 8)  return [["12", "Hawkers"], ["365", "Copies/day"], ["2", "Routes"], ["98%", "OTD"]];
-  if (hl === 9)  return [["6", "Routes"], ["14", "Hawkers"], ["4,820", "Copies/day"], ["₹1.8L", "Outstanding"]];
-  return [["365", "My copies"], ["126", "My stops"], ["₹3,355", "Collect today"], ["97%", "OTD"]];
+  const st = S.live.homeStats || (S.live.homeStats = { data: null, loading: false });
+  if (!st.data && !st.loading) {
+    st.loading = true;
+    api.get(`/api/home-stats?role=${encodeURIComponent(u.role || '')}`)
+      .then(d => { st.data = (d && d.stats) || []; st.loading = false; if (S.screen === 'home') render(); })
+      .catch(() => { st.data = []; st.loading = false; if (S.screen === 'home') render(); });
+  }
+  if (st.data && st.data.length) return st.data;
+  const labels = ['admin', 'edition_incharge', 'circ_incharge', 'zonal_head', 'vp'].includes(u.role)
+    ? ['Branches', 'Agencies', 'Copies/day', 'Outstanding']
+    : ['Visits today', 'Open tasks', 'Follow-ups due', 'Collected (month)'];
+  return labels.map(l => ['—', l]);
 }
 
 /* ---------- generic form modal ---------- */
@@ -499,13 +511,35 @@ function _launcherAppCard(c) {
       <span class="app-launch">Launch <span aria-hidden="true">→</span></span>
     </button>`;
 }
+/* MANAGEMENT OR FIELD — the one test, used everywhere that question is asked.
+
+   The hierarchy level is not a seniority order: 5 is VP Circulation and 4 is Zonal Head,
+   so the `level <= 4` scattered through this file silently demoted the most senior
+   circulation person in the company. ASHOK JAIN, VP, was handed the field-staff launcher,
+   a Routes/Collect bottom bar and a nav menu with the management screens filtered out.
+
+   The server decides and sends appKind; role is the fallback for a session signed in
+   before it existed, and the level test last of all — 1-6 are office roles, 7 and above
+   are field, agent and hawker. */
+const MGMT_ROLES = ['admin', 'edition_incharge', 'circ_incharge', 'zonal_head', 'vp'];
+function isManagement(u) {
+  u = u || S.user || {};
+  if (u.appKind) return u.appKind === 'management';
+  if (u.role)    return MGMT_ROLES.includes(u.role);
+  return (Number(u.hierarchyLevel) || 99) <= 6;
+}
+
 VIEWS.home = () => {
   const u = S.user, hl = u.hierarchyLevel || 99;
   const cards = [];
 
   // Dashboard application (management / field-ops), shown only when the user has dashboard rights
   if (u.dashboard) {
-    cards.push(hl <= 4
+    /* The server decides, from the role. Level is not a seniority order — 5 is VP
+       Circulation and 4 is Zonal Head — so the old `hl <= 4` test put ASHOK JAIN, the VP,
+       on the field-staff launcher. The fallback keeps older sessions working until they
+       next sign in. */
+    cards.push(isManagement(u)
       ? { screen:"command", name:"Circulation Dashboard", audience:"Management & Circulation Staff", icon:"🗞️", tint:"var(--navy-l)",
           desc:"Command centre — supply, collections, outstanding, transport, approvals & reports.", tags:["Command Centre","Collections","Reports"] }
       : { screen:"routes",  name:"Field Operations", audience:"Field Staff", icon:"🗞️", tint:"var(--navy-l)",
@@ -17322,7 +17356,7 @@ window.mrSelectUser = (pc) => {
   if (!u) return;
   const hl = u.hierarchyLevel || 99;
   const fieldIds = ["routes", "collections", "complaints", "partners"];
-  const defaultScreens = DASH_MENU.map(([id]) => id).filter(id => hl <= 4 || fieldIds.includes(id));
+  const defaultScreens = DASH_MENU.map(([id]) => id).filter(id => isManagement() || fieldIds.includes(id));
   if (!S.live.mr) S.live.mr = {};
   S.live.mr.sel  = pc;
   S.live.mr.edit = {
@@ -17978,7 +18012,7 @@ function rcListTab(readers, loading) {
   if (!readers) return `<div class="card pad" style="text-align:center;padding:24px;color:var(--muted)">Apply filters above and click Apply to load the reader list.</div>`;
   const { readers: rows = [], total = 0, page = 1, pages = 1 } = readers;
   const hl = S.user?.hierarchyLevel || 9;
-  const hasMobile = hl <= 4;
+  const hasMobile = isManagement();
   const rhtml = rows.map(r => {
     const rData = esc(JSON.stringify({ r_id: r.r_id, r_name: r.r_name, mobile: r.mobile || '', unit_code: r.unit_code, unit_name: r.unit_name, locality_code: r.locality_code, scheme_name: r.scheme_name }));
     const statusLabel = RC_STATUS_LABELS[r.unprod_reason] || r.unprod_reason || '—';
@@ -18306,8 +18340,8 @@ window.rcViewReader = (r_id) => {
     if (d.pin) addrParts.push('PIN ' + d.pin);
     const addrHTML = addrParts.length
       ? `<tr><td style="color:var(--muted);padding:3px 0;vertical-align:top">Address</td><td style="line-height:1.6">${addrParts.map(esc).join(', ')}</td></tr>` : '';
-    const canContact = hl <= 4 && d.mobile;
-    const contactHTML = hl <= 4 ? `
+    const canContact = isManagement() && d.mobile;
+    const contactHTML = isManagement() ? `
       ${d.mobile ? `<tr><td style="color:var(--muted);padding:3px 0">Mobile</td><td>📱 ${esc(d.mobile)}${d.alternate_mobile ? `  &nbsp;📱 ${esc(d.alternate_mobile)}` : ''}</td></tr>` : ''}
       ${d.email  ? `<tr><td style="color:var(--muted);padding:3px 0">Email</td><td>✉️ ${esc(d.email)}</td></tr>` : ''}` : '';
 
@@ -19357,7 +19391,7 @@ function navGroups() {
     // mgmtIds are always shown to hl≤4 regardless of saved navScreens (handles screens added after a user's navScreens was last saved)
     const mgmtIds  = ["command", "ai_nexus", "supply_dash", "exec_perf", "agency_rating"];
     const allowed = DASH_MENU
-      .filter(([id]) => (hl <= 4 && mgmtIds.includes(id)) || (u.navScreens ? u.navScreens.includes(id) : (hl <= 4 || fieldIds.includes(id))))
+      .filter(([id]) => (isManagement(u) && mgmtIds.includes(id)) || (u.navScreens ? u.navScreens.includes(id) : (isManagement(u) || fieldIds.includes(id))))
       .filter(([id]) => permAllows(id, 'view') !== false);  // explicit rights-matrix deny hides the screen
     const mk = ([id, l, ic]) => ({ id, label: l, icon: ic, badge: id === "approvals" ? APPROVALS.length : 0 });
     const placed = new Set(DASH_SECTIONS.flatMap(([, ids]) => ids));
@@ -19464,7 +19498,7 @@ function bottomHTML() {
   }
   const items = [["home", "Home", "🏠"]];
   if (u.dashboard) {
-    if (hl <= 4) items.push(["command", "Dashboard", "📊"], ["approvals", "Approvals", "✅"]);
+    if (isManagement(u)) items.push(["command", "Dashboard", "📊"], ["approvals", "Approvals", "✅"]);
     else         items.push(["routes",  "Routes",    "🛣️"], ["collections", "Collect", "₹"]);
   } else if (u.modules && u.modules.length) {
     const nm = k => (APP_META[k] && APP_META[k].name) || APP_MENU[k].label.split(" ")[0];
