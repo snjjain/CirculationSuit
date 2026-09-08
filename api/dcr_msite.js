@@ -639,6 +639,7 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
                   hawker_center_code, hawker_center_name, center_incharge_name,
                   mobile_no, whatsappno, catagory, hawker_type, isactive,
                   beat_boys, beat_boys_src, beat_boys_at,
+                  mobile_no_src, mobile_no_at, distribution_area_src, distribution_area_at,
                   newspapers_carried, other_newspaper_copies,
                   copies_self_delivered, transport_mode, payment_nature, payment_mode,
                   distribution_area, city, addr2, addr3, addr4
@@ -681,8 +682,13 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
         category: m.catagory, hawker_type: m.hawker_type,
         is_active: String(m.isactive || '').toUpperCase() === 'Y',
         beat_boys: m.beat_boys == null || m.beat_boys === '' ? null : N(m.beat_boys),
-        beat_boys_src: m.beat_boys_src || null,   // 'app' when a visit set it
+        // 'app' where a visit set the value, so the form can say where its figure came from
+        beat_boys_src: m.beat_boys_src || null,
         beat_boys_at: m.beat_boys_at ? String(m.beat_boys_at).slice(0, 16).replace('T', ' ') : null,
+        mobile_src: m.mobile_no_src || null,
+        mobile_at: m.mobile_no_at ? String(m.mobile_no_at).slice(0, 16).replace('T', ' ') : null,
+        area_src: m.distribution_area_src || null,
+        area_at: m.distribution_area_at ? String(m.distribution_area_at).slice(0, 16).replace('T', ' ') : null,
         newspapers_carried: m.newspapers_carried == null || m.newspapers_carried === '' ? null : N(m.newspapers_carried),
         other_newspaper_copies: m.other_newspaper_copies == null || m.other_newspaper_copies === '' ? null : N(m.other_newspaper_copies),
         copies_self_delivered: m.copies_self_delivered == null || m.copies_self_delivered === '' ? null : N(m.copies_self_delivered),
@@ -2134,6 +2140,66 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
     agent_feedback: { target: 'agent',  perm: 'dcr_agent_feedback' },
   };
 
+  /* The hawker_master columns a field visit may correct, and how each is cleaned before
+     it lands. Anything not listed here cannot be written from a phone, whatever the
+     client sends — the master is the ERP's record and this is a deliberately short list
+     of facts a visit establishes better than the ERP does. */
+  const FIELD_EDITABLE = {
+    beat_boys: {
+      label: 'beat boys',
+      parse: v => { const n = parseInt(String(v).trim(), 10);
+                    return (!isNaN(n) && n >= 0 && n <= 999) ? n : undefined; },
+      same: (a, b2) => Number(a) === Number(b2),
+    },
+    mobile_no: {
+      label: 'mobile',
+      /* Last ten digits, because numbers arrive as +91…, 0…, with spaces and dashes. A
+         shorter string is a landline or a bad capture and is refused rather than stored
+         as a mobile nobody can ring. */
+      parse: v => { const d = String(v).replace(/\D/g, '').slice(-10);
+                    return d.length === 10 && /^[6-9]/.test(d) ? d : undefined; },
+      same: (a, b2) => String(a || '').replace(/\D/g, '').slice(-10) === String(b2),
+    },
+    distribution_area: {
+      label: 'distribution area',
+      parse: v => { const t = String(v).trim().slice(0, 200); return t ? t : undefined; },
+      same: (a, b2) => String(a || '').trim().toLowerCase() === String(b2).trim().toLowerCase(),
+    },
+  };
+
+  async function applyFieldEdits(unit, code, extra, staff, visitId) {
+    const wanted = Object.keys(FIELD_EDITABLE)
+      .map(f => [f, extra[f]])
+      .filter(([, v]) => v != null && String(v).trim() !== '')
+      .map(([f, v]) => [f, FIELD_EDITABLE[f].parse(v)])
+      .filter(([, v]) => v !== undefined);
+    if (!wanted.length) return [];
+
+    const cols = wanted.map(([f]) => f);
+    const { rows: hm } = await q(
+      `SELECT ${cols.join(', ')} FROM hawker_master WHERE unit_code = ? AND hawker_id = ? LIMIT 1`,
+      [unit, code]);
+    if (!hm[0]) return [];
+
+    const changed = [];
+    for (const [f, val] of wanted) {
+      const before = hm[0][f];
+      const wasEmpty = before == null || String(before).trim() === '' || String(before) === '0';
+      if (!wasEmpty && FIELD_EDITABLE[f].same(before, val)) continue;
+      await q(
+        `UPDATE hawker_master SET ${f} = ?, ${f}_src = 'app', ${f}_at = NOW(), ${f}_by = ?
+          WHERE unit_code = ? AND hawker_id = ?`, [val, staff.person_code, unit, code]);
+      await q(
+        `INSERT INTO hawker_field_edit (unit_code, hawker_id, field_name, old_value,
+           new_value, edited_by, edited_name, visit_id)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [unit, code, f, wasEmpty ? null : String(before), String(val),
+         staff.person_code, staff.name, visitId]);
+      changed.push(f);
+    }
+    return changed;
+  }
+
   app.post('/api/dcr-m/form', async (req, res) => {
     try {
       const staff = await staffOf(req);
@@ -2237,40 +2303,21 @@ module.exports = function registerDcrMsite({ app, q, getScopeUnitCodes }) {
          S(b.device_id, 80)]);
       const { rows: idr } = await q(`SELECT LAST_INSERT_ID() id`);
 
-      /* BEAT BOYS BACK TO THE MASTER.
-         Oracle has this for 138 hawkers of 11,042; the executive in front of the man has
-         it for whoever he is looking at. So a count entered on the visit updates
-         hawker_master, and every screen that reads the column — the hawker card, the
-         360 profile, any report — sees it without knowing anything happened here.
+      /* WHAT THE VISIT CORRECTS IN THE MASTER.
+         Oracle has beat boys for 138 hawkers of 11,042, a mobile for 7,233 and a
+         distribution area for 1,613. The executive in front of the man has all three, so
+         what he enters updates hawker_master and every screen that reads those columns —
+         the hawker card, the 360 profile, any report — sees it without knowing anything
+         happened here.
 
-         Written only when it actually differs, so a form submitted unchanged does not
-         manufacture an edit. beat_boys_src = 'app' tells the daily Oracle sync to leave
-         it alone; without that marker tomorrow morning would replace the count with
-         Oracle's blank. hawker_field_edit keeps the name against the change. */
+         Written only where the value actually differs, so a form submitted unchanged does
+         not manufacture an edit. <col>_src = 'app' tells the daily Oracle sync to leave it
+         alone; without that marker tomorrow morning would replace the work with Oracle's
+         blank. hawker_field_edit keeps a name against every change. */
       if (form === 'hawker_visit' && tt === 'hawker' && code) {
-        const raw = (b.extra || {}).beat_boys;
-        const val = raw == null || String(raw).trim() === '' ? null : parseInt(raw, 10);
-        if (val != null && !isNaN(val) && val >= 0 && val <= 999) {
-          const { rows: hm } = await q(
-            `SELECT beat_boys FROM hawker_master WHERE unit_code = ? AND hawker_id = ? LIMIT 1`,
-            [unit, code]);
-          if (hm[0]) {
-            const before = hm[0].beat_boys == null ? null : Number(hm[0].beat_boys);
-            if (before !== val) {
-              await q(
-                `UPDATE hawker_master
-                    SET beat_boys = ?, beat_boys_src = 'app', beat_boys_at = NOW(), beat_boys_by = ?
-                  WHERE unit_code = ? AND hawker_id = ?`,
-                [val, staff.person_code, unit, code]);
-              await q(
-                `INSERT INTO hawker_field_edit (unit_code, hawker_id, field_name, old_value,
-                   new_value, edited_by, edited_name, visit_id)
-                 VALUES (?,?,'beat_boys',?,?,?,?,?)`,
-                [unit, code, before == null ? null : String(before), String(val),
-                 staff.person_code, staff.name, N(idr[0].id)]);
-            }
-          }
-        }
+        try { await applyFieldEdits(unit, code, b.extra || {}, staff, N(idr[0].id)); }
+        catch (_) { /* the visit is recorded either way — a master correction must never
+                       cost the executive the report he just filed */ }
       }
 
       // A reader visit or a new-area survey is a lead by another name, so it lands in

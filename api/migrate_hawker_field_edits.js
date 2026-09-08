@@ -4,19 +4,23 @@
  *
  *   node api/migrate_hawker_field_edits.js
  *
- * Beat boys is collected standing at the stall: Oracle has a figure for 138 hawkers out
- * of 11,042, and the executive in front of the man has it for all of them. So the app
- * writes it back.
+ * Three columns are collected standing at the stall, and Oracle barely has them:
  *
- * The problem that makes this more than one UPDATE: oracle_hawker_master_sync.js runs
- * daily and lists beat_boys among the columns it is the authority for, so tomorrow's run
- * would overwrite today's count with Oracle's blank. beat_boys_src records who last set
- * the value, and the sync leaves alone anything marked 'app'. Oracle keeps ownership of
- * the column until a person in the field corrects it; after that the field wins, which is
- * the right way round for a number only a visit can establish.
+ *   beat_boys          138 of 11,042 hawkers   (1.2%)
+ *   mobile_no        7,233 of 11,042           (65.5%)
+ *   distribution_area 1,613 of 11,042          (14.6%)
  *
- * hawker_field_edit is the audit trail — a figure that changes with nobody's name against
- * it is a figure nobody can question.
+ * The executive in front of the man has all three. So the app writes them back.
+ *
+ * The problem that makes this more than three UPDATEs: oracle_hawker_master_sync.js runs
+ * daily and lists all three among the columns it is the authority for, so tomorrow's run
+ * would overwrite today's figures with Oracle's blanks. A <col>_src column records who
+ * last set each value, and the sync leaves alone anything marked 'app'. Oracle keeps
+ * ownership until a person in the field corrects it; after that the field wins, which is
+ * the right way round for facts only a visit can establish.
+ *
+ * hawker_field_edit is the audit trail — a value that changes with nobody's name against
+ * it is a value nobody can question.
  *
  * Additive and re-runnable.
  */
@@ -24,6 +28,10 @@
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const mysql = require('mysql2/promise');
+
+// The columns the field may overrule. Kept here and in dcr_msite.js's FIELD_EDITABLE,
+// which validates them — this file only has to make the storage exist.
+const FIELDS = ['beat_boys', 'mobile_no', 'distribution_area'];
 
 (async () => {
   const c = await mysql.createConnection({
@@ -35,14 +43,18 @@ const mysql = require('mysql2/promise');
 
   const [cols] = await c.query('SHOW COLUMNS FROM hawker_master');
   const have = new Set(cols.map(r => r.Field));
-  for (const [name, ddl] of [
-    ['beat_boys_src',    "VARCHAR(4) NULL COMMENT 'app = set in the field; the Oracle sync must not overwrite it'"],
-    ['beat_boys_at',     'DATETIME NULL'],
-    ['beat_boys_by',     'VARCHAR(20) NULL'],
-  ]) {
-    if (have.has(name)) { log(`${name} — already present`); continue; }
-    await c.query(`ALTER TABLE hawker_master ADD COLUMN ${name} ${ddl}`);
-    log(`${name} — added`);
+  for (const f of FIELDS) {
+    if (!have.has(f)) { log(`${f} — NOT IN hawker_master, skipped`); continue; }
+    for (const [suffix, ddl] of [
+      ['_src', "VARCHAR(4) NULL COMMENT 'app = set in the field; the Oracle sync must not overwrite it'"],
+      ['_at',  'DATETIME NULL'],
+      ['_by',  'VARCHAR(20) NULL'],
+    ]) {
+      const name = f + suffix;
+      if (have.has(name)) { log(`${name} — already present`); continue; }
+      await c.query(`ALTER TABLE hawker_master ADD COLUMN ${name} ${ddl}`);
+      log(`${name} — added`);
+    }
   }
 
   await c.query(`
@@ -62,9 +74,15 @@ const mysql = require('mysql2/promise');
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
   log('hawker_field_edit — ready');
 
-  const [n] = await c.query(
-    "SELECT COUNT(*) n FROM hawker_master WHERE beat_boys IS NOT NULL AND beat_boys <> 0");
-  log(`beat_boys currently set on ${Number(n[0].n).toLocaleString('en-IN')} hawkers (all from Oracle)`);
+  const [n] = await c.query(`
+    SELECT COUNT(*) total,
+           SUM(beat_boys IS NOT NULL AND beat_boys <> 0) beat_boys,
+           SUM(mobile_no IS NOT NULL AND mobile_no <> '' AND mobile_no <> '0') mobile_no,
+           SUM(distribution_area IS NOT NULL AND distribution_area <> '') distribution_area
+      FROM hawker_master`);
+  const t = n[0];
+  log(`fill rates of ${Number(t.total).toLocaleString('en-IN')} hawkers:`);
+  FIELDS.forEach(f => log(`  ${f.padEnd(19)} ${String(Number(t[f]).toLocaleString('en-IN')).padStart(8)}  ${((t[f] / t.total) * 100).toFixed(1)}%`));
   await c.end();
   log('done');
   process.exit(0);

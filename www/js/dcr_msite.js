@@ -1104,9 +1104,11 @@ function _loadHawker(unit, id) {
   DM.hawkerKey = k; DM.hawker = null; DM.hawkerLoading = true;
   _api(`/hawker/${encodeURIComponent(unit)}/${encodeURIComponent(id)}`)
     .then(d => { DM.hawker = d && !d.detail ? d : null; DM.hawkerLoading = false;
-                 if (d && d.beat_boys != null && (DM.extra.beat_boys == null || DM.extra.beat_boys === '')) {
-                   DM.extra.beat_boys = String(d.beat_boys);   // the master's figure, there to be corrected
-                 }
+                 /* The master's values, put in the boxes to be corrected rather than
+                    retyped. Only where the executive has not already typed something —
+                    a late-arriving fetch must not overwrite what he is in the middle of. */
+                 if (d) [['beat_boys', d.beat_boys], ['mobile_no', d.mobile], ['distribution_area', d.area]]
+                   .forEach(([k, v]) => { if (v != null && v !== '' && (DM.extra[k] == null || DM.extra[k] === '')) DM.extra[k] = String(v); });
                  render(); })
     .catch(() => { DM.hawker = null; DM.hawkerLoading = false; render(); });
 }
@@ -1216,17 +1218,26 @@ function _paperTable() {
   </div>`;
 }
 
-/* Where the figure on screen came from, and what changing it does. A number pre-filled
-   with no account of itself is one an executive either trusts blindly or retypes for no
-   reason; either way the master never improves. */
-function _beatHint() {
+/* Where the value on screen came from, and what changing it does. A field pre-filled with
+   no account of itself is one an executive either trusts blindly or retypes for no reason;
+   either way the master never improves. */
+function _srcHint(value, src, at, askWhat) {
   const h = DM.hawker;
-  if (!h) return 'Ask him how many beat boys work under him';
-  if (h.beat_boys == null) return 'Not recorded yet — what you enter is saved to the hawker master';
-  return h.beat_boys_src === 'app'
-    ? `Recorded from a visit${h.beat_boys_at ? ' on ' + h.beat_boys_at.slice(0, 10) : ''} — correct it if it has changed`
+  if (!h) return askWhat;
+  if (value == null || value === '') return 'Not recorded yet — what you enter is saved to the hawker master';
+  return src === 'app'
+    ? `Recorded from a visit${at ? ' on ' + String(at).slice(0, 10) : ''} — correct it if it has changed`
     : 'From the ERP — correct it if it is wrong, and the master is updated';
 }
+const _beatHint = () => { const h = DM.hawker;
+  return _srcHint(h && h.beat_boys, h && h.beat_boys_src, h && h.beat_boys_at,
+    'Ask him how many beat boys work under him'); };
+const _mobHint = () => { const h = DM.hawker;
+  return _srcHint(h && h.mobile, h && h.mobile_src, h && h.mobile_at,
+    'Ask for his mobile number'); };
+const _areaHint = () => { const h = DM.hawker;
+  return _srcHint(h && h.area, h && h.area_src, h && h.area_at,
+    'Which locality does he deliver in?'); };
 
 function _fHawkerVisit() {
   _loadHawkerCentres();
@@ -1252,6 +1263,8 @@ function _fHawkerVisit() {
     _f('Meeting agenda', _txt('subject', 'What is this visit about?', 2), true) +
     _row(_f('No. of beat boys', _xin('beat_boys', '0', 'number'), false, _beatHint()),
          _f('Was the hawker met?', _sel('met', [['yes', 'Yes, met in person'], ['no', 'No, not available']], 'Select', true))) +
+    _row(_f('Vendor mobile', _xin('mobile_no', '10-digit mobile', 'tel'), false, _mobHint()),
+         _f('Distribution area', _xin('distribution_area', 'Locality he delivers in'), false, _areaHint())) +
 
     _sec('Outstanding & collection') +
     _row(_f('Outstanding (₹)', _in('outstanding_amount', '0', 'number')), _f('Collected (₹)', _in('amount_collected', '0', 'number'))) +
