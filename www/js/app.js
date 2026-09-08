@@ -1741,7 +1741,10 @@ function _initDcrAgencyMap() {
         <div><b>Class:</b> ${esc(a.ag_class||'—')}</div>
         <div><b>Supply:</b> ${supply}</div>
         <div><b>Status:</b> <span style="color:${isInactive?'#ef4444':'#16a34a'};font-weight:600">${esc(a.status)}</span></div>
-        <div><b>Assigned to:</b> ${esc(a.field_officer||a.assigned_exec||'—')}</div>
+        ${/* The executive, not the field officer. This preferred the FO, a role now wound
+              up — on 75 agencies it named someone Oracle flags inactive, against 12 where
+              the FO is still in post. The executive is who actually carries the agency. */ ''}
+        <div><b>Assigned to:</b> ${esc(a.assigned_exec||'—')}</div>
         <div style="margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0"><b>Last DCR Visit:</b><br>${esc(lastVisit)}</div>
         ${fmtPurpose(a.last_purpose)?`<div><b>Purpose:</b> ${esc(fmtPurpose(a.last_purpose))}</div>`:''}
         ${a.last_remarks?`<div><b>Remarks:</b> ${remHtml(a.last_remarks).slice(0,160)}</div>`:''}
@@ -5516,7 +5519,7 @@ function _ccFlyHawkerPanel(h) {
          <span style="color:#94a3b8;font-size:10.5px">· ERP has "${e_(id.hawker_name)}"</span></div>` : ''}
     <div style="font-size:11.5px;color:#475569;margin-bottom:10px">
       ${e_(id.unit_name || id.unit_code)}${id.hawker_center_name ? ` › <b>${e_(id.hawker_center_name)}</b>` : ''}
-      ${id.center_incharge_name ? `<div style="font-size:10.5px;color:#94a3b8;margin-top:2px">CI · ${e_(id.center_incharge_name)}${id.field_officer_name ? ` &nbsp;·&nbsp; FO · ${e_(id.field_officer_name)}` : ''}</div>` : ''}
+      ${id.center_incharge_name ? `<div style="font-size:10.5px;color:#94a3b8;margin-top:2px">CI · ${e_(id.center_incharge_name)}${id.edtn_incharge_name ? ` &nbsp;·&nbsp; Edition Incharge · ${e_(id.edtn_incharge_name)}` : ''}</div>` : ''}
       ${(() => {
         const t = String(id.mobile_no || '').replace(/\D/g, '').slice(-10);
         if (!id.mobile_no) return '';

@@ -69,11 +69,18 @@ module.exports = function registerHawkerProfile({ app, q, getScopeUnitCodes }) {
       ['payment_nature', 'Payment nature'],
       ['payment_mode', 'Payment mode'],
     ]],
+    /* No Field Officer row. The role has been wound up — 43 of the 48 FOs in
+       exec_master are flagged inactive in Oracle — and hawker_master still carries
+       whoever held it last, so the card named a person no longer in the job on 3,718
+       hawkers against 543 where the FO is still active. Who a hawker actually reports
+       through is resolved live from the centre incharge's chain below. */
     ['Posting & reporting', [
       ['unit_name', 'Branch'],
       ['hawker_center_name', 'Centre'],
       ['center_incharge_name', 'Centre incharge'],
-      ['field_officer_name', 'Field officer'],
+      ['_edtn_incharge_name', 'Edition incharge'],
+      ['_circ_incharge_name', 'Circulation incharge'],
+      ['_zonal_head_name', 'Zonal head'],
       ['survey_updated_at', 'Surveyed on'],
     ]],
   ];
@@ -105,6 +112,23 @@ module.exports = function registerHawkerProfile({ app, q, getScopeUnitCodes }) {
       if (!master) return res.status(404).json({ detail: 'Hawker not found in master' });
 
       const unit = master.unit_code || unitCode;
+
+      /* The reporting line, read from the centre incharge's own mapping rather than the
+         stale field_officer columns on hawker_master. exec_hierarchy_mapping is synced
+         from Oracle, so a change in the ERP shows here on the next sync instead of
+         living on in a copied name. */
+      const { rows: chainRows } = master.center_incharge_code
+        ? await q(`SELECT edtn_incharge, edtn_incharge_name, circ_incharge_name, zonal_head_name,
+                          vp_circulation_name
+                     FROM exec_hierarchy_mapping
+                    WHERE unit_code = ? AND exec_code = ? LIMIT 1`,
+            [unit, master.center_incharge_code])
+        : { rows: [] };
+      const chain = chainRows[0] || {};
+      // Surfaced to the detail groups under the underscore keys declared above.
+      master._edtn_incharge_name = chain.edtn_incharge_name || null;
+      master._circ_incharge_name = chain.circ_incharge_name || null;
+      master._zonal_head_name    = chain.zonal_head_name || null;
 
       const [supMonthly, supRecent, supTotals, centrePeers, pubMix] = await Promise.all([
         // 12 months of lifting — the trend line on the card
@@ -217,8 +241,10 @@ module.exports = function registerHawkerProfile({ app, q, getScopeUnitCodes }) {
           hawker_center_name: master.hawker_center_name,
           center_incharge_code: master.center_incharge_code,
           center_incharge_name: master.center_incharge_name,
-          field_officer_code: master.field_officer_code,
-          field_officer_name: master.field_officer_name,
+          edtn_incharge_code: chain.edtn_incharge || null,
+          edtn_incharge_name: chain.edtn_incharge_name || null,
+          circ_incharge_name: chain.circ_incharge_name || null,
+          zonal_head_name:    chain.zonal_head_name || null,
           mobile_no: (master.mobile_no && String(master.mobile_no) !== '0') ? master.mobile_no : null,
           hawker_type: master.hawker_type, catagory: master.catagory,
           is_active: String(master.isactive || '').toUpperCase() === 'Y',
